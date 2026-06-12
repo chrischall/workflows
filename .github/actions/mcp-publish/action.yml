@@ -1,0 +1,163 @@
+name: MCP publish
+description: >-
+  Publish a released MCP server: npm (trusted publishing/provenance),
+  .skill + .mcpb artifacts, MCP Registry, ClawHub. Run inside the repo's
+  own release-please.yml publish job AFTER checking out the release tag.
+  The job needs `contents: write` and `id-token: write`.
+
+inputs:
+  version:
+    description: Release version (from release-please outputs)
+    required: true
+  tag-name:
+    description: Release tag (from release-please outputs)
+    required: true
+  package-name:
+    description: Artifact/skill base name; defaults to the repository name
+    required: false
+    default: ""
+  node-version:
+    description: Node version for the publish toolchain
+    required: false
+    default: "26"
+  publish-npm:
+    required: false
+    default: "true"
+  publish-skill:
+    required: false
+    default: "true"
+  publish-mcpb:
+    required: false
+    default: "true"
+  publish-registry:
+    required: false
+    default: "true"
+  publish-clawhub:
+    required: false
+    default: "true"
+  clawhub-token:
+    description: ClawHub token; skipped when empty
+    required: false
+    default: ""
+  github-token:
+    description: Token for `gh release upload`
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        registry-url: https://registry.npmjs.org
+
+    # Strip always-auth from .npmrc (set by setup-node, deprecated in npm 11)
+    - shell: bash
+      run: sed -i '/always-auth/d' "$NPM_CONFIG_USERCONFIG"
+
+    - shell: bash
+      run: npm ci
+    - shell: bash
+      run: npm run build
+
+    - name: Resolve names
+      shell: bash
+      env:
+        IN_NAME: ${{ inputs.package-name }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        NAME="${IN_NAME:-${GITHUB_REPOSITORY##*/}}"
+        echo "MCP_PUBLISH_NAME=$NAME" >> "$GITHUB_ENV"
+        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+    - name: Package skill
+      if: inputs.publish-skill == 'true'
+      shell: bash
+      run: |
+        python3 - <<'EOF'
+        import zipfile, pathlib, os
+
+        version = os.environ["VERSION"]
+        skill_name = os.environ["MCP_PUBLISH_NAME"]
+        out = pathlib.Path(f"{skill_name}-{version}.skill")
+
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(pathlib.Path("SKILL.md"), f"{skill_name}/SKILL.md")
+
+        print(f"Packaged {out} ({out.stat().st_size} bytes)")
+        EOF
+
+    - name: Build .mcpb bundle
+      if: inputs.publish-mcpb == 'true'
+      shell: bash
+      run: |
+        npx @anthropic-ai/mcpb pack
+        mv "${MCP_PUBLISH_NAME}.mcpb" "${MCP_PUBLISH_NAME}-${VERSION}.mcpb"
+
+    # Idempotent: skip if this version is already on the registry.
+    - name: Publish to npm
+      if: inputs.publish-npm == 'true'
+      shell: bash
+      run: |
+        PKG=$(node -p "require('./package.json').name")
+        PUBLISHED=$(npm view "${PKG}@${VERSION}" version 2>/dev/null || true)
+        if [ "$PUBLISHED" = "$VERSION" ]; then
+          echo "npm already has ${PKG}@${VERSION} — skipping publish."
+          exit 0
+        fi
+        npm publish --access public --provenance
+
+    - name: Install mcp-publisher
+      if: inputs.publish-registry == 'true'
+      uses: chrischall/workflows/.github/actions/install-mcp-publisher@main
+
+    - name: Authenticate to MCP Registry (OIDC)
+      if: inputs.publish-registry == 'true'
+      shell: bash
+      run: mcp-publisher login github-oidc
+
+    - name: Publish to MCP Registry
+      if: inputs.publish-registry == 'true'
+      shell: bash
+      run: mcp-publisher publish
+
+    # `secrets.*` is not addressable in composite steps; token arrives as an
+    # input and the emptiness check happens in the run block.
+    - name: Publish skill to ClawHub
+      if: inputs.publish-clawhub == 'true'
+      continue-on-error: true
+      shell: bash
+      env:
+        CLAWHUB_TOKEN: ${{ inputs.clawhub-token }}
+      run: |
+        if [ -z "$CLAWHUB_TOKEN" ]; then
+          echo "clawhub-token not set — skipping ClawHub publish."
+          exit 0
+        fi
+        if [ ! -f SKILL.md ]; then
+          echo "SKILL.md not present — skipping ClawHub publish."
+          exit 0
+        fi
+        npx --yes clawhub login --token "$CLAWHUB_TOKEN" --no-browser
+        # ClawHub `publish` rejects plugin-shaped folders; publish SKILL.md
+        # from a clean temp dir as a standalone skill.
+        SKILL_DIR=$(mktemp -d)
+        cp SKILL.md "$SKILL_DIR/"
+        npx --yes clawhub publish "$SKILL_DIR" --version "${VERSION}" --slug "${MCP_PUBLISH_NAME}"
+
+    # release-please already created the GitHub Release; attach artifacts.
+    - name: Attach artifacts to release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG: ${{ inputs.tag-name }}
+      run: |
+        ARGS=()
+        [ -f "${MCP_PUBLISH_NAME}-${VERSION}.skill" ] && ARGS+=("${MCP_PUBLISH_NAME}-${VERSION}.skill")
+        [ -f "${MCP_PUBLISH_NAME}-${VERSION}.mcpb" ] && ARGS+=("${MCP_PUBLISH_NAME}-${VERSION}.mcpb")
+        if [ "${#ARGS[@]}" -eq 0 ]; then
+          echo "No artifacts to attach."
+          exit 0
+        fi
+        gh release upload "$TAG" "${ARGS[@]}" --clobber
