@@ -1,0 +1,25 @@
+name: CI
+
+# This repo's own check: lint every workflow + parse every action/template.
+# Runs on every PR event (not deferred) so reusable-workflow changes are
+# validated immediately — changes here affect 39 repos.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: actionlint
+        run: |
+          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
+      - name: validate composite actions and templates parse
+        run: |
+          ruby -ryaml -e 'Dir.glob(".github/actions/*/action.yml").each { |f| YAML.load_file(f) }; puts "actions OK"'
+          ruby -ryaml -e 'Dir.glob("templates/*.yml").each { |f| YAML.load(File.read(f).gsub(/__[A-Z_]+__/, "x")) }; puts "templates OK"'
