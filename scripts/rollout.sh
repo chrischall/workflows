@@ -94,7 +94,7 @@ git push -u origin "$BRANCH"
   echo ""
   echo "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 } > "$WORK/pr-body.md"
-gh pr create --repo "$REPO" \
+gh pr create --repo "$REPO" --head "$BRANCH" \
   --title "ci: convert to chrischall/workflows reusable pipeline" \
   --body-file "$WORK/pr-body.md"
 echo "PR opened for $REPO."
