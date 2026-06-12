@@ -1,0 +1,79 @@
+name: Reusable auto-merge
+
+# Source-aware auto-merge. Call from a stub on `pull_request_target`
+# (types: [opened, reopened, ready_for_review, synchronize, labeled]).
+#
+#  - dependabot[bot] PRs: arm `--auto --squash` as soon as non-draft.
+#  - Same-repo PRs with `ready-to-merge`: arm on the labeled event. The label
+#    comes from the review workflow (verdict=pass), release tooling, or the
+#    owner overriding a warn/fail.
+#  - Fork PRs: never auto-armed.
+#
+# The merge waits on branch protection's required status check, so this is
+# "merge when CI is green", not "merge without CI". Repos without a required
+# check would merge immediately — the rollout creates rulesets first.
+#
+# pull_request_target (in the stub) because dependabot's pull_request token
+# is restricted. Safe: PR code is never checked out or executed here.
+#
+# The PAT (not GITHUB_TOKEN) arms the merge so the eventual push to main
+# fires `push` workflows (release-please).
+
+on:
+  workflow_call:
+    secrets:
+      release_pat:
+        description: PAT that arms `gh pr merge --auto`
+        required: true
+
+jobs:
+  arm-dependabot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    # Lifecycle events only — `labeled` is the owner-PR path.
+    if: |
+      github.event.action != 'labeled' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - name: Arm auto-merge for dependabot
+        env:
+          GH_TOKEN: ${{ secrets.release_pat }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          if gh pr merge --auto --squash "$PR_URL"; then exit 0; fi
+          state="$(gh pr view "$PR_URL" --json state --jq .state 2>/dev/null || echo UNKNOWN)"
+          if [ "$state" = "MERGED" ]; then
+            echo "PR already merged (instant-merge race) — treating as success."
+            exit 0
+          fi
+          echo "::error::auto-merge arm failed (PR state=$state)"
+          exit 1
+
+  arm-on-ready-label:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    # Same-repo PRs only (excludes forks).
+    if: |
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'ready-to-merge' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Arm auto-merge on ready-to-merge label
+        env:
+          GH_TOKEN: ${{ secrets.release_pat }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          if gh pr merge --auto --squash "$PR_URL"; then exit 0; fi
+          state="$(gh pr view "$PR_URL" --json state --jq .state 2>/dev/null || echo UNKNOWN)"
+          if [ "$state" = "MERGED" ]; then
+            echo "PR already merged (instant-merge race) — treating as success."
+            exit 0
+          fi
+          echo "::error::auto-merge arm failed (PR state=$state)"
+          exit 1
