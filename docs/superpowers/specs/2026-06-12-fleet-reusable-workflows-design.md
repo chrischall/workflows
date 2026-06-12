@@ -113,19 +113,29 @@ Outliers keep custom `ci.yml` (apple-swift-mcp: macOS/Xcode; outlook-to-pdf:
 Python/uv; fetchproxy & realty-mcp keep their monorepo builds unless the
 `build-command` input suffices).
 
-### 4. `reusable-mcp-release.yml`
+### 4. `mcp-publish` composite action + release stub
 
-The MCP release pipeline, parameterized by `github.event.repository.name`
-instead of string-substitution:
+**Amended at implementation time (2026-06-12).** Originally specced as a
+`reusable-mcp-release.yml` reusable workflow. Implemented instead as the
+`.github/actions/mcp-publish` composite action consumed by a per-repo
+`release-please.yml` stub, because npm trusted publishing (the fleet
+publishes with OIDC provenance, no token) and `mcp-publisher login
+github-oidc` validate the OIDC token's workflow identity — moving the
+publish job into a reusable workflow changes `job_workflow_ref` and would
+break publish auth. A composite action runs inside the caller's own job, so
+the OIDC identity is byte-identical to before the consolidation.
 
-- release-please (PR + tag) → on release: npm publish with provenance →
-  package `.skill` and `.mcpb` → clawhub publish → attach artifacts to the
-  GitHub release → `install-mcp-publisher` + registry publish.
+The stub keeps: release-please job (PR + tag) and a publish job that checks
+out the release tag and calls `mcp-publish`, which does: npm publish with
+provenance (idempotent) → package `.skill` and `.mcpb` → MCP Registry
+publish via `install-mcp-publisher` → clawhub publish → attach artifacts to
+the GitHub release.
 
-Inputs: boolean toggles `publish_npm`, `publish_skill`, `publish_mcpb`,
-`publish_clawhub`, `publish_registry` (all default true); `package_name`
-override (defaults to repo name).
-Secrets: `release_pat`, `npm_token`, `clawhub_token` (optional per toggles).
+Inputs: boolean toggles `publish-npm`, `publish-skill`, `publish-mcpb`,
+`publish-registry`, `publish-clawhub` (all default true); `package-name`
+override (defaults to repo name); `node-version`; `clawhub-token` /
+`github-token` passed as inputs (composite steps cannot read `secrets.*`).
+No `npm_token` — npm auth is OIDC trusted publishing.
 
 Non-MCP release flows (PassMint/StoryMint tag-and-bump, encore-ios/curtaincall
 deploy-testflight, nullnet deploy.yml, gogcli) are out of scope — they keep
