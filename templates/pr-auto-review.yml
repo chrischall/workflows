@@ -29,7 +29,7 @@ jobs:
   review:
     uses: chrischall/workflows/.github/workflows/reusable-pr-auto-review.yml@main
     with:
-      conventions_hint: __CONVENTIONS_HINT__
+      conventions_hint: "__CONVENTIONS_HINT__"
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       release_pat: ${{ secrets.__PAT_SECRET__ }}
