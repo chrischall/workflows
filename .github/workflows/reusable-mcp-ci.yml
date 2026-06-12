@@ -1,0 +1,59 @@
+name: Reusable node CI
+
+# Standard node CI for the fleet. Call from a stub on `pull_request`
+# (types: [opened, synchronize, reopened, labeled]) and optionally
+# `push: branches: [main]`.
+#
+# CI is the LAST gate, not a parallel cost:
+#   - human PRs: CI runs only once auto-review passes and arms
+#     `ready-to-merge` (the labeled event fires the deferred run; later
+#     pushes re-run via synchronize while the label is present).
+#   - release-please PRs: deferred to the `release-ready` ship signal.
+#   - BOT PRs (dependabot): CI on EVERY event, unconditionally — bots never
+#     receive auto-review, and native auto-merge treats a skipped required
+#     check as satisfied, so gating them on a label would merge them with
+#     CI skipped.
+#   - non-pull_request events (push) fall through and always run.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        required: false
+        default: "26"
+      build-command:
+        type: string
+        required: false
+        default: npm run build
+      test-command:
+        type: string
+        required: false
+        default: npm test
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: |
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.user.type != 'User' ||
+      (
+        (github.event.action != 'labeled' || github.event.label.name == 'release-ready' || github.event.label.name == 'ready-to-merge') &&
+        (
+          (startsWith(github.event.pull_request.head.ref, 'release-please--') && contains(github.event.pull_request.labels.*.name, 'release-ready')) ||
+          (!startsWith(github.event.pull_request.head.ref, 'release-please--') && contains(github.event.pull_request.labels.*.name, 'ready-to-merge'))
+        )
+      )
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - run: npm ci
+      - run: ${{ inputs.build-command }}
+      - run: ${{ inputs.test-command }}
