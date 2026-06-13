@@ -75,6 +75,10 @@ runs:
       if: inputs.publish-skill == 'true'
       shell: bash
       run: |
+        if [ ! -f SKILL.md ]; then
+          echo "SKILL.md not present — skipping skill packaging."
+          exit 0
+        fi
         python3 - <<'EOF'
         import zipfile, pathlib, os
 
@@ -92,6 +96,10 @@ runs:
       if: inputs.publish-mcpb == 'true'
       shell: bash
       run: |
+        if [ ! -f manifest.json ]; then
+          echo "manifest.json not present — skipping .mcpb bundle."
+          exit 0
+        fi
         npx @anthropic-ai/mcpb pack
         mv "${MCP_PUBLISH_NAME}.mcpb" "${MCP_PUBLISH_NAME}-${VERSION}.mcpb"
 
@@ -99,6 +107,10 @@ runs:
     - name: Publish to npm
       if: inputs.publish-npm == 'true'
       shell: bash
+      env:
+        # npm rejects --provenance from private source repos; trusted
+        # publishing (OIDC auth) itself works either way.
+        REPO_PRIVATE: ${{ github.event.repository.private }}
       run: |
         PKG=$(node -p "require('./package.json').name")
         PUBLISHED=$(npm view "${PKG}@${VERSION}" version 2>/dev/null || true)
@@ -106,7 +118,12 @@ runs:
           echo "npm already has ${PKG}@${VERSION} — skipping publish."
           exit 0
         fi
-        npm publish --access public --provenance
+        if [ "$REPO_PRIVATE" = "true" ]; then
+          echo "Private source repo — publishing without provenance."
+          npm publish --access public
+        else
+          npm publish --access public --provenance
+        fi
 
     - name: Install mcp-publisher
       if: inputs.publish-registry == 'true'
