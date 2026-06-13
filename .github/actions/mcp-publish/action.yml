@@ -112,6 +112,10 @@ runs:
         # publishing (OIDC auth) itself works either way.
         REPO_PRIVATE: ${{ github.event.repository.private }}
       run: |
+        if [ "$(node -p "require('./package.json').private === true")" = "true" ]; then
+          echo "package.json is marked private — skipping npm publish."
+          exit 0
+        fi
         PKG=$(node -p "require('./package.json').name")
         PUBLISHED=$(npm view "${PKG}@${VERSION}" version 2>/dev/null || true)
         if [ "$PUBLISHED" = "$VERSION" ]; then
