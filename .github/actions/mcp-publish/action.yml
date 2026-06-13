@@ -129,17 +129,29 @@ runs:
           npm publish --access public --provenance
         fi
 
-    - name: Install mcp-publisher
+    - name: Check for server.json
+      id: registry-check
       if: inputs.publish-registry == 'true'
+      shell: bash
+      run: |
+        if [ -f server.json ]; then
+          echo "present=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          echo "server.json not present — skipping MCP Registry publish."
+        fi
+
+    - name: Install mcp-publisher
+      if: inputs.publish-registry == 'true' && steps.registry-check.outputs.present == 'true'
       uses: chrischall/workflows/.github/actions/install-mcp-publisher@main
 
     - name: Authenticate to MCP Registry (OIDC)
-      if: inputs.publish-registry == 'true'
+      if: inputs.publish-registry == 'true' && steps.registry-check.outputs.present == 'true'
       shell: bash
       run: mcp-publisher login github-oidc
 
     - name: Publish to MCP Registry
-      if: inputs.publish-registry == 'true'
+      if: inputs.publish-registry == 'true' && steps.registry-check.outputs.present == 'true'
       shell: bash
       run: mcp-publisher publish
 
