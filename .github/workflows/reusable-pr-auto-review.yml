@@ -260,10 +260,16 @@ jobs:
       # warn/fail mean the reviewer surfaced findings worth keeping. Capture
       # them in ONE issue per PR (idempotent via a hidden marker) so nits can
       # ride along on an auto-merged `warn` PR without being lost, and `fail`
-      # findings have a durable home while the PR is iterated. Best-effort:
-      # never fails the job (the verdict/arm contract must hold regardless).
+      # findings have a durable home while the PR is iterated.
       - name: Open or update follow-up issue
         id: followup
+        # Best-effort: GitHub runs `run:` with `bash -eo pipefail`, so an
+        # unguarded gh API failure (rate-limit, transient 5xx) would abort the
+        # step and mark the JOB failed — while the arm step still runs on
+        # !cancelled() and adds ready-to-merge, a contradictory red-job +
+        # armed-PR state. continue-on-error keeps issue tracking auxiliary to
+        # the load-bearing verdict/arm contract.
+        continue-on-error: true
         if: ${{ !cancelled() && (steps.verdict.outputs.verdict == 'warn' || steps.verdict.outputs.verdict == 'fail') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

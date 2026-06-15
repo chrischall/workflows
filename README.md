@@ -12,10 +12,12 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 | `.github/actions/install-mcp-publisher` | composite action | via mcp-publish |
 
 The pipeline contract: non-release PR → auto-review emits a mandatory
-`pass|warn|fail` verdict → `pass` adds `ready-to-merge` → label arms native
-auto-merge and fires deferred CI (the required check) → merge on green.
-`warn`/`fail` keep a human in the loop. Release-please PRs gate on
-`release-ready` instead.
+`pass|warn|fail` verdict → `pass` or `warn` adds `ready-to-merge` → label arms
+native auto-merge and fires deferred CI (the required check) → merge on green.
+A `warn`/`fail` verdict also opens or updates a per-PR `auto-review-followup`
+issue holding every finding (linked from the verdict comment): `warn` (nits
+only) still auto-merges — the issue carries the nits forward — while `fail`
+keeps a human in the loop. Release-please PRs gate on `release-ready` instead.
 
 `mcp-publish` is a composite action (not a reusable workflow) on purpose:
 npm trusted publishing and mcp-publisher validate the OIDC token's workflow
