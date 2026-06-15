@@ -7,11 +7,15 @@ name: Reusable PR auto-review
 # Contract:
 #  1. Applies the `auto-review` label; requests Copilot (best-effort).
 #  2. Runs claude-code-action with a JSON-schema-bound verdict
-#     pass | warn | fail.
+#     pass | warn | fail, plus important_findings and nits lists.
 #  3. ALWAYS surfaces the verdict as a marker-tagged PR comment and a step
 #     output; FAILS the job if no verdict can be determined.
-#  4. On `pass`, adds `ready-to-merge` via the caller's PAT (GITHUB_TOKEN
-#     would not fire the auto-merge workflow). warn/fail never auto-arm.
+#  4. On `warn`/`fail`, opens or updates ONE `auto-review-followup` issue per
+#     PR (idempotent via a hidden marker) holding every finding as a checklist,
+#     and links it from the verdict comment so it is not forgotten.
+#  5. On `pass` OR `warn`, adds `ready-to-merge` via the caller's PAT
+#     (GITHUB_TOKEN would not fire the auto-merge workflow): nits never block —
+#     they ride along on the tracking issue. `fail` blocks (never auto-arms).
 #
 # Why `pull_request` (not `pull_request_target`): Anthropic's OIDC backend
 # rejects `pull_request_target` (anthropics/claude-code-action#713). Fork
@@ -125,7 +129,7 @@ jobs:
           track_progress: ${{ github.event.action != 'labeled' }}
           claude_args: |
             --model ${{ steps.model.outputs.model }}
-            --json-schema '{"type":"object","required":["verdict","summary","important_findings"],"properties":{"verdict":{"enum":["pass","warn","fail"]},"summary":{"type":"string"},"important_findings":{"type":"array","items":{"type":"string"}}}}'
+            --json-schema '{"type":"object","required":["verdict","summary","important_findings"],"properties":{"verdict":{"enum":["pass","warn","fail"]},"summary":{"type":"string"},"important_findings":{"type":"array","items":{"type":"string"}},"nits":{"type":"array","items":{"type":"string"}}}}'
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(cat:*),Bash(rg:*),Bash(jq:*),Bash(ls:*),Bash(find:*)"
           prompt: |
             You are reviewing pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
@@ -166,6 +170,10 @@ jobs:
               • `fail` — at least one 🔴 Important finding.
               Set `summary` to a 1-2 sentence overall judgment.
               Set `important_findings` to the list of 🔴 Important finding titles (empty array if none).
+              Set `nits` to the list of 🟡 Nit titles (empty array if none).
+            Both `important_findings` and `nits` populate a per-PR follow-up tracking issue verbatim, so make each title a self-contained, actionable one-liner (name the file/symbol where it helps) — not "see inline comment".
+
+            GATING (for your awareness, not your job): `pass` and `warn` both auto-merge — nits do NOT block; they are tracked in the follow-up issue and addressed later. Only `fail` blocks. So reserve `fail` for genuine 🔴 Important findings, and don't inflate a nit to `fail` to "make sure it gets fixed" — the tracking issue already guarantees that.
 
             DO NOT modify files, push commits, approve the PR formally, or call `gh pr review` / `gh pr edit`. Posting comments and emitting the verdict is the entire job. The workflow will gate auto-merge based on your verdict.
 
@@ -249,10 +257,103 @@ jobs:
             exit 1
           fi
 
-      - name: Arm auto-merge on pass
+      # warn/fail mean the reviewer surfaced findings worth keeping. Capture
+      # them in ONE issue per PR (idempotent via a hidden marker) so nits can
+      # ride along on an auto-merged `warn` PR without being lost, and `fail`
+      # findings have a durable home while the PR is iterated.
+      - name: Open or update follow-up issue
+        id: followup
+        # Best-effort: GitHub runs `run:` with `bash -eo pipefail`, so an
+        # unguarded gh API failure (rate-limit, transient 5xx) would abort the
+        # step and mark the JOB failed — while the arm step still runs on
+        # !cancelled() and adds ready-to-merge, a contradictory red-job +
+        # armed-PR state. continue-on-error keeps issue tracking auxiliary to
+        # the load-bearing verdict/arm contract.
+        continue-on-error: true
+        if: ${{ !cancelled() && (steps.verdict.outputs.verdict == 'warn' || steps.verdict.outputs.verdict == 'fail') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          VERDICT: ${{ steps.verdict.outputs.verdict }}
+          OUT: ${{ steps.review.outputs.structured_output }}
+        run: |
+          MARKER="<!-- auto-review-followup:PR-${PR} -->"
+
+          # Build the checklist body. Prefer structured findings; fall back to a
+          # pointer at the PR's review comments when structured output is empty.
+          {
+            echo "$MARKER"
+            echo ""
+            echo "Tracking auto-review follow-ups for #${PR} (verdict: **${VERDICT}**)."
+            echo ""
+            imp=""; nits=""
+            if [ -n "$OUT" ]; then
+              imp=$(echo "$OUT" | jq -r '.important_findings // [] | .[]' 2>/dev/null || true)
+              nits=$(echo "$OUT" | jq -r '.nits // [] | .[]' 2>/dev/null || true)
+            fi
+            if [ -n "$imp" ]; then
+              echo "### 🔴 Important"
+              printf '%s\n' "$imp" | while IFS= read -r f; do [ -n "$f" ] && echo "- [ ] $f"; done
+              echo ""
+            fi
+            if [ -n "$nits" ]; then
+              echo "### 🟡 Nits"
+              printf '%s\n' "$nits" | while IFS= read -r f; do [ -n "$f" ] && echo "- [ ] $f"; done
+              echo ""
+            fi
+            if [ -z "$imp" ] && [ -z "$nits" ]; then
+              echo "_No structured findings were captured; see the review comments on #${PR}._"
+              echo ""
+            fi
+            echo "---"
+            echo "When addressing the review on #${PR}, resolve each item and add \`Closes #<this issue>\` to the PR once everything is genuinely fixed; deferred items stay open here. See the auto-review follow-up convention in CLAUDE.md."
+          } > /tmp/followup-body.md
+
+          # Ensure the tracking label exists (idempotent).
+          gh label create auto-review-followup --repo "$REPO" \
+            --color FBCA04 --description "Auto-review findings to address" 2>/dev/null || true
+
+          # One issue per PR: find an open one carrying this PR's marker (filter
+          # out PRs, which the issues endpoint also returns).
+          EXISTING=$(gh api "repos/$REPO/issues?state=open&labels=auto-review-followup&per_page=100" --paginate \
+            --jq "[.[] | select(.pull_request == null) | select(.body != null and (.body | contains(\"$MARKER\"))) | .number][0] // empty" \
+            | grep . | head -n1 || true)
+
+          TITLE="Auto-review follow-ups for PR #${PR}: ${PR_TITLE}"
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --repo "$REPO" --title "$TITLE" --body-file /tmp/followup-body.md >/dev/null
+            NUM="$EXISTING"
+            echo "Updated follow-up issue #${NUM}."
+          else
+            URL=$(gh issue create --repo "$REPO" --title "$TITLE" --body-file /tmp/followup-body.md --label auto-review-followup)
+            NUM="${URL##*/}"
+            echo "Opened follow-up issue #${NUM}: ${URL}"
+          fi
+          [ -n "$NUM" ] && echo "issue=$NUM" >> "$GITHUB_OUTPUT"
+
+          # Prominently link the issue from the verdict marker comment so it is
+          # the first thing seen when addressing the PR. Drop any stale pointer
+          # line first, then append the fresh one (no leading indentation, or
+          # GitHub would render it as a code block).
+          CMARKER="<!-- auto-review-verdict -->"
+          CID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq "[.[] | select(.body != null and (.body | startswith(\"$CMARKER\")))][0].id // empty" \
+            | grep . | head -n1 || true)
+          if [ -n "$CID" ] && [ -n "$NUM" ]; then
+            CUR=$(gh api "repos/$REPO/issues/comments/$CID" --jq '.body')
+            CLEAN=$(printf '%s\n' "$CUR" | grep -v '^📋 Tracking follow-ups:' || true)
+            NEWC=$(printf '%s\n📋 Tracking follow-ups: #%s' "$CLEAN" "$NUM")
+            gh api -X PATCH "repos/$REPO/issues/comments/$CID" -f body="$NEWC" >/dev/null
+          fi
+
+      - name: Arm auto-merge on pass or warn
         # `ready-to-merge` MUST be added with the PAT: GitHub suppresses
         # workflow runs for GITHUB_TOKEN-triggered events, so a label added
         # that way would not fire the auto-merge workflow.
+        # `warn` arms too (nits don't block — tracked via the follow-up issue);
+        # only `fail` keeps the human-in-the-loop gate.
         if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
         env:
           GH_TOKEN: ${{ secrets.release_pat }}
@@ -261,9 +362,9 @@ jobs:
           # Empty if the verdict step failed before exporting — never arms.
           VERDICT: ${{ steps.verdict.outputs.verdict }}
         run: |
-          if [ "$VERDICT" = "pass" ]; then
+          if [ "$VERDICT" = "pass" ] || [ "$VERDICT" = "warn" ]; then
             gh pr edit "$PR" --repo "$REPO" --add-label ready-to-merge
-            echo "Verdict=pass — added ready-to-merge to arm auto-merge."
+            echo "Verdict=$VERDICT — added ready-to-merge to arm auto-merge."
           else
             echo "Verdict=${VERDICT:-unknown} — not arming (human-in-the-loop preserved)."
           fi
