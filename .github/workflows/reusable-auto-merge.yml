@@ -32,9 +32,16 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    # Lifecycle events only — `labeled` is the owner-PR path.
+    # Any event for a non-draft dependabot PR — deliberately NOT gated on event
+    # type. Arming is idempotent (`gh pr merge --auto` is safe to re-run), so we
+    # don't need a single "lifecycle" event. This matters because dependabot
+    # self-applies its labels (`dependencies`, `javascript`, …) ~1s after opening
+    # the PR, firing `labeled` events that share this PR's concurrency group. With
+    # `cancel-in-progress: false`, GitHub cancels the pending `opened`/`synchronize`
+    # run, so the only survivor is often a `labeled` run. Gating this job to
+    # non-`labeled` events meant that survivor skipped and the PR never armed.
+    # See chrischall/workflows#9.
     if: |
-      github.event.action != 'labeled' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.user.login == 'dependabot[bot]'
     steps:
