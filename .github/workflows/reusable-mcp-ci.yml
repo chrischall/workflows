@@ -4,16 +4,21 @@ name: Reusable node CI
 # (types: [opened, synchronize, reopened, labeled]) and optionally
 # `push: branches: [main]`.
 #
-# CI is the LAST gate, not a parallel cost:
-#   - human PRs: CI runs only once auto-review passes and arms
-#     `ready-to-merge` (the labeled event fires the deferred run; later
-#     pushes re-run via synchronize while the label is present).
-#   - release-please PRs: deferred to the `release-ready` ship signal.
-#   - BOT PRs (dependabot): CI on EVERY event, unconditionally — bots never
-#     receive auto-review, and native auto-merge treats a skipped required
-#     check as satisfied, so gating them on a label would merge them with
-#     CI skipped.
-#   - non-pull_request events (push) fall through and always run.
+# CI is DEFERRED until a PR is armed, but the un-armed state BLOCKS the merge.
+#
+# Real build/test runs only when:
+#   - human PRs: `ready-to-merge` is present (added by auto-review on pass/warn);
+#   - release-please PRs: `release-ready` is present (the ship signal);
+#   - bot PRs (dependabot): always (bots never get auto-review);
+#   - push events: always.
+#
+# Until then the job does NOT skip — it FAILS fast (the "Arm gate" step below).
+# This is deliberate: GitHub treats a *skipped* required check as satisfied, so
+# skipping un-armed PRs (the old behavior) left `ci / ci` green and let the
+# merge button go live BEFORE CI had run. A *failing* `ci / ci` keeps the PR
+# un-mergeable (manual or `--auto`) until arming flips the gate and real CI
+# actually passes on the current head SHA. The failing check on an un-armed PR
+# is expected and clears the moment the arming label is applied.
 
 on:
   workflow_call:
@@ -36,17 +41,34 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    if: |
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.user.type != 'User' ||
-      (
-        (github.event.action != 'labeled' || github.event.label.name == 'release-ready' || github.event.label.name == 'ready-to-merge') &&
-        (
-          (startsWith(github.event.pull_request.head.ref, 'release-please--') && contains(github.event.pull_request.labels.*.name, 'release-ready')) ||
-          (!startsWith(github.event.pull_request.head.ref, 'release-please--') && contains(github.event.pull_request.labels.*.name, 'ready-to-merge'))
-        )
-      )
     steps:
+      # Gate: pass (run real CI) only when armed / bot / push; otherwise fail so
+      # `ci / ci` is a blocking required check until the PR is armed. Never skip
+      # — a skipped required check counts as satisfied and would unblock merge.
+      - name: Arm gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          USER_TYPE: ${{ github.event.pull_request.user.type }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then echo "non-PR event → run CI"; exit 0; fi
+          if [ "$USER_TYPE" != "User" ]; then echo "bot PR → run CI"; exit 0; fi
+          case "$HEAD_REF" in
+            release-please--*)
+              case ",$LABELS," in
+                *,release-ready,*) echo "release PR armed (release-ready) → run CI"; exit 0 ;;
+              esac
+              echo "::error::CI is deferred until this release PR is armed with the 'release-ready' label. This failing check is expected and clears once the label is applied."
+              exit 1 ;;
+            *)
+              case ",$LABELS," in
+                *,ready-to-merge,*) echo "PR armed (ready-to-merge) → run CI"; exit 0 ;;
+              esac
+              echo "::error::CI is deferred until auto-review arms this PR with the 'ready-to-merge' label. This failing check is expected and clears once the PR is armed."
+              exit 1 ;;
+          esac
+
       - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v6
