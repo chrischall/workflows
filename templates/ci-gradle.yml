@@ -13,15 +13,18 @@ name: CI
 # Deferred-merge gate: CI is deferred until a PR is armed, and the un-armed
 # state BLOCKS the merge by FAILING (never skipping — GitHub treats a skipped
 # required check as satisfied, which would make the merge button live before CI
-# ran). Real build/test runs only when the PR is armed (`ready-to-merge`, or
-# `release-ready` on a release-please PR), bot-authored, or on push to main.
+# ran). Real build/test runs only when the PR is armed with `ready-to-merge`
+# (added by auto-review on a pass/warn verdict — release-please PRs included,
+# where `release-ready` starts that review), bot-authored, or on push to main.
+# `release-ready` itself does NOT arm CI; CI waits for the review to pass.
 #
 # The required status check stays `ci` (this top-level job name) — the gate is
 # a step inside the job, not a separate job, so no ruleset flip is needed.
 
 on:
   pull_request:
-    # `labeled` so arming `ready-to-merge` / `release-ready` fires the deferred run.
+    # `labeled` so adding `ready-to-merge` (the arm signal for every PR, release
+    # or not) fires the deferred run.
     types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
