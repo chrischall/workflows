@@ -37,7 +37,7 @@ jobs:
       # step runs, so the required `ci` check never goes green until arming.
       - uses: chrischall/workflows/.github/actions/arm-gate@main
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-java@v5
         with:
