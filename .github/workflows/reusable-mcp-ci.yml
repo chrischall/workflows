@@ -8,7 +8,8 @@ name: Reusable node CI
 #
 # Real build/test runs only when:
 #   - human PRs: `ready-to-merge` is present (added by auto-review on pass/warn);
-#   - release-please PRs: `release-ready` is present (the ship signal);
+#   - release-please PRs: `ready-to-merge` is present too — `release-ready` only
+#     STARTS the release review; CI waits for that review to pass and arm the PR;
 #   - bot PRs (dependabot): always (bots never get auto-review);
 #   - push events: always.
 #
@@ -57,9 +58,9 @@ jobs:
           case "$HEAD_REF" in
             release-please--*)
               case ",$LABELS," in
-                *,release-ready,*) echo "release PR armed (release-ready) → run CI"; exit 0 ;;
+                *,ready-to-merge,*) echo "release PR armed (ready-to-merge — release review passed) → run CI"; exit 0 ;;
               esac
-              echo "::error::CI is deferred until this release PR is armed with the 'release-ready' label. This failing check is expected and clears once the label is applied."
+              echo "::error::CI is deferred until the release review passes and arms this PR with 'ready-to-merge'. Add the 'release-ready' label to start the review. This failing check is expected and clears once the PR is armed."
               exit 1 ;;
             *)
               case ",$LABELS," in

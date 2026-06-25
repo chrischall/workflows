@@ -24,7 +24,10 @@ name: Reusable PR auto-review
 #
 # Bot PRs (dependabot etc.) skip review entirely (user.type filter) and go
 # straight to CI + auto-merge. PRs already labeled `ready-to-merge` skip
-# re-review. Release-please PRs review only once `release-ready` is added.
+# re-review. Release-please PRs review only once `release-ready` is added — and
+# their CI stays deferred until that review passes and arms `ready-to-merge`,
+# exactly like a human PR (`release-ready` triggers the review, it does not arm
+# CI on its own).
 
 on:
   workflow_call:

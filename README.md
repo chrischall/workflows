@@ -19,7 +19,10 @@ native auto-merge and fires deferred CI (the required check) → merge on green.
 A `warn`/`fail` verdict also opens or updates a per-PR `auto-review-followup`
 issue holding every finding (linked from the verdict comment): `warn` (nits
 only) still auto-merges — the issue carries the nits forward — while `fail`
-keeps a human in the loop. Release-please PRs gate on `release-ready` instead.
+keeps a human in the loop. Release-please PRs follow the same gate, except the
+review is triggered by adding `release-ready` (not on open): `release-ready`
+starts the review, the review's `pass`/`warn` adds `ready-to-merge`, and only
+then does deferred CI run — so CI never runs ahead of a successful review.
 
 `mcp-publish` is a composite action (not a reusable workflow) on purpose:
 npm trusted publishing and mcp-publisher validate the OIDC token's workflow
