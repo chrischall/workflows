@@ -1,0 +1,45 @@
+name: Arm gate
+description: >
+  Block the merge of an un-armed PR by FAILING fast — never skipping. CI is
+  deferred until a PR is armed, but a *skipped* required check counts as
+  satisfied (GitHub), which would leave the merge button live before CI ran.
+  This step exits 0 (let real CI proceed) only when the PR is armed
+  (`ready-to-merge`, or `release-ready` on a release-please PR), authored by a
+  bot (dependabot — never auto-reviewed), or the event is not a pull_request
+  (push / workflow_dispatch). Otherwise it exits 1, so the required `ci` check
+  stays red until the arming label is applied — then it clears on the next run.
+
+  Use as the FIRST step of any CI job whose check is a required status check, so
+  no build runs (and no required check goes green) until the PR is armed. This
+  is the one shared, load-bearing piece of the fleet's deferred-merge gate; it
+  lives here so the fix is defined once and consumed by every repo via @main —
+  including bespoke (gradle, swift, …) CI jobs that can't use a reusable
+  workflow because they carry repo-specific build steps.
+
+runs:
+  using: composite
+  steps:
+    - name: Arm gate
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        USER_TYPE: ${{ github.event.pull_request.user.type }}
+        HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+      run: |
+        if [ "$EVENT_NAME" != "pull_request" ]; then echo "non-PR event → run CI"; exit 0; fi
+        if [ "$USER_TYPE" != "User" ]; then echo "bot PR → run CI"; exit 0; fi
+        case "$HEAD_REF" in
+          release-please--*)
+            case ",$LABELS," in
+              *,release-ready,*) echo "release PR armed (release-ready) → run CI"; exit 0 ;;
+            esac
+            echo "::error::CI is deferred until this release PR is armed with the 'release-ready' label. This failing check is expected and clears once the label is applied."
+            exit 1 ;;
+          *)
+            case ",$LABELS," in
+              *,ready-to-merge,*) echo "PR armed (ready-to-merge) → run CI"; exit 0 ;;
+            esac
+            echo "::error::CI is deferred until auto-review arms this PR with the 'ready-to-merge' label. This failing check is expected and clears once the PR is armed."
+            exit 1 ;;
+        esac

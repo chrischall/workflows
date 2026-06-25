@@ -1,0 +1,71 @@
+name: CI
+
+# Gradle / Kotlin-Multiplatform CI for the fleet.
+#
+# Unlike the uniform node repos (which share one reusable workflow), Gradle
+# repos carry repo-specific build steps — pre-build test scripts, custom cache
+# keys, an extra web/iOS lane — and a reusable workflow can't accept injected
+# steps. So this is a self-contained STARTING POINT you copy and adapt, not a
+# thin stub. The one shared, load-bearing piece — the deferred-merge "arm
+# gate" — comes from the `chrischall/workflows` composite action, so that fix
+# stays defined in exactly one place and every repo picks it up via @main.
+#
+# Deferred-merge gate: CI is deferred until a PR is armed, and the un-armed
+# state BLOCKS the merge by FAILING (never skipping — GitHub treats a skipped
+# required check as satisfied, which would make the merge button live before CI
+# ran). Real build/test runs only when the PR is armed (`ready-to-merge`, or
+# `release-ready` on a release-please PR), bot-authored, or on push to main.
+#
+# The required status check stays `ci` (this top-level job name) — the gate is
+# a step inside the job, not a separate job, so no ruleset flip is needed.
+
+on:
+  pull_request:
+    # `labeled` so arming `ready-to-merge` / `release-ready` fires the deferred run.
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      # Deferred-merge gate. MUST be first: fails un-armed PRs before any build
+      # step runs, so the required `ci` check never goes green until arming.
+      - uses: chrischall/workflows/.github/actions/arm-gate@main
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "__JAVA_VERSION__"
+
+      # setup-gradle validates the committed gradle-wrapper.jar checksum
+      # (supply-chain gate) and caches Gradle state, so a separate
+      # gradle/wrapper-validation step is redundant.
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Repo-specific build/test. `./gradlew build` compiles every target and
+      # runs the full test suite (KMP commonTest on JVM/JS; backend integration
+      # tests via Testcontainers — the ubuntu runner has Docker). Swap for your
+      # project's command (e.g. `./gradlew test`) and add any pre-build steps
+      # ABOVE this line but BELOW the arm gate.
+      - run: __GRADLE_BUILD_COMMAND__
+
+      # Optional extra lane (e.g. a web client) — uncomment and adapt. Keep it
+      # in the same job so it shares the single required `ci` check:
+      #
+      # - uses: actions/setup-node@v6
+      #   with:
+      #     node-version: 22
+      # - name: Web lint, test, build
+      #   working-directory: web
+      #   run: |
+      #     npm ci
+      #     npm run lint
+      #     npm run test
+      #     npm run build
