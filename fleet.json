@@ -94,7 +94,7 @@
     },
     {
       "repo": "chrischall/mcp-utils",
-      "conventions_hint": "Shared library: README.md documents the core-vs-optional-subpath module boundary; this package handles bearer tokens — error messages must never echo a credential; public API changes need tests.",
+      "conventions_hint": "Shared library: README.md documents the core-vs-optional-subpath module boundary; this package handles bearer tokens \u2014 error messages must never echo a credential; public API changes need tests.",
       "ci": "custom",
       "release": "custom"
     },
@@ -126,6 +126,9 @@
       "repo": "chrischall/swift-notes-automation",
       "ci": "custom",
       "release": "custom"
+    },
+    {
+      "repo": "chrischall/tripadvisor-mcp"
     },
     {
       "repo": "nullnet-app/curtaincall",
