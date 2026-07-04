@@ -177,6 +177,9 @@
     },
     {
       "repo": "chrischall/viator-mcp"
+    },
+    {
+      "repo": "chrischall/tock-mcp"
     }
   ]
 }
