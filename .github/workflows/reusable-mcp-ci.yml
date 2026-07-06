@@ -5,6 +5,24 @@ name: Reusable node CI
 # `push: branches: [main]`.
 #
 # CI is DEFERRED until a PR is armed, but the un-armed state BLOCKS the merge.
+# Two gate modes (input `gate-mode`):
+#
+#   fail (default, legacy): the job FAILS fast on an un-armed PR so the
+#     required `ci / ci` check stays red until arming. Never skips — GitHub
+#     treats a *skipped* required check as satisfied, so skipping would leave
+#     the merge button live before CI ran.
+#
+#   status (target state): the job stays GREEN; the merge is blocked by a
+#     `ci-gated` COMMIT STATUS instead. Un-armed → `ci-gated: pending`
+#     (yellow, blocks); armed → real CI runs and flips `ci-gated` to
+#     success/failure. Red check runs then only ever mean real failures.
+#     Requires two things from the consumer, flipped together:
+#       1. the caller stub grants the token `statuses: write`
+#          (`permissions: {contents: read, statuses: write}` — this workflow
+#          must NOT request it itself: callers pass read-only by default and
+#          a called workflow requesting elevation fails validation), and
+#       2. the repo ruleset's required check is `ci-gated` (not `ci / ci`);
+#          scripts/update-ruleset.sh flips it.
 #
 # Real build/test runs only when:
 #   - human PRs: `ready-to-merge` is present (added by auto-review on pass/warn);
@@ -13,13 +31,12 @@ name: Reusable node CI
 #   - bot PRs (dependabot): always (bots never get auto-review);
 #   - push events: always.
 #
-# Until then the job does NOT skip — it FAILS fast (the "Arm gate" step below).
-# This is deliberate: GitHub treats a *skipped* required check as satisfied, so
-# skipping un-armed PRs (the old behavior) left `ci / ci` green and let the
-# merge button go live BEFORE CI had run. A *failing* `ci / ci` keeps the PR
-# un-mergeable (manual or `--auto`) until arming flips the gate and real CI
-# actually passes on the current head SHA. The failing check on an un-armed PR
-# is expected and clears the moment the arming label is applied.
+# Duplicate-run suppression (status mode only): a `labeled` event for a
+# NON-arming label on an already-armed PR skips the build — the head SHA's
+# `ci-gated` status is already set and is left untouched. This is only safe in
+# status mode: in fail mode the skip would post a GREEN `ci / ci` run that
+# overwrites a legitimately red one (failed tests) for the same SHA, re-opening
+# the merge-button hole.
 
 on:
   workflow_call:
@@ -36,47 +53,107 @@ on:
         type: string
         required: false
         default: npm test
+      gate-mode:
+        description: >-
+          fail (legacy: red `ci / ci` check blocks un-armed PRs) or status
+          (green job; a pending `ci-gated` commit status blocks instead —
+          caller must grant `statuses: write` and the ruleset must require
+          `ci-gated`).
+        type: string
+        required: false
+        default: fail
 
 jobs:
   ci:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    # No `permissions:` key on purpose: it would either drop the caller's
+    # `statuses: write` grant (if we pinned contents: read) or fail validation
+    # on legacy read-only callers (if we requested statuses: write). The stub
+    # owns the grant; fail-mode stubs need nothing.
     steps:
-      # Gate: pass (run real CI) only when armed / bot / push; otherwise fail so
-      # `ci / ci` is a blocking required check until the PR is armed. Never skip
-      # — a skipped required check counts as satisfied and would unblock merge.
+      # Gate: decide whether to run real CI, and how to block when not armed.
+      # Never SKIPS the job — a skipped required check counts as satisfied.
       - name: Arm gate
+        id: gate
         env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.gate-mode }}
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_LABEL: ${{ github.event.label.name }}
           USER_TYPE: ${{ github.event.pull_request.user.type }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          REPO: ${{ github.repository }}
         run: |
-          if [ "$EVENT_NAME" != "pull_request" ]; then echo "non-PR event → run CI"; exit 0; fi
-          if [ "$USER_TYPE" != "User" ]; then echo "bot PR → run CI"; exit 0; fi
-          case "$HEAD_REF" in
-            release-please--*)
-              case ",$LABELS," in
-                *,ready-to-merge,*) echo "release PR armed (ready-to-merge — release review passed) → run CI"; exit 0 ;;
-              esac
-              echo "::error::CI is deferred until the release review passes and arms this PR with 'ready-to-merge'. Add the 'release-ready' label to start the review. This failing check is expected and clears once the PR is armed."
-              exit 1 ;;
-            *)
-              case ",$LABELS," in
-                *,ready-to-merge,*) echo "PR armed (ready-to-merge) → run CI"; exit 0 ;;
-              esac
-              echo "::error::CI is deferred until auto-review arms this PR with the 'ready-to-merge' label. This failing check is expected and clears once the PR is armed."
-              exit 1 ;;
+          run_ci() { echo "$1"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          if [ "$EVENT_NAME" != "pull_request" ]; then run_ci "non-PR event → run CI"; fi
+          if [ "$USER_TYPE" != "User" ]; then run_ci "bot PR → run CI"; fi
+
+          case ",$LABELS," in
+            *,ready-to-merge,*)
+              # Already armed. In status mode, suppress the duplicate run a
+              # non-arming label would trigger — the SHA's ci-gated status is
+              # already set and stays untouched. Unsafe in fail mode (a green
+              # job here would overwrite a red `ci / ci` on the same SHA).
+              if [ "$MODE" = "status" ] && [ "$EVENT_ACTION" = "labeled" ] && [ "$EVENT_LABEL" != "ready-to-merge" ]; then
+                echo "already armed; label '$EVENT_LABEL' is not an arming event → skip duplicate CI (ci-gated status unchanged)"
+                echo "run=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              run_ci "PR armed (ready-to-merge) → run CI" ;;
           esac
 
+          # Un-armed.
+          echo "run=false" >> "$GITHUB_OUTPUT"
+          case "$HEAD_REF" in
+            release-please--*) MSG="CI is deferred until the release review passes and arms this PR with 'ready-to-merge'. Add the 'release-ready' label to start the review." ;;
+            *)                 MSG="CI is deferred until auto-review arms this PR with the 'ready-to-merge' label." ;;
+          esac
+          if [ "$MODE" = "status" ]; then
+            # Block via a pending commit status; the job itself stays green.
+            # If this POST fails (missing statuses:write grant), the step —
+            # and job — fail red, which still blocks: fail-safe.
+            gh api "repos/$REPO/statuses/$HEAD_SHA" \
+              -f state=pending -f context=ci-gated \
+              -f description="CI deferred until auto-review arms this PR (ready-to-merge)" >/dev/null
+            echo "un-armed → posted 'ci-gated: pending' (blocks merge); job stays green. $MSG"
+            exit 0
+          fi
+          echo "::error::$MSG This failing check is expected and clears once the PR is armed."
+          exit 1
+
       - uses: actions/checkout@v6
+        if: steps.gate.outputs.run == 'true'
 
       - uses: actions/setup-node@v6
+        if: steps.gate.outputs.run == 'true'
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm
 
-      - run: npm ci
-      - run: ${{ inputs.build-command }}
-      - run: ${{ inputs.test-command }}
+      - if: steps.gate.outputs.run == 'true'
+        run: npm ci
+
+      - if: steps.gate.outputs.run == 'true'
+        run: ${{ inputs.build-command }}
+
+      - if: steps.gate.outputs.run == 'true'
+        run: ${{ inputs.test-command }}
+
+      # Status mode: flip ci-gated to the real outcome. `always()` so a failed
+      # build/test posts `failure` (merge stays blocked, and the checks UI
+      # explains why) instead of leaving a stale `pending`.
+      - name: Report ci-gated status
+        if: always() && inputs.gate-mode == 'status' && steps.gate.outputs.run == 'true' && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$JOB_STATUS" = "success" ]; then STATE=success; DESC="CI passed"; else STATE=failure; DESC="CI failed — see the ci / ci job log"; fi
+          gh api "repos/$REPO/statuses/$HEAD_SHA" \
+            -f state="$STATE" -f context=ci-gated -f description="$DESC" >/dev/null
+          echo "ci-gated → $STATE"

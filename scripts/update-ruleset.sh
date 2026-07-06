@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
-# Flip a repo's required-status-check context from `ci` to the reusable
-# name (default `ci / ci`), or create the ruleset if the repo has none
-# (nullnet-app, now on Team plan).
+# Set a repo's required-status-check context (default `ci / ci`), or create
+# the ruleset if the repo has none (nullnet-app, now on Team plan).
+#
+# Status-mode gate migration: after a repo's CI stub switches to
+# `gate-mode: status` (node) / `mode: status` (arm-gate), flip its required
+# check to the commit-status context the gate posts:
+#   scripts/update-ruleset.sh <owner/repo> ci-gated --execute
+# Flip ruleset and stub together — requiring `ci-gated` while the stub still
+# runs fail-mode blocks every merge (nothing ever posts the status), and a
+# status-mode stub with a `ci / ci` ruleset leaves un-armed PRs mergeable by
+# hand (the job is green).
 #
 # Usage: scripts/update-ruleset.sh <owner/repo> [<new-context>] [--execute]
 set -euo pipefail
