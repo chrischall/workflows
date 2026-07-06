@@ -182,7 +182,8 @@
       "repo": "chrischall/tock-mcp"
     },
     {
-      "repo": "chrischall/getyourguide-mcp"
+      "repo": "chrischall/getyourguide-mcp",
+      "test_command": "npm run test:coverage"
     }
   ]
 }
