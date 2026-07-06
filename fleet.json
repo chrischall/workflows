@@ -180,6 +180,9 @@
     },
     {
       "repo": "chrischall/tock-mcp"
+    },
+    {
+      "repo": "chrischall/getyourguide-mcp"
     }
   ]
 }
