@@ -10,16 +10,22 @@ name: CI
 # gate" — comes from the `chrischall/workflows` composite action, so that fix
 # stays defined in exactly one place and every repo picks it up via @main.
 #
-# Deferred-merge gate: CI is deferred until a PR is armed, and the un-armed
-# state BLOCKS the merge by FAILING (never skipping — GitHub treats a skipped
-# required check as satisfied, which would make the merge button live before CI
-# ran). Real build/test runs only when the PR is armed with `ready-to-merge`
-# (added by auto-review on a pass/warn verdict — release-please PRs included,
-# where `release-ready` starts that review), bot-authored, or on push to main.
-# `release-ready` itself does NOT arm CI; CI waits for the review to pass.
+# Deferred-merge gate (status mode): CI is deferred until a PR is armed with
+# `ready-to-merge` (added by auto-review on a pass/warn verdict —
+# release-please PRs included, where `release-ready` starts that review). An
+# un-armed PR is blocked by a yellow `ci-gated: pending` COMMIT STATUS — the
+# job itself stays green, so red check runs only ever mean real failures.
+# Never skip the job or its check: GitHub treats a skipped required check as
+# satisfied. `release-ready` itself does NOT arm CI; CI waits for the review.
 #
-# The required status check stays `ci` (this top-level job name) — the gate is
-# a step inside the job, not a separate job, so no ruleset flip is needed.
+# The repo ruleset's required check must be the `ci-gated` status context (not
+# the `ci` job) — scripts/update-ruleset.sh flips it. The permissions block is
+# load-bearing: the gate and the final step post `ci-gated` with this token,
+# and dependabot-triggered runs are read-only unless permissions are explicit.
+#
+# EVERY build step must carry `if: steps.gate.outputs.run == 'true'` so the
+# green un-armed job does no work; the final `always()` step flips `ci-gated`
+# to the real outcome.
 
 on:
   pull_request:
@@ -31,18 +37,24 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      # Deferred-merge gate. MUST be first: fails un-armed PRs before any build
-      # step runs, so the required `ci` check never goes green until arming.
+      # Deferred-merge gate. MUST be first: on an un-armed PR it posts
+      # `ci-gated: pending` and sets run=false so no build step runs.
       - uses: chrischall/workflows/.github/actions/arm-gate@main
+        id: gate
+        with:
+          mode: status
 
       - uses: actions/checkout@v6
+        if: steps.gate.outputs.run == 'true'
 
       - uses: actions/setup-java@v5
+        if: steps.gate.outputs.run == 'true'
         with:
           distribution: temurin
           java-version: "__JAVA_VERSION__"
@@ -51,24 +63,46 @@ jobs:
       # (supply-chain gate) and caches Gradle state, so a separate
       # gradle/wrapper-validation step is redundant.
       - uses: gradle/actions/setup-gradle@v4
+        if: steps.gate.outputs.run == 'true'
 
       # Repo-specific build/test. `./gradlew build` compiles every target and
       # runs the full test suite (KMP commonTest on JVM/JS; backend integration
       # tests via Testcontainers — the ubuntu runner has Docker). Swap for your
       # project's command (e.g. `./gradlew test`) and add any pre-build steps
-      # ABOVE this line but BELOW the arm gate.
-      - run: __GRADLE_BUILD_COMMAND__
+      # ABOVE this line but BELOW the arm gate — each with the same
+      # `if: steps.gate.outputs.run == 'true'` guard.
+      - if: steps.gate.outputs.run == 'true'
+        run: __GRADLE_BUILD_COMMAND__
 
       # Optional extra lane (e.g. a web client) — uncomment and adapt. Keep it
-      # in the same job so it shares the single required `ci` check:
+      # in the same job so it shares the single `ci-gated` status (and guard
+      # each step with the gate output):
       #
       # - uses: actions/setup-node@v6
+      #   if: steps.gate.outputs.run == 'true'
       #   with:
       #     node-version: 22
       # - name: Web lint, test, build
+      #   if: steps.gate.outputs.run == 'true'
       #   working-directory: web
       #   run: |
       #     npm ci
       #     npm run lint
       #     npm run test
       #     npm run build
+
+      # Flip ci-gated to the real outcome. `always()` so a failed build posts
+      # `failure` (merge stays blocked, checks UI explains why) instead of
+      # leaving a stale `pending`.
+      - name: Report ci-gated status
+        if: always() && steps.gate.outputs.run == 'true' && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$JOB_STATUS" = "success" ]; then STATE=success; DESC="CI passed"; else STATE=failure; DESC="CI failed — see the ci job log"; fi
+          gh api "repos/$REPO/statuses/$HEAD_SHA" \
+            -f state="$STATE" -f context=ci-gated -f description="$DESC" >/dev/null
+          echo "ci-gated → $STATE"

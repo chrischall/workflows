@@ -1,51 +1,110 @@
 name: Arm gate
 description: >
-  Block the merge of an un-armed PR by FAILING fast — never skipping. CI is
-  deferred until a PR is armed, but a *skipped* required check counts as
-  satisfied (GitHub), which would leave the merge button live before CI ran.
-  This step exits 0 (let real CI proceed) only when the PR carries
-  `ready-to-merge` (added by auto-review on a pass/warn verdict — including the
-  release review, which `release-ready` triggers), is authored by a bot
-  (dependabot — never auto-reviewed), or the event is not a pull_request
-  (push / workflow_dispatch). Otherwise it exits 1, so the required `ci` check
+  Block the merge of an un-armed PR — never by skipping. CI is deferred until a
+  PR is armed, but a *skipped* required check counts as satisfied (GitHub),
+  which would leave the merge button live before CI ran.
+
+  Two modes (input `mode`):
+
+  fail (default, legacy): exits 1 on an un-armed PR so the required `ci` check
   stays red until the arming label is applied — then it clears on the next run.
 
-  Note: `release-ready` does NOT arm CI directly. On a release-please PR it
-  starts the auto-review; CI stays deferred until that review passes and adds
-  `ready-to-merge`. So every same-repo PR — release or not — arms on the same
-  `ready-to-merge` signal, and CI never runs ahead of a successful review.
+  status (target state): never fails the job for gating reasons. On an un-armed
+  PR it posts a `ci-gated: pending` COMMIT STATUS (yellow, blocks merge) and
+  sets output `run=false`; the job stays green. Consumers MUST guard every
+  subsequent build step with `if: steps.<gate-id>.outputs.run == 'true'` and
+  add a final `always()` step posting `ci-gated` success/failure (see
+  templates/ci-gradle.yml), and the repo ruleset's required check must be the
+  `ci-gated` status context (scripts/update-ruleset.sh flips it). The workflow
+  needs `permissions: {contents: read, statuses: write}` — dependabot runs are
+  read-only unless permissions are explicit. In status mode, a `labeled` event
+  for a non-arming label on an already-armed PR also sets `run=false` (skip the
+  duplicate build; the SHA's `ci-gated` status is already set). That
+  suppression is unsafe in fail mode — a green job would overwrite a
+  legitimately red `ci` check on the same SHA — so fail mode always re-runs.
 
-  Use as the FIRST step of any CI job whose check is a required status check, so
-  no build runs (and no required check goes green) until the PR is armed. This
-  is the one shared, load-bearing piece of the fleet's deferred-merge gate; it
-  lives here so the fix is defined once and consumed by every repo via @main —
-  including bespoke (gradle, swift, …) CI jobs that can't use a reusable
-  workflow because they carry repo-specific build steps.
+  The gate passes (run CI) when the PR carries `ready-to-merge` (added by
+  auto-review on a pass/warn verdict — including the release review, which
+  `release-ready` triggers), is authored by a bot (dependabot — never
+  auto-reviewed), or the event is not a pull_request (push /
+  workflow_dispatch). `release-ready` does NOT arm CI directly: on a
+  release-please PR it starts the auto-review; CI stays deferred until that
+  review passes and adds `ready-to-merge`. So every same-repo PR — release or
+  not — arms on the same `ready-to-merge` signal, and CI never runs ahead of a
+  successful review.
+
+  Use as the FIRST step of any CI job whose check gates the merge, so no build
+  runs until the PR is armed. This is the one shared, load-bearing piece of the
+  fleet's deferred-merge gate; it lives here so the fix is defined once and
+  consumed by every repo via @main — including bespoke (gradle, swift, …) CI
+  jobs that can't use a reusable workflow because they carry repo-specific
+  build steps.
+
+inputs:
+  mode:
+    description: >-
+      fail (legacy: exit 1 on un-armed PRs) or status (green job; post a
+      pending `ci-gated` commit status and set output run=false instead).
+    required: false
+    default: fail
+
+outputs:
+  run:
+    description: >-
+      "true" when real CI should run; "false" when the gate blocked (status
+      mode) or suppressed a duplicate run. Guard every build step with it.
+    value: ${{ steps.gate.outputs.run }}
 
 runs:
   using: composite
   steps:
     - name: Arm gate
+      id: gate
       shell: bash
       env:
+        GH_TOKEN: ${{ github.token }}
+        MODE: ${{ inputs.mode }}
         EVENT_NAME: ${{ github.event_name }}
+        EVENT_ACTION: ${{ github.event.action }}
+        EVENT_LABEL: ${{ github.event.label.name }}
         USER_TYPE: ${{ github.event.pull_request.user.type }}
         HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        REPO: ${{ github.repository }}
       run: |
-        if [ "$EVENT_NAME" != "pull_request" ]; then echo "non-PR event → run CI"; exit 0; fi
-        if [ "$USER_TYPE" != "User" ]; then echo "bot PR → run CI"; exit 0; fi
-        case "$HEAD_REF" in
-          release-please--*)
-            case ",$LABELS," in
-              *,ready-to-merge,*) echo "release PR armed (ready-to-merge — release review passed) → run CI"; exit 0 ;;
-            esac
-            echo "::error::CI is deferred until the release review passes and arms this PR with 'ready-to-merge'. Add the 'release-ready' label to start the review. This failing check is expected and clears once the PR is armed."
-            exit 1 ;;
-          *)
-            case ",$LABELS," in
-              *,ready-to-merge,*) echo "PR armed (ready-to-merge) → run CI"; exit 0 ;;
-            esac
-            echo "::error::CI is deferred until auto-review arms this PR with the 'ready-to-merge' label. This failing check is expected and clears once the PR is armed."
-            exit 1 ;;
+        run_ci() { echo "$1"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
+        if [ "$EVENT_NAME" != "pull_request" ]; then run_ci "non-PR event → run CI"; fi
+        if [ "$USER_TYPE" != "User" ]; then run_ci "bot PR → run CI"; fi
+
+        case ",$LABELS," in
+          *,ready-to-merge,*)
+            # Already armed. Status mode: suppress the duplicate run a
+            # non-arming label would trigger — the SHA's ci-gated status is
+            # already set and stays untouched. Unsafe in fail mode.
+            if [ "$MODE" = "status" ] && [ "$EVENT_ACTION" = "labeled" ] && [ "$EVENT_LABEL" != "ready-to-merge" ]; then
+              echo "already armed; label '$EVENT_LABEL' is not an arming event → skip duplicate CI (ci-gated status unchanged)"
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            run_ci "PR armed (ready-to-merge) → run CI" ;;
         esac
+
+        # Un-armed.
+        echo "run=false" >> "$GITHUB_OUTPUT"
+        case "$HEAD_REF" in
+          release-please--*) MSG="CI is deferred until the release review passes and arms this PR with 'ready-to-merge'. Add the 'release-ready' label to start the review." ;;
+          *)                 MSG="CI is deferred until auto-review arms this PR with the 'ready-to-merge' label." ;;
+        esac
+        if [ "$MODE" = "status" ]; then
+          # Block via a pending commit status; the job itself stays green.
+          # If this POST fails (missing statuses:write grant), the step — and
+          # job — fail red, which still blocks: fail-safe.
+          gh api "repos/$REPO/statuses/$HEAD_SHA" \
+            -f state=pending -f context=ci-gated \
+            -f description="CI deferred until auto-review arms this PR (ready-to-merge)" >/dev/null
+          echo "un-armed → posted 'ci-gated: pending' (blocks merge); job stays green. $MSG"
+          exit 0
+        fi
+        echo "::error::$MSG This failing check is expected and clears once the PR is armed."
+        exit 1

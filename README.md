@@ -16,6 +16,15 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 The pipeline contract: non-release PR → auto-review emits a mandatory
 `pass|warn|fail` verdict → `pass` or `warn` adds `ready-to-merge` → label arms
 native auto-merge and fires deferred CI (the required check) → merge on green.
+Deferred CI blocks un-armed PRs in one of two gate modes: legacy `fail` (the
+required `ci / ci` job fails red until armed) or `status` (the job stays green
+and a yellow `ci-gated: pending` commit status blocks instead — red then only
+ever means a real failure). Status mode needs the stub to grant
+`statuses: write` and the ruleset to require the `ci-gated` context
+(`scripts/update-ruleset.sh <repo> ci-gated --execute`); flip both together.
+Status mode also suppresses the duplicate CI run a non-arming label would
+trigger on an already-armed PR (#12) — unsafe to suppress in fail mode, where
+a green skip would overwrite a legitimately red check on the same SHA.
 Any review that surfaced findings — a `warn`/`fail` verdict, or a `pass`
 whose structured output still lists nits — also opens or updates a per-PR
 `auto-review-followup` issue holding every finding (linked from the verdict
