@@ -10,9 +10,11 @@ name: Reusable PR auto-review
 #     pass | warn | fail, plus important_findings and nits lists.
 #  3. ALWAYS surfaces the verdict as a marker-tagged PR comment and a step
 #     output; FAILS the job if no verdict can be determined.
-#  4. On `warn`/`fail`, opens or updates ONE `auto-review-followup` issue per
-#     PR (idempotent via a hidden marker) holding every finding as a checklist,
-#     and links it from the verdict comment so it is not forgotten.
+#  4. Whenever the review surfaced findings — `warn`/`fail` verdicts, or a
+#     `pass` whose structured output still lists nits — opens or updates ONE
+#     `auto-review-followup` issue per PR (idempotent via a hidden marker)
+#     holding every finding as a checklist, and links it from the verdict
+#     comment so it is not forgotten.
 #  5. On `pass` OR `warn`, adds `ready-to-merge` via the caller's PAT
 #     (GITHUB_TOKEN would not fire the auto-merge workflow): nits never block —
 #     they ride along on the tracking issue. `fail` blocks (never auto-arms).
@@ -175,6 +177,7 @@ jobs:
               Set `important_findings` to the list of 🔴 Important finding titles (empty array if none).
               Set `nits` to the list of 🟡 Nit titles (empty array if none).
             Both `important_findings` and `nits` populate a per-PR follow-up tracking issue verbatim, so make each title a self-contained, actionable one-liner (name the file/symbol where it helps) — not "see inline comment".
+            Populate `nits` with EVERY 🟡 Nit you surfaced anywhere — inline comments included — even when your verdict is `pass`. A nit mentioned only in prose is lost; a nit in the array gets a tracking issue regardless of verdict.
 
             GATING (for your awareness, not your job): `pass` and `warn` both auto-merge — nits do NOT block; they are tracked in the follow-up issue and addressed later. Only `fail` blocks. So reserve `fail` for genuine 🔴 Important findings, and don't inflate a nit to `fail` to "make sure it gets fixed" — the tracking issue already guarantees that.
 
@@ -233,6 +236,19 @@ jobs:
           # "no verdict" downstream, which fails safe (never arms).
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
+          # A `pass` can still carry structured findings (reviewer surfaced
+          # nits but judged them not worth `warn`) — the follow-up step keys
+          # on this so those nits get a tracking issue too.
+          FINDINGS=0
+          if [ -n "$OUT" ]; then
+            FINDINGS=$(echo "$OUT" | jq -r '((.important_findings // []) | length) + ((.nits // []) | length)' 2>/dev/null || echo 0)
+          fi
+          if [ "$FINDINGS" -gt 0 ] 2>/dev/null; then
+            echo "has_findings=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_findings=false" >> "$GITHUB_OUTPUT"
+          fi
+
           MARKER="<!-- auto-review-verdict -->"
           if [ -n "$verdict" ]; then
             case "$verdict" in pass) ICON="✅";; warn) ICON="🟡";; fail) ICON="🔴";; esac
@@ -260,9 +276,11 @@ jobs:
             exit 1
           fi
 
-      # warn/fail mean the reviewer surfaced findings worth keeping. Capture
-      # them in ONE issue per PR (idempotent via a hidden marker) so nits can
-      # ride along on an auto-merged `warn` PR without being lost, and `fail`
+      # Any surfaced finding is worth keeping — warn/fail verdicts, but also a
+      # `pass` whose structured output lists nits (reviewers do emit
+      # pass-with-nits despite the verdict rubric; observed on gemini-mcp#46).
+      # Capture them in ONE issue per PR (idempotent via a hidden marker) so
+      # nits can ride along on an auto-merged PR without being lost, and `fail`
       # findings have a durable home while the PR is iterated.
       - name: Open or update follow-up issue
         id: followup
@@ -273,7 +291,7 @@ jobs:
         # armed-PR state. continue-on-error keeps issue tracking auxiliary to
         # the load-bearing verdict/arm contract.
         continue-on-error: true
-        if: ${{ !cancelled() && (steps.verdict.outputs.verdict == 'warn' || steps.verdict.outputs.verdict == 'fail') }}
+        if: ${{ !cancelled() && (steps.verdict.outputs.verdict == 'warn' || steps.verdict.outputs.verdict == 'fail' || (steps.verdict.outputs.verdict == 'pass' && steps.verdict.outputs.has_findings == 'true')) }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}

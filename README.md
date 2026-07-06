@@ -16,10 +16,11 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 The pipeline contract: non-release PR → auto-review emits a mandatory
 `pass|warn|fail` verdict → `pass` or `warn` adds `ready-to-merge` → label arms
 native auto-merge and fires deferred CI (the required check) → merge on green.
-A `warn`/`fail` verdict also opens or updates a per-PR `auto-review-followup`
-issue holding every finding (linked from the verdict comment): `warn` (nits
-only) still auto-merges — the issue carries the nits forward — while `fail`
-keeps a human in the loop. Release-please PRs follow the same gate, except the
+Any review that surfaced findings — a `warn`/`fail` verdict, or a `pass`
+whose structured output still lists nits — also opens or updates a per-PR
+`auto-review-followup` issue holding every finding (linked from the verdict
+comment): `pass`/`warn` still auto-merge — the issue carries the nits
+forward — while `fail` keeps a human in the loop. Release-please PRs follow the same gate, except the
 review is triggered by adding `release-ready` (not on open): `release-ready`
 starts the review, the review's `pass`/`warn` adds `ready-to-merge`, and only
 then does deferred CI run — so CI never runs ahead of a successful review.
