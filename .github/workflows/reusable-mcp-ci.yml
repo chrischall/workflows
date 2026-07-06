@@ -108,8 +108,12 @@ jobs:
           # Un-armed.
           echo "run=false" >> "$GITHUB_OUTPUT"
           case "$HEAD_REF" in
-            release-please--*) MSG="CI is deferred until the release review passes and arms this PR with 'ready-to-merge'. Add the 'release-ready' label to start the review." ;;
-            *)                 MSG="CI is deferred until auto-review arms this PR with the 'ready-to-merge' label." ;;
+            release-please--*)
+              MSG="CI is deferred until the release review passes and arms this PR with 'ready-to-merge'. Add the 'release-ready' label to start the review."
+              DESC="CI deferred until the release review passes (add release-ready to start it)" ;;
+            *)
+              MSG="CI is deferred until auto-review arms this PR with the 'ready-to-merge' label."
+              DESC="CI deferred until auto-review arms this PR (ready-to-merge)" ;;
           esac
           if [ "$MODE" = "status" ]; then
             # Block via a pending commit status; the job itself stays green.
@@ -117,7 +121,7 @@ jobs:
             # and job — fail red, which still blocks: fail-safe.
             gh api "repos/$REPO/statuses/$HEAD_SHA" \
               -f state=pending -f context=ci-gated \
-              -f description="CI deferred until auto-review arms this PR (ready-to-merge)" >/dev/null
+              -f description="$DESC" >/dev/null
             echo "un-armed → posted 'ci-gated: pending' (blocks merge); job stays green. $MSG"
             exit 0
           fi
