@@ -184,6 +184,9 @@
     {
       "repo": "chrischall/getyourguide-mcp",
       "test_command": "npm run test:coverage"
+    },
+    {
+      "repo": "chrischall/untappd-mcp"
     }
   ]
 }
