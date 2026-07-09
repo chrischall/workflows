@@ -1,0 +1,130 @@
+name: Reusable Cloudflare Workers web-deploy
+
+# Fleet-canonical web deploy for a Next.js app shipped to Cloudflare Workers via
+# OpenNext (@opennextjs/cloudflare). Call from a thin `deploy-web.yml` stub —
+# `templates/deploy-web.yml` is the ready-to-copy starting point.
+#
+# WHAT IT DOES
+#   1. (optional) sets up a Temurin JDK when `java-version` is non-empty — for
+#      apps whose `npm ci`/prebuild assembles a Kotlin/JS (KMP) engine artifact
+#      that `next build` consumes (AllotMint). Apps with no JVM prebuild
+#      (CurtainCall) leave `java-version` at its default "" and the step is
+#      skipped entirely.
+#   2. sets up Node with an npm cache keyed to the working-directory lockfile.
+#   3. `npm ci` in `working-directory`.
+#   4. runs the OpenNext build then deploy, authed to Cloudflare via the
+#      `CLOUDFLARE_API_TOKEN` secret + `CLOUDFLARE_ACCOUNT_ID` account id.
+#
+# HOW TO CALL IT (from an app repo `deploy-web.yml`):
+#
+#   jobs:
+#     deploy:
+#       uses: chrischall/workflows/.github/workflows/reusable-cloudflare-deploy.yml@main
+#       with:
+#         account-id: <your-cloudflare-account-id>   # non-secret
+#         # java-version: "21"                        # only if a JVM prebuild
+#       secrets:
+#         cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+#
+# TOKEN + ACCOUNT REQUIREMENTS (human, one-time per repo)
+#   - `CLOUDFLARE_API_TOKEN` — a repo Actions secret (Settings > Secrets >
+#     Actions). Mint it in the Cloudflare dashboard (My Profile > API Tokens)
+#     with the "Edit Cloudflare Workers" template scoped to the target account.
+#     Without it the deploy step fails with an auth error.
+#   - `account-id` — the Cloudflare account id (dashboard > Workers & Pages, or
+#     `wrangler whoami`). It is NOT a secret, so it is passed as a plain input
+#     and can live in the stub in the clear.
+#
+# WORKERS.DEV VS CUSTOM DOMAIN
+#   The deploy publishes to whatever the app's `wrangler.jsonc` declares. With
+#   only a worker `name` you get the free `<name>.<subdomain>.workers.dev` URL.
+#   Add a `routes` entry (a zone you own on this Cloudflare account) to serve a
+#   custom domain — that is a `wrangler.jsonc` change in the app repo, not a
+#   workflow input.
+#
+# BUILD-TIME NEXT_PUBLIC_* CAVEAT
+#   `NEXT_PUBLIC_*` env vars are inlined at BUILD time, so anything the client
+#   bundle needs must be present as an env var on THIS runner during the build
+#   step — a value set only as a Cloudflare Worker secret/var is invisible to
+#   the already-built client bundle. If your app needs build-time public vars,
+#   expose them to the build step (e.g. via repo secrets surfaced as `env:`) in
+#   a stub that inlines its own build, or bake them into `wrangler.jsonc` /
+#   `next.config.ts`. Server-only secrets belong in Cloudflare (`wrangler secret
+#   put`), never in the client bundle.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory holding the Next.js app (package.json + wrangler.jsonc).
+        type: string
+        required: false
+        default: web
+      node-version:
+        type: string
+        required: false
+        default: "26"
+      account-id:
+        description: Cloudflare account id (non-secret) the Worker deploys to.
+        type: string
+        required: true
+      build-command:
+        type: string
+        required: false
+        default: npx opennextjs-cloudflare build
+      deploy-command:
+        type: string
+        required: false
+        default: npx opennextjs-cloudflare deploy
+      java-version:
+        description: >-
+          Temurin JDK version to set up BEFORE install, for apps whose prebuild
+          assembles a JVM/Gradle artifact (e.g. a shared KMP engine). Empty
+          (default) skips Java entirely.
+        type: string
+        required: false
+        default: ""
+    secrets:
+      cloudflare_api_token:
+        description: Cloudflare API token with Workers edit scope on the account.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Only for apps with a JVM/Gradle prebuild (java-version non-empty).
+      - uses: actions/setup-java@v5
+        if: inputs.java-version != ''
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (OpenNext)
+        run: ${{ inputs.build-command }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
+
+      - name: Deploy to Cloudflare Workers
+        run: ${{ inputs.deploy-command }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}

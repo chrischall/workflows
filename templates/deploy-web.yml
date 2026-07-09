@@ -1,0 +1,39 @@
+name: deploy-web
+
+# Thin stub: ships the Next.js app in `web/` to Cloudflare Workers via OpenNext,
+# by calling the fleet's reusable-cloudflare-deploy workflow. All the deploy
+# shape (Node + optional Java setup, npm ci, OpenNext build/deploy) lives in the
+# reusable workflow so this stub only supplies the per-repo parameters.
+#
+# Triggers:
+#   - workflow_call: release-please chains this after a release is cut, so web
+#     ships in lockstep with the rest of the release.
+#   - workflow_dispatch: manual production deploy / hotfix escape hatch.
+#
+# SETUP (human, one-time): add the repo Actions secret CLOUDFLARE_API_TOKEN (a
+# Cloudflare API token with "Edit Cloudflare Workers" scope on the account).
+# Replace __ACCOUNT_ID__ below with the Cloudflare account id (non-secret).
+#
+# If this app assembles a JVM/Gradle artifact during install/prebuild (e.g. a
+# shared KMP engine), uncomment `java-version` to provision a Temurin JDK first.
+# See chrischall/workflows/docs/cloudflare-web-deploy.md.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    uses: chrischall/workflows/.github/workflows/reusable-cloudflare-deploy.yml@main
+    with:
+      account-id: __ACCOUNT_ID__
+      # java-version: "21"   # uncomment for apps with a JVM/Gradle prebuild
+    secrets:
+      cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
