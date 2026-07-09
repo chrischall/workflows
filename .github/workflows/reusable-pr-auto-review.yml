@@ -163,6 +163,7 @@ jobs:
               - Formatting taste a formatter would own: comment length, single- vs multi-line comments, blank lines, line breaks, import order not enforced by a config.
               - Rephrasing comments/identifiers that are already clear.
               - Anything you cannot ground in the docs, a repo config, or adjacent-code style.
+              - Pinning a `chrischall/workflows/*` reusable workflow to `@main` instead of a commit SHA. This is the owner's deliberate convention for the fleet's OWN self-controlled reusable-workflow repo (improvements propagate without per-repo SHA bumps); the exposure is self-owned, not a third-party supply-chain risk. Do NOT flag it — this exemption is ONLY for `chrischall/workflows` refs, not third-party actions/workflows.
             If your only findings are out-of-scope, the verdict is `pass`.
 
             OUTPUT:
