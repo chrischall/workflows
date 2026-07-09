@@ -8,6 +8,7 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 | `.github/workflows/reusable-pr-auto-review.yml` | reusable workflow | all |
 | `.github/workflows/reusable-auto-merge.yml` | reusable workflow | all |
 | `.github/workflows/reusable-mcp-ci.yml` | reusable workflow | node repos |
+| `.github/workflows/reusable-cloudflare-deploy.yml` | reusable workflow | web repos (OpenNext → Cloudflare Workers) |
 | `.github/actions/arm-gate` | composite action | bespoke-CI repos (gradle, swift) |
 | `templates/ci-gradle.yml` | starter template | Gradle/KMP repos |
 | `.github/actions/mcp-publish` | composite action | MCP publishers |
@@ -45,6 +46,15 @@ PR FAILS the required `ci` check rather than skipping it (a skipped required
 check counts as satisfied and would let the merge button go live before CI ran).
 Drop it in as the first step of the CI job; `templates/ci-gradle.yml` is a
 ready-to-adapt Gradle/KMP starting point that uses it.
+
+`reusable-cloudflare-deploy.yml` standardizes shipping a Next.js `web/` app to
+Cloudflare Workers via OpenNext (`npm ci` → `opennextjs-cloudflare build` →
+`deploy`), authed with a `CLOUDFLARE_API_TOKEN` repo secret + a non-secret
+account-id input. An optional `java-version` provisions a Temurin JDK first for
+apps with a JVM/Gradle prebuild (a shared KMP engine). Onboard a repo by copying
+`templates/deploy-web.yml` (swap `__ACCOUNT_ID__`); see
+`docs/cloudflare-web-deploy.md`. Live consumers: allotmint-clients/web (with a
+JDK prebuild) and curtaincall/web (plain).
 
 Rollout tooling: `fleet.json` (per-repo parameters), `scripts/rollout.sh`
 (stub-conversion PRs), `scripts/update-ruleset.sh` (required-check rename).
