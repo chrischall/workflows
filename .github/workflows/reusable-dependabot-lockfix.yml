@@ -1,0 +1,121 @@
+name: Reusable dependabot lockfix
+
+# Regenerates derived lockfiles on dependabot PRs and pushes the result back
+# to the PR branch, so bumps that dependabot cannot fully materialize itself
+# don't sit red until a human intervenes. Two known cases in the fleet:
+#
+#   - npm repos with a `file:` (or nested-package) dependency: GitHub's
+#     security updater edits the inner manifest but leaves the ROOT
+#     package-lock.json stale, so `npm ci` fails EUSAGE.
+#   - Kotlin Multiplatform repos: dependabot cannot run gradle, so bumps that
+#     touch Kotlin/JS leave kotlin-js-store/yarn.lock stale and CI fails at
+#     `:kotlinStoreYarnLock`.
+#
+# Call from a thin stub on `pull_request_target` (types: [opened,
+# synchronize]) — that event runs THIS definition from the base branch and
+# exposes repo secrets, which dependabot-triggered `pull_request` events would
+# not (those only see the separate Dependabot secrets store).
+#
+# Safety model — the PR head IS checked out and `lockfix-command` MAY execute
+# PR-controlled code (gradle build scripts; npm only if the command allows
+# scripts), so:
+#   - runs are restricted to PRs both authored and triggered by
+#     dependabot[bot]; nobody else can open or push to dependabot/* branches
+#     without write access, and dependabot itself only ever changes
+#     manifests/lockfiles;
+#   - checkout uses `persist-credentials: false` and the PAT is injected only
+#     into the final push step's env, so the lockfix command never sees it;
+#   - after our push the next `synchronize` actor is the PAT owner, not
+#     dependabot[bot], so the guard breaks the retrigger loop.
+#
+# The push uses the release PAT (not github.token) on purpose: pushes made
+# with the default token do not retrigger `pull_request` workflows, which
+# would leave the PR without a fresh CI run and auto-merge stuck.
+#
+# A non-fast-forward push failure (dependabot rebased mid-run) is fine: the
+# job goes red, dependabot's own push fires a new run that supersedes it.
+
+on:
+  workflow_call:
+    inputs:
+      lockfix-command:
+        description: Command that regenerates the lockfile(s), e.g.
+          `npm install --package-lock-only --ignore-scripts` or
+          `./gradlew kotlinUpgradeYarnLock`.
+        type: string
+        required: true
+      commit-paths:
+        description: Space-separated pathspecs to check for drift and commit.
+        type: string
+        required: true
+      commit-message:
+        type: string
+        required: false
+        default: "fix(deps): regenerate lockfiles after dependabot bump"
+      node-version:
+        description: Set to install node (npm cache enabled); empty skips.
+        type: string
+        required: false
+        default: ""
+      java-version:
+        description: Set to install a temurin JDK + gradle; empty skips.
+        type: string
+        required: false
+        default: ""
+
+    secrets:
+      release_pat:
+        required: true
+
+jobs:
+  lockfix:
+    # Both conditions matter: `user.login` pins the PR author, `actor` pins
+    # who caused this event — our own lockfix push must not re-enter.
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          # No token in the tree: the lockfix command may run PR-controlled
+          # build code and must not be able to read credentials.
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        if: inputs.node-version != ''
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - uses: actions/setup-java@v5
+        if: inputs.java-version != ''
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - uses: gradle/actions/setup-gradle@v6.2.0
+        if: inputs.java-version != ''
+        with:
+          cache-read-only: true
+
+      - name: Regenerate lockfiles
+        run: ${{ inputs.lockfix-command }}
+
+      - name: Commit and push drift
+        env:
+          PAT: ${{ secrets.release_pat }}
+          PATHS: ${{ inputs.commit-paths }}
+          MESSAGE: ${{ inputs.commit-message }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          read -ra paths <<< "$PATHS"
+          if git diff --quiet -- "${paths[@]}"; then
+            echo "lockfiles already in sync — nothing to push"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "${paths[@]}"
+          git commit -m "$MESSAGE"
+          git push "https://x-access-token:${PAT}@github.com/${REPO}.git" "HEAD:${BRANCH}"
