@@ -73,6 +73,11 @@ jobs:
     # who caused this event — our own lockfix push must not re-enter.
     if: github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest
+    # pull_request_target grants a read/write github.token by default; this
+    # job runs PR-controlled code, so keep the token to the read access
+    # checkout needs and nothing more (the push uses the PAT, not the token).
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -110,12 +115,22 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           read -ra pathspecs <<< "$PATHS"
-          if git diff --quiet -- "${pathspecs[@]}"; then
+          # `git status --porcelain`, not `git diff`: a lockfix that CREATES
+          # a lockfile (e.g. a first kotlin-js-store/yarn.lock) is invisible
+          # to diff. Filter per-pathspec because `git add` fatals on a
+          # pathspec that matches nothing (a lockfile the repo doesn't have).
+          changed=()
+          for p in "${pathspecs[@]}"; do
+            if [ -n "$(git status --porcelain -- "$p")" ]; then
+              changed+=("$p")
+            fi
+          done
+          if [ "${#changed[@]}" -eq 0 ]; then
             echo "lockfiles already in sync — nothing to push"
             exit 0
           fi
+          git add -- "${changed[@]}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- "${pathspecs[@]}"
           git commit -m "$MESSAGE"
           git push "https://x-access-token:${PAT}@github.com/${REPO}.git" "HEAD:${BRANCH}"
