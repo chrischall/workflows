@@ -9,6 +9,7 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 | `.github/workflows/reusable-auto-merge.yml` | reusable workflow | all |
 | `.github/workflows/reusable-mcp-ci.yml` | reusable workflow | node repos |
 | `.github/workflows/reusable-cloudflare-deploy.yml` | reusable workflow | web repos (OpenNext → Cloudflare Workers) |
+| `.github/workflows/reusable-dependabot-lockfix.yml` | reusable workflow | repos with derived lockfiles dependabot can't refresh |
 | `.github/actions/arm-gate` | composite action | bespoke-CI repos (gradle, swift) |
 | `templates/ci-gradle.yml` | starter template | Gradle/KMP repos |
 | `.github/actions/mcp-publish` | composite action | MCP publishers |
@@ -55,6 +56,17 @@ apps with a JVM/Gradle prebuild (a shared KMP engine). Onboard a repo by copying
 `templates/deploy-web.yml` (swap `__ACCOUNT_ID__`); see
 `docs/cloudflare-web-deploy.md`. Live consumers: allotmint-clients/web (with a
 JDK prebuild) and curtaincall/web (plain).
+
+`reusable-dependabot-lockfix.yml` regenerates derived lockfiles on dependabot
+PRs and pushes them back with the release PAT (so CI retriggers), for bumps
+dependabot can't fully materialize itself: npm repos whose root
+package-lock.json embeds a `file:` package the security updater bumps in
+isolation, and Gradle/KMP repos whose `kotlin-js-store/yarn.lock` only a
+gradle run can refresh. Call from a stub on `pull_request_target`
+(types: [opened, synchronize]) passing the repo's release PAT; runs are
+double-guarded to PRs both authored and triggered by dependabot[bot], and the
+PR head is checked out without credentials so the lockfix command never sees
+the PAT. Live consumers: untappd-mcp (npm) and curtaincall (gradle).
 
 Rollout tooling: `fleet.json` (per-repo parameters), `scripts/rollout.sh`
 (stub-conversion PRs), `scripts/update-ruleset.sh` (required-check rename).
