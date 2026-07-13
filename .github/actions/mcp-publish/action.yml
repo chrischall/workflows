@@ -16,6 +16,12 @@ inputs:
     description: Artifact/skill base name; defaults to the repository name
     required: false
     default: ""
+  skill-path:
+    description: >-
+      Path to the skill's SKILL.md. When empty, auto-resolves to a root
+      SKILL.md, else a single skills/*/SKILL.md (plugin-shaped repos).
+    required: false
+    default: ""
   node-version:
     description: Node version for the publish toolchain
     required: false
@@ -71,12 +77,40 @@ runs:
         echo "MCP_PUBLISH_NAME=$NAME" >> "$GITHUB_ENV"
         echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
+    # Plugin-shaped repos keep SKILL.md under skills/<name>/; standalone
+    # repos keep it at the root. Resolve once, share via SKILL_MD.
+    - name: Resolve skill path
+      shell: bash
+      env:
+        IN_SKILL_PATH: ${{ inputs.skill-path }}
+      run: |
+        SKILL_MD=""
+        if [ -n "$IN_SKILL_PATH" ]; then
+          if [ ! -f "$IN_SKILL_PATH" ]; then
+            echo "skill-path input '$IN_SKILL_PATH' does not exist." >&2
+            exit 1
+          fi
+          SKILL_MD="$IN_SKILL_PATH"
+        elif [ -f SKILL.md ]; then
+          SKILL_MD="SKILL.md"
+        else
+          shopt -s nullglob
+          CANDIDATES=(skills/*/SKILL.md)
+          if [ "${#CANDIDATES[@]}" -eq 1 ]; then
+            SKILL_MD="${CANDIDATES[0]}"
+          elif [ "${#CANDIDATES[@]}" -gt 1 ]; then
+            echo "Multiple skills/*/SKILL.md found — set the skill-path input." >&2
+            exit 1
+          fi
+        fi
+        echo "SKILL_MD=$SKILL_MD" >> "$GITHUB_ENV"
+
     - name: Package skill
       if: inputs.publish-skill == 'true'
       shell: bash
       run: |
-        if [ ! -f SKILL.md ]; then
-          echo "SKILL.md not present — skipping skill packaging."
+        if [ -z "$SKILL_MD" ]; then
+          echo "No SKILL.md found — skipping skill packaging."
           exit 0
         fi
         python3 - <<'EOF'
@@ -84,10 +118,11 @@ runs:
 
         version = os.environ["VERSION"]
         skill_name = os.environ["MCP_PUBLISH_NAME"]
+        skill_md = pathlib.Path(os.environ["SKILL_MD"])
         out = pathlib.Path(f"{skill_name}-{version}.skill")
 
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.write(pathlib.Path("SKILL.md"), f"{skill_name}/SKILL.md")
+            zf.write(skill_md, f"{skill_name}/SKILL.md")
 
         print(f"Packaged {out} ({out.stat().st_size} bytes)")
         EOF
@@ -168,15 +203,15 @@ runs:
           echo "clawhub-token not set — skipping ClawHub publish."
           exit 0
         fi
-        if [ ! -f SKILL.md ]; then
-          echo "SKILL.md not present — skipping ClawHub publish."
+        if [ -z "$SKILL_MD" ]; then
+          echo "No SKILL.md found — skipping ClawHub publish."
           exit 0
         fi
         npx --yes clawhub login --token "$CLAWHUB_TOKEN" --no-browser
         # ClawHub `publish` rejects plugin-shaped folders; publish SKILL.md
         # from a clean temp dir as a standalone skill.
         SKILL_DIR=$(mktemp -d)
-        cp SKILL.md "$SKILL_DIR/"
+        cp "$SKILL_MD" "$SKILL_DIR/SKILL.md"
         npx --yes clawhub publish "$SKILL_DIR" --version "${VERSION}" --slug "${MCP_PUBLISH_NAME}"
 
     # release-please already created the GitHub Release; attach artifacts.
