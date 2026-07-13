@@ -96,7 +96,7 @@
     },
     {
       "repo": "chrischall/mcp-utils",
-      "conventions_hint": "Shared library: README.md documents the core-vs-optional-subpath module boundary; this package handles bearer tokens \u2014 error messages must never echo a credential; public API changes need tests.",
+      "conventions_hint": "Shared library: README.md documents the core-vs-optional-subpath module boundary; this package handles bearer tokens — error messages must never echo a credential; public API changes need tests.",
       "ci": "custom",
       "release": "custom"
     },
@@ -197,6 +197,40 @@
     },
     {
       "repo": "chrischall/booli-mcp"
+    },
+    {
+      "repo": "chrischall/alltrails-mcp"
+    },
+    {
+      "repo": "chrischall/etix-mcp"
+    },
+    {
+      "repo": "chrischall/flightaware-mcp"
+    },
+    {
+      "repo": "chrischall/hemnet-mcp"
+    },
+    {
+      "repo": "chrischall/mcp-marketplace",
+      "ci": "custom",
+      "release": "custom"
+    },
+    {
+      "repo": "chrischall/swift-photos-automation",
+      "ci": "custom",
+      "release": "custom"
+    },
+    {
+      "repo": "chrischall/vibo-mcp"
+    },
+    {
+      "repo": "chrischall/workday-mcp"
+    },
+    {
+      "repo": "nullnet-app/allotmint",
+      "pat_secret": "NULLNET_RELEASE_PAT",
+      "ci": "custom",
+      "release": "custom"
     }
   ]
 }
