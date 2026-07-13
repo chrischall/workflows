@@ -12,6 +12,7 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 | `.github/workflows/reusable-dependabot-lockfix.yml` | reusable workflow | repos with derived lockfiles dependabot can't refresh |
 | `.github/actions/arm-gate` | composite action | bespoke-CI repos (gradle, swift) |
 | `templates/ci-gradle.yml` | starter template | Gradle/KMP repos |
+| `templates/dependabot-lockfix-{npm,gradle}.yml` | stub templates | repos with `lockfix` set in `fleet.json` |
 | `.github/actions/mcp-publish` | composite action | MCP publishers |
 | `.github/actions/install-mcp-publisher` | composite action | via mcp-publish |
 
@@ -66,7 +67,11 @@ gradle run can refresh. Call from a stub on `pull_request_target`
 (types: [opened, synchronize]) passing the repo's release PAT; runs are
 double-guarded to PRs both authored and triggered by dependabot[bot], and the
 PR head is checked out without credentials so the lockfix command never sees
-the PAT. Live consumers: untappd-mcp (npm) and curtaincall (gradle).
+the PAT. The stub must grant `contents: read` — a `permissions: {}` caller
+startup-fails, since the called job requests `contents: read` for checkout.
+Onboard a repo by setting `lockfix: npm|gradle` in `fleet.json` and running
+`scripts/rollout.sh`. Live consumers: untappd-mcp (npm) and curtaincall
+(gradle).
 
 Rollout tooling: `fleet.json` (per-repo parameters), `scripts/rollout.sh`
 (stub-conversion PRs), `scripts/update-ruleset.sh` (required-check rename).

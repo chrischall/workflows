@@ -14,7 +14,10 @@ name: Reusable dependabot lockfix
 # Call from a thin stub on `pull_request_target` (types: [opened,
 # synchronize]) — that event runs THIS definition from the base branch and
 # exposes repo secrets, which dependabot-triggered `pull_request` events would
-# not (those only see the separate Dependabot secrets store).
+# not (those only see the separate Dependabot secrets store). The stub MUST
+# grant at least `contents: read` (templates/dependabot-lockfix-*.yml do): a
+# called workflow can only downgrade the caller's permissions, so a stub with
+# `permissions: {}` startup-fails against this job's `contents: read`.
 #
 # Safety model — the PR head IS checked out and `lockfix-command` MAY execute
 # PR-controlled code (gradle build scripts; npm only if the command allows
