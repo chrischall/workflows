@@ -104,18 +104,20 @@ jobs:
         run: |
           # Three-tier ladder by additions+deletions; `review-with-opus`
           # label forces Opus. Never the [1m] context variant.
+          # Fleet-wide single source of truth for review models — every repo
+          # consumes this workflow via @main, so model bumps land here only.
           CHANGED=$(gh api "/repos/${REPO}/pulls/${PR}" --jq '.additions + .deletions')
           if [ "$HAS_OPUS_LABEL" = "true" ]; then
-            MODEL="claude-opus-4-7"
+            MODEL="claude-opus-4-8"
             REASON="\`review-with-opus\` label (forced)"
           elif [ "$CHANGED" -le 50 ]; then
             MODEL="claude-haiku-4-5"
             REASON="${CHANGED} lines (≤50, trivial)"
           elif [ "$CHANGED" -le 500 ]; then
-            MODEL="claude-sonnet-4-6"
+            MODEL="claude-sonnet-5"
             REASON="${CHANGED} lines (51-500)"
           else
-            MODEL="claude-opus-4-7"
+            MODEL="claude-opus-4-8"
             REASON="${CHANGED} lines (>500, complex)"
           fi
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
