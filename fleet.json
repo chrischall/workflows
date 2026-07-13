@@ -194,6 +194,9 @@
     },
     {
       "repo": "chrischall/easytable-mcp"
+    },
+    {
+      "repo": "chrischall/booli-mcp"
     }
   ]
 }
