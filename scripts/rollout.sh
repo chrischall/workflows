@@ -30,6 +30,8 @@ NODE_VERSION=$(cfg node_version)
 BUILD_COMMAND=$(cfg build_command)
 TEST_COMMAND=$(cfg test_command)
 HINT=$(cfg conventions_hint)
+LOCKFIX=$(cfg lockfix)
+JAVA_VERSION=$(cfg java_version)
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -37,6 +39,7 @@ trap 'rm -rf "$WORK"' EXIT
 render() { # render <template> <dest>
   sed -e "s|__PAT_SECRET__|$PAT_SECRET|g" \
       -e "s|__NODE_VERSION__|$NODE_VERSION|g" \
+      -e "s|__JAVA_VERSION__|$JAVA_VERSION|g" \
       -e "s|__BUILD_COMMAND__|$BUILD_COMMAND|g" \
       -e "s|__TEST_COMMAND__|$TEST_COMMAND|g" \
       -e "s|__CONVENTIONS_HINT__|${HINT//|/\\|}|g" \
@@ -48,8 +51,9 @@ render pr-auto-review.yml "$STAGE/pr-auto-review.yml"
 render auto-merge.yml "$STAGE/auto-merge.yml"
 [ "$CI_MODE" = "standard" ] && render ci.yml "$STAGE/ci.yml"
 [ "$RELEASE_MODE" = "mcp" ] && render release-please.yml "$STAGE/release-please.yml"
+[ -n "$LOCKFIX" ] && render "dependabot-lockfix-$LOCKFIX.yml" "$STAGE/dependabot-lockfix.yml"
 
-echo "=== $REPO  (pat=$PAT_SECRET ci=$CI_MODE release=$RELEASE_MODE) ==="
+echo "=== $REPO  (pat=$PAT_SECRET ci=$CI_MODE release=$RELEASE_MODE lockfix=${LOCKFIX:-none}) ==="
 for f in "$STAGE"/*; do echo "--- $(basename "$f")"; cat "$f"; done
 
 if [ "$EXECUTE" != "--execute" ]; then
@@ -77,6 +81,7 @@ fi
 EXTRAS=""
 [ "$CI_MODE" = "standard" ] && EXTRAS="$EXTRAS/CI"
 [ "$RELEASE_MODE" = "mcp" ] && EXTRAS="$EXTRAS/release"
+[ -n "$LOCKFIX" ] && EXTRAS="$EXTRAS/lockfix"
 git commit -m "ci: convert to chrischall/workflows reusable pipeline
 
 Thin stubs replace the vendored auto-review/auto-merge${EXTRAS} workflows.
@@ -89,6 +94,7 @@ git push -u origin "$BRANCH"
   echo "- auto-merge: reusable (dependabot + ready-to-merge label arms)"
   [ "$CI_MODE" = "standard" ] && echo "- ci: reusable node CI (deferred gate) — required check becomes \`ci / ci\`"
   [ "$RELEASE_MODE" = "mcp" ] && echo "- release-please: thin stub + mcp-publish composite action (OIDC identity preserved)"
+  [ -n "$LOCKFIX" ] && echo "- dependabot-lockfix: reusable ($LOCKFIX — regenerates derived lockfiles dependabot can't refresh)"
   echo ""
   echo "After this PR is open, run \`scripts/update-ruleset.sh $REPO\` in chrischall/workflows."
   echo ""

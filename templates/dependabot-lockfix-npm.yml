@@ -1,0 +1,37 @@
+name: Dependabot lockfix
+
+# Thin stub — the logic lives in chrischall/workflows.
+# The root package-lock.json embeds a `file:` package's dependency tree, so
+# a dependabot bump inside that package leaves the root lock stale and
+# `npm ci` fails EUSAGE. This resyncs the root lock on dependabot PRs and
+# pushes it back with the PAT so CI retriggers.
+#
+# pull_request_target so the PAT secret is available on dependabot-triggered
+# runs; the reusable double-guards to PRs authored AND triggered by
+# dependabot[bot], checks out the head without credentials, and the
+# --package-lock-only --ignore-scripts install never executes PR code.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+# The reusable's job requests `contents: read` (checkout); a called workflow
+# can only downgrade the caller's grant, so `{}` here startup-fails every run.
+permissions:
+  contents: read
+
+concurrency:
+  group: dependabot-lockfix-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lockfix:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
+    uses: chrischall/workflows/.github/workflows/reusable-dependabot-lockfix.yml@main
+    with:
+      node-version: "__NODE_VERSION__"
+      lockfix-command: npm install --package-lock-only --ignore-scripts
+      commit-paths: package-lock.json
+      commit-message: "fix(deps): resync root package-lock.json after dependabot bump"
+    secrets:
+      release_pat: ${{ secrets.__PAT_SECRET__ }}

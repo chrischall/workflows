@@ -6,7 +6,9 @@
     "build_command": "npm run build",
     "test_command": "npm test",
     "release": "mcp",
-    "conventions_hint": ""
+    "conventions_hint": "",
+    "lockfix": "",
+    "java_version": "21"
   },
   "repos": [
     {
@@ -135,7 +137,8 @@
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "custom",
       "release": "custom",
-      "conventions_hint": "TDD project (behavior changes ship with tests; never weaken assertions); Hibernate Envers auditing rules; one shared test context; Flyway owns the schema. All in CLAUDE.md."
+      "conventions_hint": "TDD project (behavior changes ship with tests; never weaken assertions); Hibernate Envers auditing rules; one shared test context; Flyway owns the schema. All in CLAUDE.md.",
+      "lockfix": "gradle"
     },
     {
       "repo": "nullnet-app/encore-ios",
@@ -186,7 +189,8 @@
       "test_command": "npm run test:coverage"
     },
     {
-      "repo": "chrischall/untappd-mcp"
+      "repo": "chrischall/untappd-mcp",
+      "lockfix": "npm"
     },
     {
       "repo": "chrischall/easytable-mcp"
