@@ -12,8 +12,10 @@ name: Reusable Cloudflare Workers web-deploy
 #      skipped entirely.
 #   2. sets up Node with an npm cache keyed to the working-directory lockfile.
 #   3. `npm ci` in `working-directory`.
-#   4. runs the OpenNext build then deploy, authed to Cloudflare via the
-#      `CLOUDFLARE_API_TOKEN` secret + `CLOUDFLARE_ACCOUNT_ID` account id.
+#   4. runs the OpenNext build (local, unauthenticated), then the deploy step,
+#      authed to Cloudflare via the `CLOUDFLARE_API_TOKEN` secret +
+#      `CLOUDFLARE_ACCOUNT_ID` account id (least-privilege: only the deploy
+#      step gets the credentials).
 #
 # HOW TO CALL IT (from an app repo `deploy-web.yml`):
 #
@@ -119,9 +121,6 @@ jobs:
 
       - name: Build (OpenNext)
         run: ${{ inputs.build-command }}
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
 
       - name: Deploy to Cloudflare Workers
         run: ${{ inputs.deploy-command }}
