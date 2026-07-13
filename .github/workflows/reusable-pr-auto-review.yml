@@ -92,7 +92,11 @@ jobs:
       - name: Checkout PR
         uses: actions/checkout@v6
         with:
-          fetch-depth: 1
+          # Full history so the reviewer can resolve commit reachability
+          # (e.g. CHANGELOG links "reachable from origin/main"). A shallow
+          # depth-1 clone has no main history, producing false "broken link"
+          # fails on release PRs whose CHANGELOG references older commits.
+          fetch-depth: 0
 
       - name: Pick model by PR size (or label override)
         id: model
