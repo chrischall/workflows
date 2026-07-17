@@ -1,0 +1,195 @@
+# TEMPLATE — copied from nullnet-app/encore/.github/workflows/deploy-play.yml,
+# proven on a real publish (versionCode 1001 -> internal track, 2026-07).
+#
+# CHANGE: PACKAGE_NAME + the `packageName:` input; the keystore alias
+# (`encore-upload`); and the scripts path if yours differs. The org secrets
+# are fleet-wide and reusable as-is.
+
+# Deploy Encore to Google Play.
+#
+# The Android counterpart of deploy-testflight.yml: build the signed AAB off the
+# shared KMP core and push it to a Play track. Runs on the self-hosted macOS
+# runner for the same reason CI does — the shared module declares Apple targets
+# and applies SKIE, so its Gradle configuration is only proven on macOS here.
+# (:android:bundleRelease itself never builds an Apple target.)
+#
+# Signing model: Play App Signing. The key below is the *upload* key only —
+# Google re-signs with the app signing key that devices verify. A lost upload
+# key is therefore recoverable via a Play Console reset.
+#
+# Required secrets — all nullnet-app ORG secrets (visibility: all), matching how
+# the Apple signing material is shared across the org's app repos:
+#   PLAY_UPLOAD_KEYSTORE_JKS_B64  — base64 of the upload keystore  (cf. DIST_CERT_P12_B64)
+#   PLAY_UPLOAD_KEYSTORE_PASSWORD — that keystore's store password (cf. DIST_CERT_PASSWORD)
+#   PLAY_UPLOAD_KEY_PASSWORD      — the key password within it
+#   PLAY_SERVICE_ACCOUNT_JSON_B64 — base64 of the Google Cloud service account
+#                                   JSON (cf. ASC_PRIVATE_KEY_B64, which base64s
+#                                   a text .p8 for the same reason: it keeps a
+#                                   multi-line blob a single-line secret)
+#   SETLIST_FM_API_KEY / TICKETMASTER_CONSUMER_KEY / SEATGEEK_CLIENT_ID
+#     — already set for deploy-testflight.yml; reused here.
+
+name: deploy-play
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      track:
+        description: "Play track to publish to"
+        required: true
+        default: internal
+        type: choice
+        options: [internal, alpha, beta, production]
+      status:
+        description: "Release status. draft = uploaded but not rolled out (safe first run)."
+        required: true
+        default: completed
+        type: choice
+        options: [completed, draft]
+
+concurrency:
+  group: deploy-play
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  play:
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 45
+    env:
+      PACKAGE_NAME: app.nullnet.encore
+      AAB_PATH: android/build/outputs/bundle/release/android-release.aab
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Cache Gradle + Konan
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.konan
+          key: gradle-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', '**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Resolve version code
+        id: ver
+        # Play requires a strictly increasing versionCode per upload and never
+        # forgets one, so this must never go backwards. run_number is monotonic
+        # for the repo; +1000 leaves room below for anything uploaded by hand.
+        run: |
+          echo "code=$(( ${{ github.run_number }} + 1000 ))" >> "$GITHUB_OUTPUT"
+
+      - name: Write signing + API-key config
+        env:
+          KEYSTORE_B64: ${{ secrets.PLAY_UPLOAD_KEYSTORE_JKS_B64 }}
+          STORE_PASSWORD: ${{ secrets.PLAY_UPLOAD_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.PLAY_UPLOAD_KEY_PASSWORD }}
+          SETLIST_FM_API_KEY: ${{ secrets.SETLIST_FM_API_KEY }}
+          TICKETMASTER_CONSUMER_KEY: ${{ secrets.TICKETMASTER_CONSUMER_KEY }}
+          SEATGEEK_CLIENT_ID: ${{ secrets.SEATGEEK_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::PLAY_UPLOAD_KEYSTORE_JKS_B64 is not set — refusing to build an unsigned release."
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 --decode > android/upload-keystore.jks
+          cat > android/keystore.properties <<EOF
+          storeFile=upload-keystore.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=encore-upload
+          keyPassword=$KEY_PASSWORD
+          EOF
+          printf 'SETLIST_FM_API_KEY=%s\nTICKETMASTER_CONSUMER_KEY=%s\nSEATGEEK_CLIENT_ID=%s\n' \
+            "$SETLIST_FM_API_KEY" "$TICKETMASTER_CONSUMER_KEY" "$SEATGEEK_CLIENT_ID" \
+            > android/secrets.properties
+
+      - name: Shared tests
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+          ./gradlew --no-daemon :shared:testDebugUnitTest
+
+      - name: Build signed AAB
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+          ./gradlew --no-daemon :android:bundleRelease \
+            -PandroidVersionCode=${{ steps.ver.outputs.code }}
+
+      - name: Verify the AAB is signed with the upload key
+        # A release built without keystore.properties is silently unsigned, and
+        # Play rejects it only after the upload. Fail here instead.
+        run: |
+          set -euo pipefail
+          if ! unzip -l "$AAB_PATH" | grep -qiE 'META-INF/.*\.(RSA|EC|DSA)'; then
+            echo "::error::$AAB_PATH is unsigned."
+            exit 1
+          fi
+          echo "Signed. versionCode=${{ steps.ver.outputs.code }}"
+
+      - name: Verify R8 kept the serializers
+        # Guards the one minification failure that reaches testers silently: a
+        # stripped $$serializer still compiles and still launches, then throws on
+        # the first API response. See the script header.
+        run: android/scripts/verify-minified-serializers.sh "$AAB_PATH"
+
+      - name: Decode the service account key
+        env:
+          SA_JSON_B64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SA_JSON_B64" ]; then
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON_B64 is not set."
+            exit 1
+          fi
+          echo "$SA_JSON_B64" | base64 --decode > "$RUNNER_TEMP/play-sa.json"
+          chmod 600 "$RUNNER_TEMP/play-sa.json"
+          # Fail here with a clear message rather than deep inside the upload
+          # action if the secret was stored wrong (e.g. pasted un-encoded).
+          python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$RUNNER_TEMP/play-sa.json" \
+            || { echo "::error::Decoded key is not valid JSON — is the secret base64 of key.json?"; exit 1; }
+
+      - name: Publish to Play
+        # Pinned to the v1.1.5 commit: this step receives the service account
+        # key, so a moving tag would be an unreviewed change with access to it.
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5
+        with:
+          serviceAccountJson: ${{ runner.temp }}/play-sa.json
+          packageName: app.nullnet.encore
+          releaseFiles: android/build/outputs/bundle/release/android-release.aab
+          track: ${{ inputs.track || 'internal' }}
+          status: ${{ inputs.status || 'completed' }}
+          # R8 minifies the release build, so without this every Play Console
+          # crash report comes back as obfuscated one-letter frames.
+          # (No debugSymbols: the only .so in the bundle is a prebuilt,
+          # already-stripped Compose dependency, libandroidx.graphics.path.)
+          mappingFile: android/build/outputs/mapping/release/mapping.txt
+
+      - name: Clean up signing material
+        # The runner is self-hosted and its workspace persists between jobs.
+        if: always()
+        run: |
+          rm -f android/upload-keystore.jks android/keystore.properties android/secrets.properties
+          rm -f "$RUNNER_TEMP/play-sa.json"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Encore → Google Play"
+            echo
+            VER=$(sed -nE 's/^val encoreVersionName = "(.*)".*/\1/p' android/build.gradle.kts)
+            echo "**Version:** $VER (versionCode ${{ steps.ver.outputs.code }})"
+            echo "**Track:** ${{ inputs.track || 'internal' }} — **Status:** ${{ inputs.status || 'completed' }}"
+          } >> "$GITHUB_STEP_SUMMARY"
