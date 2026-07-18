@@ -76,3 +76,8 @@ Onboard a repo by setting `lockfix: npm|gradle` in `fleet.json` and running
 Rollout tooling: `fleet.json` (per-repo parameters), `scripts/rollout.sh`
 (stub-conversion PRs), `scripts/update-ruleset.sh` (required-check rename).
 Design: `docs/superpowers/specs/2026-06-12-fleet-reusable-workflows-design.md`.
+
+`docs/fleet-conventions.md` is the canonical home for the technical conventions
+the MCP repos share — publishing constraints, bundling and `.mcpb` rules, stdio,
+versioning guards, write-verification, transport archetypes, testing traps. Link
+to it from a repo's `CLAUDE.md` instead of copying a section into it.
