@@ -36,13 +36,21 @@ JAVA_VERSION=$(cfg java_version)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
+# Escape a fleet.json value for use as a sed REPLACEMENT string. `&` means "the
+# whole match" and `|` is our delimiter, so an unescaped value containing either
+# is silently corrupted rather than erroring: a test_command of
+# `npm run typecheck && npm test` rendered as
+# `npm run typecheck __TEST_COMMAND____TEST_COMMAND__ npm test`,
+# because each `&` re-inserted the placeholder it had just matched.
+sed_escape() { printf '%s' "$1" | sed -e 's/[&|\\]/\\&/g'; }
+
 render() { # render <template> <dest>
-  sed -e "s|__PAT_SECRET__|$PAT_SECRET|g" \
-      -e "s|__NODE_VERSION__|$NODE_VERSION|g" \
-      -e "s|__JAVA_VERSION__|$JAVA_VERSION|g" \
-      -e "s|__BUILD_COMMAND__|$BUILD_COMMAND|g" \
-      -e "s|__TEST_COMMAND__|$TEST_COMMAND|g" \
-      -e "s|__CONVENTIONS_HINT__|${HINT//|/\\|}|g" \
+  sed -e "s|__PAT_SECRET__|$(sed_escape "$PAT_SECRET")|g" \
+      -e "s|__NODE_VERSION__|$(sed_escape "$NODE_VERSION")|g" \
+      -e "s|__JAVA_VERSION__|$(sed_escape "$JAVA_VERSION")|g" \
+      -e "s|__BUILD_COMMAND__|$(sed_escape "$BUILD_COMMAND")|g" \
+      -e "s|__TEST_COMMAND__|$(sed_escape "$TEST_COMMAND")|g" \
+      -e "s|__CONVENTIONS_HINT__|$(sed_escape "$HINT")|g" \
       "$HERE/templates/$1" > "$2"
 }
 

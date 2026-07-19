@@ -220,8 +220,9 @@
     },
     {
       "repo": "chrischall/mcp-connector",
+    "test_command": "npm run typecheck && npm test",
       "conventions_hint": "Shared connector harness: every hosted Cloudflare Worker connector in the fleet is built on it and pins it, so a change here is a change to all of them \u2014 see CLAUDE.md's blast-radius section. Peer deps (workers-oauth-provider, agents, @modelcontextprotocol/sdk) are provided by the consumer; bumping a peer range is a breaking change for consumers still on the old one.",
-      "ci": "custom",
+      "ci": "standard",
       "release": "custom"
     },
     {
