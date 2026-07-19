@@ -12,6 +12,9 @@
   },
   "repos": [
     {
+      "repo": "chrischall/charlotteonthecheap-mcp"
+    },
+    {
       "repo": "chrischall/zola-mcp"
     },
     {
