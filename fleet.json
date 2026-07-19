@@ -96,7 +96,7 @@
     },
     {
       "repo": "chrischall/mcp-utils",
-      "conventions_hint": "Shared library: README.md documents the core-vs-optional-subpath module boundary; this package handles bearer tokens — error messages must never echo a credential; public API changes need tests.",
+      "conventions_hint": "Shared library: README.md documents the core-vs-optional-subpath module boundary; this package handles bearer tokens \u2014 error messages must never echo a credential; public API changes need tests.",
       "ci": "custom",
       "release": "custom"
     },
@@ -212,6 +212,12 @@
     },
     {
       "repo": "chrischall/mcp-marketplace",
+      "ci": "custom",
+      "release": "custom"
+    },
+    {
+      "repo": "chrischall/mcp-connector",
+      "conventions_hint": "Shared connector harness: every hosted Cloudflare Worker connector in the fleet is built on it and pins it, so a change here is a change to all of them \u2014 see CLAUDE.md's blast-radius section. Peer deps (workers-oauth-provider, agents, @modelcontextprotocol/sdk) are provided by the consumer; bumping a peer range is a breaking change for consumers still on the old one.",
       "ci": "custom",
       "release": "custom"
     },
