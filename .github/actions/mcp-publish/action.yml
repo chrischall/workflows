@@ -18,8 +18,9 @@ inputs:
     default: ""
   skill-path:
     description: >-
-      Path to the skill's SKILL.md. When empty, auto-resolves to a root
-      SKILL.md, else a single skills/*/SKILL.md (plugin-shaped repos).
+      Path to a single skill's SKILL.md, pinning publication to just that one.
+      When empty, auto-resolves to a root SKILL.md, else EVERY skills/*/SKILL.md
+      — a repo shipping several publishes them all, each under its own slug.
     required: false
     default: ""
   node-version:
@@ -84,32 +85,60 @@ runs:
       env:
         IN_SKILL_PATH: ${{ inputs.skill-path }}
       run: |
-        SKILL_MD=""
+        # Emits a manifest at $SKILLS_TSV: one "path<TAB>slug" line per skill.
+        # A repo may ship several (zola-mcp has zola + zola-api); publishing only
+        # the first would silently drop the rest, and erroring — as this used to —
+        # broke publishing outright: zola-mcp tagged 1.6.0/1.6.1/1.6.2 while npm
+        # stayed at 1.5.0, because this step exits before the npm publish.
+        SKILLS_TSV="$RUNNER_TEMP/skills.tsv"
+        : > "$SKILLS_TSV"
+
+        add() { printf '%s\t%s\n' "$1" "$2" >> "$SKILLS_TSV"; }
+
         if [ -n "$IN_SKILL_PATH" ]; then
           if [ ! -f "$IN_SKILL_PATH" ]; then
             echo "skill-path input '$IN_SKILL_PATH' does not exist." >&2
             exit 1
           fi
-          SKILL_MD="$IN_SKILL_PATH"
+          # Explicit override stays single and keeps the repo-level slug, so a
+          # repo pinning one skill of several publishes exactly what it pinned.
+          add "$IN_SKILL_PATH" "$MCP_PUBLISH_NAME"
         elif [ -f SKILL.md ]; then
-          SKILL_MD="SKILL.md"
+          add "SKILL.md" "$MCP_PUBLISH_NAME"
         else
           shopt -s nullglob
           CANDIDATES=(skills/*/SKILL.md)
           if [ "${#CANDIDATES[@]}" -eq 1 ]; then
-            SKILL_MD="${CANDIDATES[0]}"
-          elif [ "${#CANDIDATES[@]}" -gt 1 ]; then
-            echo "Multiple skills/*/SKILL.md found — set the skill-path input." >&2
-            exit 1
+            # Single skill keeps the repo-level slug and artifact name, byte for
+            # byte, so existing releases and ClawHub listings are undisturbed.
+            add "${CANDIDATES[0]}" "$MCP_PUBLISH_NAME"
+          else
+            # Several: each gets its own slug from its directory name, otherwise
+            # they would collide on one ClawHub slug and one artifact filename.
+            for c in "${CANDIDATES[@]}"; do
+              d="${c%/SKILL.md}"
+              add "$c" "${d#skills/}"
+            done
           fi
         fi
-        echo "SKILL_MD=$SKILL_MD" >> "$GITHUB_ENV"
+
+        COUNT=$(wc -l < "$SKILLS_TSV" | tr -d ' ')
+        echo "SKILLS_TSV=$SKILLS_TSV" >> "$GITHUB_ENV"
+        echo "SKILL_COUNT=$COUNT" >> "$GITHUB_ENV"
+        # Retained for steps that only care whether any skill exists.
+        echo "SKILL_MD=$(head -1 "$SKILLS_TSV" | cut -f1)" >> "$GITHUB_ENV"
+        if [ "$COUNT" -eq 0 ]; then
+          echo "No SKILL.md found."
+        else
+          echo "Resolved $COUNT skill(s):"
+          while IFS=$'\t' read -r p slug; do echo "  $slug  <-  $p"; done < "$SKILLS_TSV"
+        fi
 
     - name: Package skill
       if: inputs.publish-skill == 'true'
       shell: bash
       run: |
-        if [ -z "$SKILL_MD" ]; then
+        if [ "${SKILL_COUNT:-0}" -eq 0 ]; then
           echo "No SKILL.md found — skipping skill packaging."
           exit 0
         fi
@@ -117,14 +146,18 @@ runs:
         import zipfile, pathlib, os
 
         version = os.environ["VERSION"]
-        skill_name = os.environ["MCP_PUBLISH_NAME"]
-        skill_md = pathlib.Path(os.environ["SKILL_MD"])
-        out = pathlib.Path(f"{skill_name}-{version}.skill")
+        manifest = pathlib.Path(os.environ["SKILLS_TSV"])
 
-        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.write(skill_md, f"{skill_name}/SKILL.md")
-
-        print(f"Packaged {out} ({out.stat().st_size} bytes)")
+        # One archive per skill, named by its slug. With a single skill the slug
+        # is the repo-level name, so the artifact filename is unchanged.
+        for line in manifest.read_text().splitlines():
+            if not line.strip():
+                continue
+            path, slug = line.split("\t", 1)
+            out = pathlib.Path(f"{slug}-{version}.skill")
+            with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.write(pathlib.Path(path), f"{slug}/SKILL.md")
+            print(f"Packaged {out} ({out.stat().st_size} bytes)")
         EOF
 
     - name: Build .mcpb bundle
@@ -203,16 +236,26 @@ runs:
           echo "clawhub-token not set — skipping ClawHub publish."
           exit 0
         fi
-        if [ -z "$SKILL_MD" ]; then
+        if [ "${SKILL_COUNT:-0}" -eq 0 ]; then
           echo "No SKILL.md found — skipping ClawHub publish."
           exit 0
         fi
         npx --yes clawhub login --token "$CLAWHUB_TOKEN" --no-browser
-        # ClawHub `publish` rejects plugin-shaped folders; publish SKILL.md
-        # from a clean temp dir as a standalone skill.
-        SKILL_DIR=$(mktemp -d)
-        cp "$SKILL_MD" "$SKILL_DIR/SKILL.md"
-        npx --yes clawhub publish "$SKILL_DIR" --version "${VERSION}" --slug "${MCP_PUBLISH_NAME}"
+        # ClawHub `publish` rejects plugin-shaped folders; publish each SKILL.md
+        # from a clean temp dir as a standalone skill, under its own slug —
+        # reusing one slug would have each skill overwrite the last.
+        FAILED=0
+        while IFS=$'\t' read -r SKILL_PATH SLUG; do
+          [ -n "$SKILL_PATH" ] || continue
+          SKILL_DIR=$(mktemp -d)
+          cp "$SKILL_PATH" "$SKILL_DIR/SKILL.md"
+          echo "Publishing $SLUG to ClawHub..."
+          npx --yes clawhub publish "$SKILL_DIR" --version "${VERSION}" --slug "${SLUG}" || {
+            echo "::warning title=ClawHub publish failed::$SLUG did not publish"
+            FAILED=1
+          }
+        done < "$SKILLS_TSV"
+        exit $FAILED
 
     # release-please already created the GitHub Release; attach artifacts.
     - name: Attach artifacts to release
@@ -222,7 +265,10 @@ runs:
         TAG: ${{ inputs.tag-name }}
       run: |
         ARGS=()
-        [ -f "${MCP_PUBLISH_NAME}-${VERSION}.skill" ] && ARGS+=("${MCP_PUBLISH_NAME}-${VERSION}.skill")
+        # Glob rather than name one file: a multi-skill repo produces one
+        # archive per skill, and hardcoding the repo name would attach only one.
+        shopt -s nullglob
+        for f in *-"${VERSION}".skill; do ARGS+=("$f"); done
         [ -f "${MCP_PUBLISH_NAME}-${VERSION}.mcpb" ] && ARGS+=("${MCP_PUBLISH_NAME}-${VERSION}.mcpb")
         if [ "${#ARGS[@]}" -eq 0 ]; then
           echo "No artifacts to attach."
