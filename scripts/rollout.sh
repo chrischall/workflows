@@ -32,6 +32,10 @@ TEST_COMMAND=$(cfg test_command)
 HINT=$(cfg conventions_hint)
 LOCKFIX=$(cfg lockfix)
 JAVA_VERSION=$(cfg java_version)
+# Deploy automation: `connector` = has a hosted Worker; `fly_dir` = directory
+# holding fly.toml for repos that also run a Fly backend (implies a Fly job).
+CONNECTOR=$(cfg connector)
+FLY_DIR=$(cfg fly_dir)
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -51,6 +55,7 @@ render() { # render <template> <dest>
       -e "s|__BUILD_COMMAND__|$(sed_escape "$BUILD_COMMAND")|g" \
       -e "s|__TEST_COMMAND__|$(sed_escape "$TEST_COMMAND")|g" \
       -e "s|__CONVENTIONS_HINT__|$(sed_escape "$HINT")|g" \
+      -e "s|__FLY_DIR__|$(sed_escape "$FLY_DIR")|g" \
       "$HERE/templates/$1" > "$2"
 }
 
@@ -58,10 +63,28 @@ STAGE="$WORK/stage"; mkdir -p "$STAGE"
 render pr-auto-review.yml "$STAGE/pr-auto-review.yml"
 render auto-merge.yml "$STAGE/auto-merge.yml"
 [ "$CI_MODE" = "standard" ] && render ci.yml "$STAGE/ci.yml"
-[ "$RELEASE_MODE" = "mcp" ] && render release-please.yml "$STAGE/release-please.yml"
+if [ "$RELEASE_MODE" = "mcp" ]; then
+  render release-please.yml "$STAGE/release-please.yml"
+  # Deploy jobs are APPENDED to the release stub rather than living in a
+  # separate workflow, because they must gate on release-please's
+  # `release_created` output — which only exists inside this workflow.
+  if [ -n "$FLY_DIR" ]; then
+    render fragments/deploy-fly-job.yml "$WORK/fly.frag"
+    cat "$WORK/fly.frag" >> "$STAGE/release-please.yml"
+  fi
+  if [ -n "$CONNECTOR" ]; then
+    if [ -n "$FLY_DIR" ]; then
+      render fragments/deploy-connector-job-after-fly.yml "$WORK/conn.frag"
+    else
+      render fragments/deploy-connector-job.yml "$WORK/conn.frag"
+    fi
+    cat "$WORK/conn.frag" >> "$STAGE/release-please.yml"
+    render deploy-connector.yml "$STAGE/deploy-connector.yml"
+  fi
+fi
 [ -n "$LOCKFIX" ] && render "dependabot-lockfix-$LOCKFIX.yml" "$STAGE/dependabot-lockfix.yml"
 
-echo "=== $REPO  (pat=$PAT_SECRET ci=$CI_MODE release=$RELEASE_MODE lockfix=${LOCKFIX:-none}) ==="
+echo "=== $REPO  (pat=$PAT_SECRET ci=$CI_MODE release=$RELEASE_MODE lockfix=${LOCKFIX:-none} connector=${CONNECTOR:-no} fly=${FLY_DIR:-no}) ==="
 for f in "$STAGE"/*; do echo "--- $(basename "$f")"; cat "$f"; done
 
 if [ "$EXECUTE" != "--execute" ]; then
@@ -103,6 +126,8 @@ git push -u origin "$BRANCH"
   [ "$CI_MODE" = "standard" ] && echo "- ci: reusable node CI (deferred gate) — required check becomes \`ci / ci\`"
   [ "$RELEASE_MODE" = "mcp" ] && echo "- release-please: thin stub + mcp-publish composite action (OIDC identity preserved)"
   [ -n "$LOCKFIX" ] && echo "- dependabot-lockfix: reusable ($LOCKFIX — regenerates derived lockfiles dependabot can't refresh)"
+  [ -n "$CONNECTOR" ] && echo "- deploy-connector: Worker deployed on release (reusable) + workflow_dispatch stub"
+  [ -n "$FLY_DIR" ] && echo "- deploy-runner: Fly backend in \`$FLY_DIR\` deployed on release, before the Worker"
   echo ""
   echo "After this PR is open, run \`scripts/update-ruleset.sh $REPO\` in chrischall/workflows."
   echo ""

@@ -8,17 +8,22 @@
     "release": "mcp",
     "conventions_hint": "",
     "lockfix": "",
-    "java_version": "21"
+    "java_version": "21",
+    "connector": "",
+    "fly_dir": ""
   },
   "repos": [
     {
-      "repo": "chrischall/charlotteonthecheap-mcp"
+      "repo": "chrischall/onthecheap-mcp",
+      "connector": "true"
     },
     {
-      "repo": "chrischall/zola-mcp"
+      "repo": "chrischall/zola-mcp",
+      "connector": "true"
     },
     {
-      "repo": "chrischall/artsonia-mcp"
+      "repo": "chrischall/artsonia-mcp",
+      "connector": "true"
     },
     {
       "repo": "chrischall/canvas-parent-mcp"
@@ -30,10 +35,13 @@
       "repo": "chrischall/creditkarma-mcp"
     },
     {
-      "repo": "chrischall/gemini-mcp"
+      "repo": "chrischall/gemini-mcp",
+      "connector": "true"
     },
     {
-      "repo": "chrischall/gogcli-mcp"
+      "repo": "chrischall/gogcli-mcp",
+      "connector": "true",
+      "fly_dir": "fly-gog-runner"
     },
     {
       "repo": "chrischall/homes-mcp"
@@ -60,13 +68,15 @@
       "repo": "chrischall/resy-mcp"
     },
     {
-      "repo": "chrischall/setlist-mcp"
+      "repo": "chrischall/setlist-mcp",
+      "connector": "true"
     },
     {
       "repo": "chrischall/signupgenius-mcp"
     },
     {
-      "repo": "chrischall/splitwise-mcp"
+      "repo": "chrischall/splitwise-mcp",
+      "connector": "true"
     },
     {
       "repo": "chrischall/tempo-api-mcp"
@@ -91,7 +101,8 @@
     },
     {
       "repo": "chrischall/ofw-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "connector": "true"
     },
     {
       "repo": "chrischall/ioffice-mcp",
@@ -193,7 +204,8 @@
     },
     {
       "repo": "chrischall/untappd-mcp",
-      "lockfix": "npm"
+      "lockfix": "npm",
+      "connector": "true"
     },
     {
       "repo": "chrischall/easytable-mcp"
@@ -220,7 +232,7 @@
     },
     {
       "repo": "chrischall/mcp-connector",
-    "test_command": "npm run typecheck && npm test",
+      "test_command": "npm run typecheck && npm test",
       "conventions_hint": "Shared connector harness: every hosted Cloudflare Worker connector in the fleet is built on it and pins it, so a change here is a change to all of them \u2014 see CLAUDE.md's blast-radius section. Peer deps (workers-oauth-provider, agents, @modelcontextprotocol/sdk) are provided by the consumer; bumping a peer range is a breaking change for consumers still on the old one.",
       "ci": "standard",
       "release": "custom"
@@ -231,7 +243,8 @@
       "release": "custom"
     },
     {
-      "repo": "chrischall/vibo-mcp"
+      "repo": "chrischall/vibo-mcp",
+      "connector": "true"
     },
     {
       "repo": "chrischall/workday-mcp"
@@ -241,6 +254,10 @@
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "custom",
       "release": "custom"
+    },
+    {
+      "repo": "chrischall/sixflags-mcp",
+      "connector": "true"
     }
   ]
 }
