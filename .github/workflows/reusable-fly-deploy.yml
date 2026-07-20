@@ -15,7 +15,7 @@ name: Reusable Fly.io deploy
 #       ref: ${{ needs.release-please.outputs.tag_name }}
 #       working-directory: fly-gog-runner
 #     secrets:
-#       fly_api_token: ${{ secrets.FLY_API_TOKEN }}
+#       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 #
 # ORDERING: when a repo deploys BOTH halves, deploy the Fly backend first and
 # make the Worker job `needs:` it. The halves are normally compatible in both
@@ -65,7 +65,9 @@ on:
       # Declared, NOT inherited — see the same note in
       # reusable-mcp-connector-deploy.yml. This workflow needs one Fly token, not
       # every secret the calling repo holds.
-      fly_api_token:
+      # Same name as the repo secret so `secrets: inherit` callers keep working
+      # — see the note in reusable-mcp-connector-deploy.yml.
+      FLY_API_TOKEN:
         description: App-scoped Fly deploy token.
         required: false
 
@@ -94,7 +96,7 @@ jobs:
       - name: Check for a Fly token
         id: guard
         env:
-          FLY_TOKEN: ${{ secrets.fly_api_token }}
+          FLY_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           if [ -z "$FLY_TOKEN" ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -116,7 +118,7 @@ jobs:
         if: steps.guard.outputs.ready == 'true'
         working-directory: ${{ inputs.working-directory }}
         env:
-          FLY_API_TOKEN: ${{ secrets.fly_api_token }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: flyctl deploy ${{ inputs.deploy-args }}
 
       # A green `flyctl deploy` means the image rolled out, not that the service

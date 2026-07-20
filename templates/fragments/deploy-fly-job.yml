@@ -14,4 +14,4 @@
       ref: ${{ needs.release-please.outputs.tag_name }}
       working-directory: __FLY_DIR__
     secrets:
-      fly_api_token: ${{ secrets.FLY_API_TOKEN }}
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
