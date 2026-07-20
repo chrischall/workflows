@@ -7,8 +7,11 @@
   deploy-runner:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: read
     uses: chrischall/workflows/.github/workflows/reusable-fly-deploy.yml@main
     with:
       ref: ${{ needs.release-please.outputs.tag_name }}
       working-directory: __FLY_DIR__
-    secrets: inherit
+    secrets:
+      fly_api_token: ${{ secrets.FLY_API_TOKEN }}
