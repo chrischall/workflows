@@ -1,0 +1,152 @@
+name: Reusable Fly.io deploy
+
+# Fleet-canonical deploy for a Fly.io app — the companion to
+# `reusable-mcp-connector-deploy.yml` for MCP servers whose connector has a
+# backend Machine as well as a Worker (chrischall/gogcli-mcp runs the `gog` CLI
+# on Fly, because a Worker cannot execute a binary).
+#
+# HOW TO CALL IT — from `release-please.yml`, after a release is cut:
+#
+#   deploy-runner:
+#     needs: release-please
+#     if: needs.release-please.outputs.release_created == 'true'
+#     uses: chrischall/workflows/.github/workflows/reusable-fly-deploy.yml@main
+#     with:
+#       ref: ${{ needs.release-please.outputs.tag_name }}
+#       working-directory: fly-gog-runner
+#     secrets: inherit
+#
+# ORDERING: when a repo deploys BOTH halves, deploy the Fly backend first and
+# make the Worker job `needs:` it. The halves are normally compatible in both
+# directions, but a new Worker against an old backend is the combination that
+# leans on compatibility shims — prefer the other one. Chaining also means a
+# failed backend deploy skips the Worker, leaving a consistent pair rather than
+# a half-updated one.
+#
+# REQUIREMENTS (one-time per repo)
+#   - `FLY_API_TOKEN` — repo Actions secret. Mint it scoped to the single app
+#     rather than using a personal auth token, which would be valid for every app
+#     on the account:
+#         fly tokens create deploy -a <app-name>
+#
+# PERSISTENCE: app state on a Fly volume (auth tokens, databases) survives a
+# deploy — only the image is replaced. Deploying restarts the Machine, so
+# in-flight requests are dropped unless the app drains on SIGINT.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: >-
+          Git ref to deploy — pass the release tag so the deploy matches the
+          release. Empty deploys whatever ref triggered the caller.
+        type: string
+        required: false
+        default: ""
+      working-directory:
+        description: Directory holding fly.toml.
+        type: string
+        required: false
+        default: "."
+      health-path:
+        description: >-
+          Unauthenticated path probed after rollout to prove the app actually
+          answers. Empty skips the probe.
+        type: string
+        required: false
+        default: /healthz
+      deploy-args:
+        description: Extra args for `flyctl deploy`.
+        type: string
+        required: false
+        default: --remote-only
+    # Not declared — callers pass `secrets: inherit`. See the same note in
+    # reusable-mcp-connector-deploy.yml: a declared workflow_call secret is empty
+    # on any other trigger, which would skip the deploy while reporting success.
+
+permissions:
+  contents: read
+
+# Declared here rather than in the callers for the same reason as the connector
+# workflow: a caller's own concurrency group only serialises that caller's entry
+# point, leaving a manual redeploy free to race a release deploy onto the same
+# Machine. On the reusable workflow, every entry point shares one group per repo.
+concurrency:
+  group: deploy-fly-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+
+      # `secrets` is unavailable in a job-level `if:`, so the guard is a step.
+      # A missing token warns and PASSES, so a release is not reported as broken
+      # when the only thing that did not happen is a redeploy.
+      - name: Check for a Fly token
+        id: guard
+        env:
+          FLY_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_TOKEN" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Fly app not deployed::FLY_API_TOKEN is not set, so the Fly app was NOT deployed. The release itself succeeded."
+            {
+              echo "### ⚠️ Fly app not deployed"
+              echo
+              echo "\`FLY_API_TOKEN\` is not set on this repository."
+              echo "Create an app-scoped token (\`fly tokens create deploy -a <app>\`) and add it."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: steps.guard.outputs.ready == 'true'
+
+      - name: Deploy to Fly
+        if: steps.guard.outputs.ready == 'true'
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy ${{ inputs.deploy-args }}
+
+      # A green `flyctl deploy` means the image rolled out, not that the service
+      # answers. The probe also doubles as the wake for a scale-to-zero app,
+      # hence the generous timeout and retries.
+      - name: Verify the app answers
+        if: steps.guard.outputs.ready == 'true' && inputs.health-path != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          app=$(grep -m1 '^app' fly.toml | cut -d'"' -f2)
+          if [ -z "$app" ]; then
+            echo "::warning title=Health probe skipped::could not read the app name from fly.toml"
+            exit 0
+          fi
+          url="https://${app}.fly.dev${{ inputs.health-path }}"
+          echo "probing $url"
+          for attempt in 1 2 3 4 5; do
+            code=$(curl -s -o /tmp/health.out -w '%{http_code}' --max-time 120 "$url" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "health OK: $(head -c 200 /tmp/health.out)"
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $code — retrying"
+            sleep 10
+          done
+          echo "::error title=App unhealthy::${{ inputs.health-path }} did not return 200 after the deploy"
+          exit 1
+
+      - name: Summarise
+        if: steps.guard.outputs.ready == 'true'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          {
+            echo "### Fly app deployed"
+            echo
+            echo "- ref: \`${{ inputs.ref || github.ref_name }}\`"
+            echo "- app: \`$(grep -m1 '^app' fly.toml | cut -d'"' -f2)\`"
+          } >> "$GITHUB_STEP_SUMMARY"

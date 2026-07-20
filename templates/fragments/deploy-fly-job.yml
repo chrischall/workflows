@@ -1,0 +1,14 @@
+
+  # Deploy the Fly backend at the released tag. Goes BEFORE the connector: the
+  # halves are compatible in both directions, but a new Worker against an old
+  # backend is the combination that leans on compatibility shims, so prefer the
+  # other order. A failure here skips the connector too, leaving a consistent
+  # pair rather than a half-updated one.
+  deploy-runner:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: chrischall/workflows/.github/workflows/reusable-fly-deploy.yml@main
+    with:
+      ref: ${{ needs.release-please.outputs.tag_name }}
+      working-directory: __FLY_DIR__
+    secrets: inherit

@@ -9,6 +9,8 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 | `.github/workflows/reusable-auto-merge.yml` | reusable workflow | all |
 | `.github/workflows/reusable-mcp-ci.yml` | reusable workflow | node repos |
 | `.github/workflows/reusable-cloudflare-deploy.yml` | reusable workflow | web repos (OpenNext → Cloudflare Workers) |
+| `.github/workflows/reusable-mcp-connector-deploy.yml` | reusable workflow | MCP repos with a hosted connector (plain `wrangler deploy`) |
+| `.github/workflows/reusable-fly-deploy.yml` | reusable workflow | repos with a Fly.io backend |
 | `.github/workflows/reusable-dependabot-lockfix.yml` | reusable workflow | repos with derived lockfiles dependabot can't refresh |
 | `.github/actions/arm-gate` | composite action | bespoke-CI repos (gradle, swift) |
 | `templates/ci-gradle.yml` | starter template | Gradle/KMP repos |
@@ -57,6 +59,23 @@ apps with a JVM/Gradle prebuild (a shared KMP engine). Onboard a repo by copying
 `templates/deploy-web.yml` (swap `__ACCOUNT_ID__`); see
 `docs/cloudflare-web-deploy.md`. Live consumers: allotmint-clients/web (with a
 JDK prebuild) and curtaincall/web (plain).
+
+`reusable-mcp-connector-deploy.yml` is the *other* Cloudflare deploy: an MCP
+server's hosted connector Worker, deployed with a plain `wrangler deploy` from
+the repo root — no framework build, no `web/`. It takes a `ref` so a release
+deploys the released source rather than whatever `main` happens to be, and pairs
+with `reusable-fly-deploy.yml` for connectors that also run a Fly backend (a
+Worker cannot execute a binary, so `gogcli-mcp` runs the `gog` CLI on Fly).
+
+Wire the automatic path into `release-please.yml` gated on
+`release_created == 'true'`; copy `templates/deploy-connector.yml` for the
+on-demand `workflow_dispatch` path. Both jobs pass `secrets: inherit` and both
+warn-and-pass when their deploy token is absent, so a missing secret never
+reports an otherwise-good release as broken. When a repo deploys both halves,
+deploy Fly first and make the Worker job `needs:` it.
+
+These exist because hand-deployed connectors drift: one had drifted far enough
+to keep serving a tool schema its repo had already replaced.
 
 `reusable-dependabot-lockfix.yml` regenerates derived lockfiles on dependabot
 PRs and pushes them back with the release PAT (so CI retriggers), for bumps
