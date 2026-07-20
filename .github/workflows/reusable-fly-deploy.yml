@@ -14,7 +14,8 @@ name: Reusable Fly.io deploy
 #     with:
 #       ref: ${{ needs.release-please.outputs.tag_name }}
 #       working-directory: fly-gog-runner
-#     secrets: inherit
+#     secrets:
+#       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 #
 # ORDERING: when a repo deploys BOTH halves, deploy the Fly backend first and
 # make the Worker job `needs:` it. The halves are normally compatible in both
@@ -60,9 +61,15 @@ on:
         type: string
         required: false
         default: --remote-only
-    # Not declared — callers pass `secrets: inherit`. See the same note in
-    # reusable-mcp-connector-deploy.yml: a declared workflow_call secret is empty
-    # on any other trigger, which would skip the deploy while reporting success.
+    secrets:
+      # Declared, NOT inherited — see the same note in
+      # reusable-mcp-connector-deploy.yml. This workflow needs one Fly token, not
+      # every secret the calling repo holds.
+      # Same name as the repo secret so `secrets: inherit` callers keep working
+      # — see the note in reusable-mcp-connector-deploy.yml.
+      FLY_API_TOKEN:
+        description: App-scoped Fly deploy token.
+        required: false
 
 permissions:
   contents: read

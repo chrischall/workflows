@@ -69,9 +69,11 @@ Worker cannot execute a binary, so `gogcli-mcp` runs the `gog` CLI on Fly).
 
 Wire the automatic path into `release-please.yml` gated on
 `release_created == 'true'`; copy `templates/deploy-connector.yml` for the
-on-demand `workflow_dispatch` path. Both jobs pass `secrets: inherit` and both
-warn-and-pass when their deploy token is absent, so a missing secret never
-reports an otherwise-good release as broken. When a repo deploys both halves,
+on-demand `workflow_dispatch` path. Both jobs pass their deploy token
+explicitly (never `secrets: inherit`, which would hand a deploy workflow every
+secret the repo holds, `RELEASE_PAT` included) and scope themselves to
+`contents: read`. Both warn-and-pass when their token is absent, so a missing
+secret never reports an otherwise-good release as broken. When a repo deploys both halves,
 deploy Fly first and make the Worker job `needs:` it.
 
 These exist because hand-deployed connectors drift: one had drifted far enough
