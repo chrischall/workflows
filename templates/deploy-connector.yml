@@ -33,11 +33,11 @@ on:
 permissions:
   contents: read
 
-# Serialise deploys so a manual run and a release run cannot race onto the same
-# Worker.
-concurrency:
-  group: deploy-connector
-  cancel-in-progress: false
+# No concurrency block here on purpose. A group declared in THIS file would only
+# serialise workflow_dispatch runs against each other — the release-triggered
+# deploy lives in release-please.yml and inherits that workflow's group instead,
+# so the two could still race onto the same Worker. The reusable workflow
+# declares one shared group per repository, which covers both entry points.
 
 jobs:
   deploy:

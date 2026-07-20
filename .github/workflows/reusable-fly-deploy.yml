@@ -67,6 +67,14 @@ on:
 permissions:
   contents: read
 
+# Declared here rather than in the callers for the same reason as the connector
+# workflow: a caller's own concurrency group only serialises that caller's entry
+# point, leaving a manual redeploy free to race a release deploy onto the same
+# Machine. On the reusable workflow, every entry point shares one group per repo.
+concurrency:
+  group: deploy-fly-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

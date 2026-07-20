@@ -70,6 +70,17 @@ on:
 permissions:
   contents: read
 
+# Serialisation lives HERE, in the called workflow, not in the callers. A caller
+# declares its own workflow-level concurrency — the workflow_dispatch stub uses
+# `deploy-connector`, while the release-triggered job inherits release-please.yml's
+# `release-please-<ref>` group — so putting it in the stub only serialises the
+# manual path against itself and leaves a manual redeploy free to race a release
+# deploy onto the same Worker. Declared on the reusable workflow, every entry
+# point shares one group per repository, which is the property actually wanted.
+concurrency:
+  group: deploy-connector-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
