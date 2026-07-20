@@ -78,8 +78,9 @@ runs:
         echo "MCP_PUBLISH_NAME=$NAME" >> "$GITHUB_ENV"
         echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
-    # Plugin-shaped repos keep SKILL.md under skills/<name>/; standalone
-    # repos keep it at the root. Resolve once, share via SKILL_MD.
+    # Plugin-shaped repos keep SKILL.md under skills/<name>/; standalone repos
+    # keep it at the root, and a repo may ship several. Resolve once into a
+    # manifest ($SKILLS_TSV) that the packaging, ClawHub and attach steps iterate.
     - name: Resolve skill path
       shell: bash
       env:
@@ -125,8 +126,6 @@ runs:
         COUNT=$(wc -l < "$SKILLS_TSV" | tr -d ' ')
         echo "SKILLS_TSV=$SKILLS_TSV" >> "$GITHUB_ENV"
         echo "SKILL_COUNT=$COUNT" >> "$GITHUB_ENV"
-        # Retained for steps that only care whether any skill exists.
-        echo "SKILL_MD=$(head -1 "$SKILLS_TSV" | cut -f1)" >> "$GITHUB_ENV"
         if [ "$COUNT" -eq 0 ]; then
           echo "No SKILL.md found."
         else

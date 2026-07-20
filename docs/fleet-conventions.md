@@ -24,11 +24,20 @@ silently and the releases looked done. **After any release, confirm with
 from the Actions UI: the npm step is idempotent, MCP Registry publish is
 idempotent in practice, and `gh release upload --clobber` overwrites.
 
-**Pin `skill-path` when the repo has two or more skills.** `mcp-publish`
-auto-discovers a root `SKILL.md` or exactly one `skills/*/SKILL.md`; more than
-one is a hard failure (`Multiple skills/*/SKILL.md found`). Any repo with both
-a `<name>` and a `<name>-fpx` skill needs the explicit input. Precedent:
-`ofw-mcp`, `resy-mcp`, `honeybook-mcp`.
+**A repo may ship several skills; they all publish.** `mcp-publish`
+auto-discovers a root `SKILL.md`, else every `skills/*/SKILL.md`, packaging each
+as its own `<slug>-<version>.skill` and publishing each to ClawHub under its own
+slug. A single skill keeps the repo-level name, so those artifacts are unchanged.
+
+`skill-path` is now only for deliberately publishing ONE skill out of several —
+it is no longer required to avoid a failure. Repos that pinned it back when more
+than one skill was a hard error (`ofw-mcp`, `resy-mcp`, `honeybook-mcp`,
+`zola-mcp`) are publishing just the pinned skill and can drop the input to ship
+the rest.
+
+That hard failure was expensive: it exited before the npm publish, so a repo
+that grew a second skill kept tagging releases that shipped nothing. zola-mcp
+tagged 1.6.0, 1.6.1 and 1.6.2 while npm stayed at 1.5.0.
 
 **The MCP Registry caps `server.json`'s `description` at 100 characters.** Over
 that, `mcp-publisher publish` fails with HTTP 422 (`validation failed: expected
