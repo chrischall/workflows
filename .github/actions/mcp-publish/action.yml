@@ -146,6 +146,7 @@ runs:
 
         version = os.environ["VERSION"]
         manifest = pathlib.Path(os.environ["SKILLS_TSV"])
+        repo_root = pathlib.Path.cwd().resolve()
 
         # One archive per skill, named by its slug. With a single skill the slug
         # is the repo-level name, so the artifact filename is unchanged.
@@ -153,10 +154,28 @@ runs:
             if not line.strip():
                 continue
             path, slug = line.split("\t", 1)
+            skill_md = pathlib.Path(path)
+            skill_dir = skill_md.parent.resolve()
             out = pathlib.Path(f"{slug}-{version}.skill")
+
+            # A skill under skills/<name>/ owns its whole directory: SKILL.md
+            # plus references/, scripts, assets. Packaging only SKILL.md ships a
+            # skill whose own text points at files that are not in the archive.
+            # A root SKILL.md has no directory of its own — that is the repo —
+            # so only the file itself goes in.
+            members = []
+            if skill_dir != repo_root:
+                members = sorted(f for f in skill_dir.rglob("*") if f.is_file())
+            else:
+                members = [skill_md]
+
             with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.write(pathlib.Path(path), f"{slug}/SKILL.md")
-            print(f"Packaged {out} ({out.stat().st_size} bytes)")
+                for f in members:
+                    rel = f.name if skill_dir == repo_root else f.relative_to(skill_dir)
+                    zf.write(f, f"{slug}/{rel}")
+            extra = len(members) - 1
+            print(f"Packaged {out} ({out.stat().st_size} bytes, "
+                  f"{len(members)} file(s){f', {extra} beyond SKILL.md' if extra else ''})")
         EOF
 
     - name: Build .mcpb bundle
@@ -247,7 +266,15 @@ runs:
         while IFS=$'\t' read -r SKILL_PATH SLUG; do
           [ -n "$SKILL_PATH" ] || continue
           SKILL_DIR=$(mktemp -d)
-          cp "$SKILL_PATH" "$SKILL_DIR/SKILL.md"
+          SRC_DIR=$(dirname "$SKILL_PATH")
+          if [ "$SRC_DIR" = "." ]; then
+            cp "$SKILL_PATH" "$SKILL_DIR/SKILL.md"
+          else
+            # Whole directory: a skill's references/ and scripts are part of it,
+            # and shipping SKILL.md alone publishes a skill that points at files
+            # the reader does not have.
+            cp -R "$SRC_DIR/." "$SKILL_DIR/"
+          fi
           echo "Publishing $SLUG to ClawHub..."
           npx --yes clawhub publish "$SKILL_DIR" --version "${VERSION}" --slug "${SLUG}" || {
             echo "::warning title=ClawHub publish failed::$SLUG did not publish"
