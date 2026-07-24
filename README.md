@@ -22,9 +22,10 @@ The pipeline contract: non-release PR → auto-review emits a mandatory
 `pass|warn|fail` verdict → `pass` or `warn` adds `ready-to-merge` → label arms
 native auto-merge and fires deferred CI (the required check) → merge on green.
 Deferred CI blocks un-armed PRs in one of two gate modes: legacy `fail` (the
-required `ci / ci` job fails red until armed) or `status` (the job stays green
-and a yellow `ci-gated: pending` commit status blocks instead — red then only
-ever means a real failure). Status mode needs the stub to grant
+required `ci / ci` job fails red until armed) or `status` (a yellow
+`ci-gated: pending` commit status blocks instead and the `ci / ci` job is
+*skipped* while un-armed — no misleading green for a build that never ran, and
+red then only ever means a real failure). Status mode needs the stub to grant
 `statuses: write` and the ruleset to require the `ci-gated` context
 (`scripts/update-ruleset.sh <repo> ci-gated --execute`); flip both together.
 Status mode also suppresses the duplicate CI run a non-arming label would
