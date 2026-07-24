@@ -7,22 +7,29 @@ name: Reusable node CI
 # CI is DEFERRED until a PR is armed, but the un-armed state BLOCKS the merge.
 # Two gate modes (input `gate-mode`):
 #
-#   fail (default, legacy): the job FAILS fast on an un-armed PR so the
+#   fail (default, legacy): the `ci` job FAILS fast on an un-armed PR so the
 #     required `ci / ci` check stays red until arming. Never skips — GitHub
-#     treats a *skipped* required check as satisfied, so skipping would leave
-#     the merge button live before CI ran.
+#     treats a *skipped* required check as satisfied, so skipping `ci / ci`
+#     here would leave the merge button live before CI ran.
 #
-#   status (target state): the job stays GREEN; the merge is blocked by a
-#     `ci-gated` COMMIT STATUS instead. Un-armed → `ci-gated: pending`
-#     (yellow, blocks); armed → real CI runs and flips `ci-gated` to
-#     success/failure. Red check runs then only ever mean real failures.
-#     Requires two things from the consumer, flipped together:
+#   status (target state): a `ci-gated` COMMIT STATUS blocks the merge, so the
+#     `ci` job is free to reflect reality. Un-armed → the `gate` job posts
+#     `ci-gated: pending` (yellow, blocks) and the `ci` job is SKIPPED — not a
+#     misleading green "success" for a build that never ran. Armed → the `ci`
+#     job runs and flips `ci-gated` to success/failure. A red `ci` run then
+#     only ever means a real failure. Requires two things from the consumer,
+#     flipped together:
 #       1. the caller stub grants the token `statuses: write`
 #          (`permissions: {contents: read, statuses: write}` — this workflow
 #          must NOT request it itself: callers pass read-only by default and
 #          a called workflow requesting elevation fails validation), and
 #       2. the repo ruleset's required check is `ci-gated` (not `ci / ci`);
 #          scripts/update-ruleset.sh flips it.
+#
+# Two jobs, not one: the `ci` job can only render as "skipped" via a job-level
+# `if:` that never fires, but *something* still has to post the pending status
+# in status mode. So the always-running `gate` job owns the arming decision and
+# the pending post, and the `ci` job gates its real work on `gate`'s output.
 #
 # Real build/test runs only when:
 #   - human PRs: `ready-to-merge` is present (added by auto-review on pass/warn);
@@ -56,23 +63,25 @@ on:
       gate-mode:
         description: >-
           fail (legacy: red `ci / ci` check blocks un-armed PRs) or status
-          (green job; a pending `ci-gated` commit status blocks instead —
-          caller must grant `statuses: write` and the ruleset must require
-          `ci-gated`).
+          (a pending `ci-gated` commit status blocks instead and the `ci` job
+          is skipped while un-armed — caller must grant `statuses: write` and
+          the ruleset must require `ci-gated`).
         type: string
         required: false
         default: fail
 
 jobs:
-  ci:
+  # Always runs. Decides whether real CI should run, and in status mode posts
+  # the pending `ci-gated` status that blocks an un-armed merge. No
+  # `permissions:` key on purpose (same reason as the ci job below); the stub
+  # owns the `statuses: write` grant status mode needs, fail-mode stubs need
+  # nothing (this job makes no API call in fail mode).
+  gate:
     runs-on: ubuntu-latest
-    # No `permissions:` key on purpose: it would either drop the caller's
-    # `statuses: write` grant (if we pinned contents: read) or fail validation
-    # on legacy read-only callers (if we requested statuses: write). The stub
-    # owns the grant; fail-mode stubs need nothing.
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      msg: ${{ steps.gate.outputs.msg }}
     steps:
-      # Gate: decide whether to run real CI, and how to block when not armed.
-      # Never SKIPS the job — a skipped required check counts as satisfied.
       - name: Arm gate
         id: gate
         env:
@@ -115,42 +124,72 @@ jobs:
               MSG="CI is deferred until auto-review arms this PR with the 'ready-to-merge' label."
               DESC="CI deferred until auto-review arms this PR (ready-to-merge)" ;;
           esac
+          echo "msg=$MSG" >> "$GITHUB_OUTPUT"
           if [ "$MODE" = "status" ]; then
-            # Block via a pending commit status; the job itself stays green.
+            # Block via a pending commit status; the `ci` job then skips.
             # If this POST fails (missing statuses:write grant), the step —
-            # and job — fail red, which still blocks: fail-safe.
+            # and job — fail red, the ci job's `needs: gate` guard keeps it
+            # skipped, and no ci-gated status is ever posted, so the required
+            # context stays unsatisfied: fail-safe either way.
             gh api "repos/$REPO/statuses/$HEAD_SHA" \
               -f state=pending -f context=ci-gated \
               -f description="$DESC" >/dev/null
-            echo "un-armed → posted 'ci-gated: pending' (blocks merge); job stays green. $MSG"
+            echo "un-armed → posted 'ci-gated: pending' (blocks merge); ci job will show as skipped. $MSG"
             exit 0
           fi
+          # fail mode: the `ci` job runs and fails red (below). Nothing to post.
+          echo "un-armed (fail mode) → 'ci / ci' will fail red. $MSG"
+          exit 0
+
+  ci:
+    needs: gate
+    runs-on: ubuntu-latest
+    # fail mode: always run so an un-armed PR FAILS the required `ci / ci`
+    # check (a skipped required check counts as satisfied). status mode: run
+    # only when the gate armed CI — un-armed leaves this SKIPPED, with the
+    # pending `ci-gated` status doing the blocking.
+    if: >-
+      always() &&
+      ( inputs.gate-mode == 'fail' ||
+        (needs.gate.result == 'success' && needs.gate.outputs.run == 'true') )
+    # No `permissions:` key on purpose: it would either drop the caller's
+    # `statuses: write` grant (if we pinned contents: read) or fail validation
+    # on legacy read-only callers (if we requested statuses: write). The stub
+    # owns the grant; fail-mode stubs need nothing.
+    steps:
+      # fail mode only (in status mode this job is skipped while un-armed): make
+      # the required `ci / ci` check red until the PR is armed.
+      - name: Un-armed → fail the required check
+        if: needs.gate.outputs.run != 'true'
+        env:
+          MSG: ${{ needs.gate.outputs.msg }}
+        run: |
           echo "::error::$MSG This failing check is expected and clears once the PR is armed."
           exit 1
 
       - uses: actions/checkout@v6
-        if: steps.gate.outputs.run == 'true'
+        if: needs.gate.outputs.run == 'true'
 
       - uses: actions/setup-node@v6
-        if: steps.gate.outputs.run == 'true'
+        if: needs.gate.outputs.run == 'true'
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm
 
-      - if: steps.gate.outputs.run == 'true'
+      - if: needs.gate.outputs.run == 'true'
         run: npm ci
 
-      - if: steps.gate.outputs.run == 'true'
+      - if: needs.gate.outputs.run == 'true'
         run: ${{ inputs.build-command }}
 
-      - if: steps.gate.outputs.run == 'true'
+      - if: needs.gate.outputs.run == 'true'
         run: ${{ inputs.test-command }}
 
       # Status mode: flip ci-gated to the real outcome. `always()` so a failed
       # build/test posts `failure` (merge stays blocked, and the checks UI
       # explains why) instead of leaving a stale `pending`.
       - name: Report ci-gated status
-        if: always() && inputs.gate-mode == 'status' && steps.gate.outputs.run == 'true' && github.event_name == 'pull_request'
+        if: always() && inputs.gate-mode == 'status' && needs.gate.outputs.run == 'true' && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
