@@ -178,16 +178,81 @@ runs:
                   f"{len(members)} file(s){f', {extra} beyond SKILL.md' if extra else ''})")
         EOF
 
+    # Resolve which package directories to publish — shared by the npm, .mcpb and
+    # MCP-Registry steps below. A single-package repo publishes its own root
+    # ("."), unchanged. A workspace monorepo marks its root private and ships the
+    # packages under `packages/*`; publish each non-private workspace instead of
+    # skipping on the private root (the "green tag ≠ green publish" trap that
+    # froze several monorepos on npm/registry while their tags advanced).
+    #
+    # Capture via command substitution, NOT process substitution: `< <(node …)`
+    # discards node's exit code, so a FAILED `npm query` (bad npm version,
+    # transient error, polluted stdout) would look identical to "nothing to
+    # publish" and skip silently — re-creating the very bug this fixes.
+    - name: Resolve publish dirs
+      # Only when something downstream consumes the list — a caller that
+      # disabled npm/.mcpb/registry shouldn't pay for `npm query` or be failed
+      # by a transient resolver error for steps it isn't running.
+      if: inputs.publish-npm == 'true' || inputs.publish-mcpb == 'true' || inputs.publish-registry == 'true'
+      shell: bash
+      run: |
+        if ! DIRS_RAW=$(node -e '
+          const cp = require("child_process");
+          const root = require("./package.json");
+          if (root.private !== true) { console.log("."); process.exit(0); }
+          let ws;
+          try { ws = JSON.parse(cp.execSync("npm query .workspace", { encoding: "utf8" })); }
+          catch (e) { console.error("npm query .workspace failed: " + e.message); process.exit(1); }
+          for (const w of ws) if (w.private !== true && w.location) console.log(w.location);
+        '); then
+          echo "Failed to resolve publishable packages — refusing to skip silently." >&2
+          exit 1
+        fi
+        OUT="$RUNNER_TEMP/publish_dirs.txt"
+        printf '%s\n' "$DIRS_RAW" | grep -v '^[[:space:]]*$' > "$OUT" || true
+        echo "PUBLISH_DIRS_FILE=$OUT" >> "$GITHUB_ENV"
+        COUNT=$(wc -l < "$OUT" | tr -d ' ')
+        if [ "$COUNT" -eq 0 ]; then
+          echo "Private root with no public workspaces — nothing to publish."
+        else
+          echo "Resolved $COUNT publishable package dir(s):"; sed 's/^/  /' "$OUT"
+        fi
+
     - name: Build .mcpb bundle
       if: inputs.publish-mcpb == 'true'
       shell: bash
       run: |
-        if [ ! -f manifest.json ]; then
-          echo "manifest.json not present — skipping .mcpb bundle."
-          exit 0
-        fi
-        npx @anthropic-ai/mcpb pack
-        mv "${MCP_PUBLISH_NAME}.mcpb" "${MCP_PUBLISH_NAME}-${VERSION}.mcpb"
+        # One .mcpb per package that ships a manifest.json, collected at the
+        # workspace root as <pkg>-<version>.mcpb for the attach step to glob.
+        # For the single-package (".") case, NAME stays MCP_PUBLISH_NAME so the
+        # asset filename is byte-for-byte what it was before.
+        [ -s "$PUBLISH_DIRS_FILE" ] || { echo "No packages resolved — skipping .mcpb."; exit 0; }
+        OUTDIR="$GITHUB_WORKSPACE"
+        rc=0
+        while IFS= read -r dir; do
+          [ -n "$dir" ] || continue
+          ( cd "$dir"
+            if [ ! -f manifest.json ]; then
+              echo "manifest.json not present in $dir — skipping .mcpb."
+              exit 0
+            fi
+            if [ "$dir" = "." ]; then NAME="$MCP_PUBLISH_NAME"; else NAME=$(node -p "require('./package.json').name"); fi
+            # Sanitize the name for use in a FILE path: a scoped package name
+            # like @org/pkg contains a '/', which would make `mv` target a
+            # nonexistent @org/ subdirectory. Drop the leading '@' and turn '/'
+            # into '-' (@org/pkg -> org-pkg), collision-free across scopes. For
+            # the single-package (".") case NAME is the unscoped repo name, so
+            # this is a no-op and the asset filename is unchanged.
+            SAFE=$(printf '%s' "$NAME" | sed 's#^@##; s#/#-#g')
+            npx @anthropic-ai/mcpb pack
+            # pack writes <manifest name>.mcpb into cwd; rename the file it made
+            # rather than assuming its name.
+            built=$(ls -t ./*.mcpb 2>/dev/null | head -1)
+            mv "$built" "$OUTDIR/${SAFE}-${VERSION}.mcpb"
+            echo "Built ${SAFE}-${VERSION}.mcpb"
+          ) || rc=1
+        done < "$PUBLISH_DIRS_FILE"
+        exit "$rc"
 
     # Idempotent: skip if this version is already on the registry.
     - name: Publish to npm
@@ -218,47 +283,18 @@ runs:
           fi
         }
 
-        # Which package(s) to publish? A single-package repo publishes its
-        # (public) root package — unchanged. A workspace monorepo marks the root
-        # private and publishes each non-private `packages/*` workspace instead
-        # of silently skipping on the private root (which froze several monorepos
-        # on npm while their tags/releases advanced — the "green tag ≠ green
-        # publish" trap).
-        #
-        # Capture the resolver via command substitution, NOT process
-        # substitution: `< <(node …)` would discard node's exit code, so a
-        # FAILED `npm query` (bad npm version, transient error, polluted stdout)
-        # would look identical to "nothing to publish" and skip silently —
-        # re-creating the very bug this fixes. `if ! DIRS_RAW=$(…)` propagates it.
-        if ! DIRS_RAW=$(node -e '
-          const cp = require("child_process");
-          const root = require("./package.json");
-          if (root.private !== true) { console.log("."); process.exit(0); }
-          let ws;
-          try { ws = JSON.parse(cp.execSync("npm query .workspace", { encoding: "utf8" })); }
-          catch (e) { console.error("npm query .workspace failed: " + e.message); process.exit(1); }
-          for (const w of ws) if (w.private !== true && w.location) console.log(w.location);
-        '); then
-          echo "Failed to resolve publishable packages — refusing to skip npm publish silently." >&2
-          exit 1
-        fi
-
-        DIRS=()
-        while IFS= read -r d; do
-          [ -n "$d" ] && DIRS+=("$d")
-        done <<< "$DIRS_RAW"
-
-        if [ "${#DIRS[@]}" -eq 0 ]; then
-          # Resolver SUCCEEDED and found nothing public — a genuinely
-          # publish-nothing repo (private root, all workspaces private).
-          echo "Root package.json is private and no public workspaces were found — nothing to publish to npm."
+        # The publishable dirs were resolved once by the "Resolve publish dirs"
+        # step. An empty list means a private root with no public workspaces —
+        # a genuine nothing-to-publish, distinct from a resolver failure (which
+        # hard-fails that step).
+        if [ ! -s "$PUBLISH_DIRS_FILE" ]; then
+          echo "No publishable packages — skipping npm publish."
           exit 0
         fi
-
         rc=0
-        for dir in "${DIRS[@]}"; do
-          ( publish_dir "$dir" ) || rc=1
-        done
+        while IFS= read -r dir; do
+          [ -n "$dir" ] && { ( publish_dir "$dir" ) || rc=1; }
+        done < "$PUBLISH_DIRS_FILE"
         exit "$rc"
 
     - name: Check for server.json
@@ -266,12 +302,16 @@ runs:
       if: inputs.publish-registry == 'true'
       shell: bash
       run: |
-        if [ -f server.json ]; then
-          echo "present=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "present=false" >> "$GITHUB_OUTPUT"
-          echo "server.json not present — skipping MCP Registry publish."
+        # Present if ANY publishable package ships a server.json (the root for a
+        # single-package repo, or any packages/* workspace for a monorepo).
+        present=false
+        if [ -s "$PUBLISH_DIRS_FILE" ]; then
+          while IFS= read -r dir; do
+            [ -n "$dir" ] && [ -f "$dir/server.json" ] && { present=true; break; }
+          done < "$PUBLISH_DIRS_FILE"
         fi
+        echo "present=$present" >> "$GITHUB_OUTPUT"
+        [ "$present" = "true" ] || echo "No server.json in any package — skipping MCP Registry publish."
 
     - name: Install mcp-publisher
       if: inputs.publish-registry == 'true' && steps.registry-check.outputs.present == 'true'
@@ -285,7 +325,17 @@ runs:
     - name: Publish to MCP Registry
       if: inputs.publish-registry == 'true' && steps.registry-check.outputs.present == 'true'
       shell: bash
-      run: mcp-publisher publish
+      run: |
+        # Publish each package that ships a server.json (mcp-publisher reads it
+        # from the cwd). Login happened once in the previous step.
+        rc=0
+        while IFS= read -r dir; do
+          [ -n "$dir" ] || continue
+          [ -f "$dir/server.json" ] || continue
+          echo "Publishing $dir/server.json to the MCP Registry…"
+          ( cd "$dir" && mcp-publisher publish ) || rc=1
+        done < "$PUBLISH_DIRS_FILE"
+        exit "$rc"
 
     # `secrets.*` is not addressable in composite steps; token arrives as an
     # input and the emptiness check happens in the run block.
@@ -341,7 +391,11 @@ runs:
         # archive per skill, and hardcoding the repo name would attach only one.
         shopt -s nullglob
         for f in *-"${VERSION}".skill; do ARGS+=("$f"); done
-        [ -f "${MCP_PUBLISH_NAME}-${VERSION}.mcpb" ] && ARGS+=("${MCP_PUBLISH_NAME}-${VERSION}.mcpb")
+        # Glob rather than name one file: a monorepo produces one .mcpb per
+        # package (<pkg>-<version>.mcpb), and hardcoding the repo name attached
+        # only one. For a single-package repo this still matches exactly the one
+        # ${MCP_PUBLISH_NAME}-${VERSION}.mcpb it built.
+        for f in *-"${VERSION}".mcpb; do ARGS+=("$f"); done
         if [ "${#ARGS[@]}" -eq 0 ]; then
           echo "No artifacts to attach."
           exit 0
