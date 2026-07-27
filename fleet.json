@@ -280,6 +280,9 @@
       "repo": "chrischall/sixflags-mcp",
       "connector": "true",
       "test_command": "npm run test:coverage"
+    },
+    {
+      "repo": "chrischall/kiaaccess-mcp"
     }
   ]
 }
