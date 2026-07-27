@@ -12,7 +12,11 @@ REPO="${1:?usage: rollout.sh <owner/repo> [--execute]}"
 EXECUTE="${2:-}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 FLEET="$HERE/fleet.json"
-BRANCH="ci/reusable-workflows"
+# Overridable because the default is a FIXED name: re-running against a repo
+# converted earlier hits a leftover branch from that merge and the push is
+# rejected non-fast-forward. Deleting the old ref would work but is other
+# people's history; a fresh name is free. Set ROLLOUT_BRANCH to re-run.
+BRANCH="${ROLLOUT_BRANCH:-ci/reusable-workflows}"
 
 cfg() { # cfg <key> -> value with defaults applied
   jq -r --arg repo "$REPO" --arg key "$1" '
