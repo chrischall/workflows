@@ -34,21 +34,21 @@ on:
 
 jobs:
   claude:
-    # An @claude mention from someone with write access. The association field
-    # differs per event; `||` coalesces because reading a property off a null
-    # event object yields empty rather than erroring.
-    if: |
-      (
-        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-        (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-        (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-        (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
-      ) && contains(
-        fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-        github.event.comment.author_association ||
-        github.event.review.author_association ||
-        github.event.issue.author_association
-      )
+    # An @claude mention from someone with write access.
+    #
+    # One self-contained clause per event, each reading ONLY the payload object
+    # that event actually carries. The obvious factoring — one mention test,
+    # then one association test that coalesces
+    # `comment.author_association || review.author_association || issue.…` —
+    # looks tidier and does not work: it dereferences objects absent from the
+    # event (`github.event.review` on an `issue_comment`), and the job is
+    # silently SKIPPED rather than failing. Verified live on ofw-mcp#175 with
+    # `author_association: OWNER` and the mention present.
+    if: >-
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+      || (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+      || (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association))
+      || (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
     runs-on: ubuntu-latest
     permissions:
       contents: write
