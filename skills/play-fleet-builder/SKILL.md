@@ -59,7 +59,7 @@ keytool -genkeypair -v -keystore android/upload-keystore.jks \
 ## Versioning
 
 - `versionName` is release-please's (`// x-release-please-version` marker in `android/build.gradle.kts`, listed in `release-please-config.json` → `extra-files` beside `ios/project.yml`). Both platforms bump in step from one manifest.
-- `versionCode` comes from `-PandroidVersionCode`, **not** the semver: Play needs a strictly increasing value per upload, and any one version may be re-uploaded (a bad build, a signing fix). CI passes `run_number + 1000`; local default 1.
+- `versionCode` comes from `-PandroidVersionCode`, **not** the semver: Play needs a strictly increasing value per upload, and any one version may be re-uploaded (a bad build, a signing fix). The formula is **per-app, not fleet-wide** — encore passes `run_number + 1000`, allotmint `run_number*100 + run_attempt`. Either works; what matters is that it only ever increases for that app (see the bootstrap floor above). Local default 1.
 
 ## R8 — the trap that ships silently broken builds (hard-won)
 
@@ -143,7 +143,7 @@ Start from `references/deploy-play.yml`. Mirrors `deploy-testflight.yml`: `v*` t
 
 Org secrets (visibility `all`, matching the Apple signing material), named in the fleet's `<SCOPE>_<THING>_<FORMAT>` style: `PLAY_UPLOAD_KEYSTORE_JKS_B64` (cf. `DIST_CERT_P12_B64`), `PLAY_UPLOAD_KEYSTORE_PASSWORD` (cf. `DIST_CERT_PASSWORD`), `PLAY_UPLOAD_KEY_PASSWORD`, `PLAY_SERVICE_ACCOUNT_JSON_B64`. **Exactly four, shared by every app — a new app adds none.** There is deliberately no alias secret: the alias (`encore-upload`) isn't secret, so it lives in the workflow's `env:`. Both `_B64` suffixes are load-bearing — the SA key is base64, not raw JSON, and a workflow that writes it out verbatim fails at the first deploy.
 
-## Gotchas (hard-won — the encore launch, 2026-07)
+## Gotchas (hard-won — the encore and allotmint launches, 2026-07)
 
 - **`gh secret set` stores whatever it's given, including nothing.** `base64 -i missing.jks | gh secret set …` from the wrong directory silently writes a garbage secret that fails only at deploy time. **Validate every source before writing** — open the keystore with its password, parse the JSON — and re-set from a verified source rather than reasoning about timestamps.
 - **A repo secret silently shadows an org secret of the same name.** Moving to org scope means *deleting* the repo copies, or nothing changes.
