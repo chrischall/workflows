@@ -13,7 +13,9 @@ description: >
   PR it posts a `ci-gated: pending` COMMIT STATUS (yellow, blocks merge) and
   sets output `run=false`; the job stays green. Consumers MUST guard every
   subsequent build step with `if: steps.<gate-id>.outputs.run == 'true'` and
-  add a final `always()` step posting `ci-gated` success/failure (see
+  add a final `always()` step posting `ci-gated` success/failure — whose guard
+  must ALSO fire on `steps.<gate-id>.outcome == 'failure'`, or a gate that
+  errors skips the reporter too and strands the required status (see
   templates/ci-gradle.yml), and the repo ruleset's required check must be the
   `ci-gated` status context (scripts/update-ruleset.sh flips it). The workflow
   needs `permissions: {contents: read, statuses: write}` — dependabot runs are
