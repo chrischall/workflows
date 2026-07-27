@@ -37,13 +37,14 @@ jobs:
     # An @claude mention from someone with write access.
     #
     # One self-contained clause per event, each reading ONLY the payload object
-    # that event actually carries. The obvious factoring — one mention test,
-    # then one association test that coalesces
-    # `comment.author_association || review.author_association || issue.…` —
-    # looks tidier and does not work: it dereferences objects absent from the
-    # event (`github.event.review` on an `issue_comment`), and the job is
-    # silently SKIPPED rather than failing. Verified live on ofw-mcp#175 with
-    # `author_association: OWNER` and the mention present.
+    # that event actually carries. The tidier factoring — one mention test, then
+    # one association test coalescing `comment.author_association ||
+    # review.author_association || issue.…` — dereferences objects that are
+    # absent from the event (`github.event.review` on an `issue_comment`). That
+    # form was in fact observed working, so this is defensive rather than a
+    # repair: an expression that cannot be evaluated makes the job SKIP, which
+    # presents as a green check on a workflow that never ran, so the version
+    # with nothing absent to dereference is the one worth keeping.
     if: >-
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
       || (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
@@ -57,6 +58,19 @@ jobs:
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
     steps:
+      # NOTE: claude-code-action does its own fork-PR checkout on top of this
+      # step, and then RESTORES the instruction-bearing files from the base
+      # branch: ".claude, .mcp.json, .claude.json, .gitmodules, .ripgreprc,
+      # CLAUDE.md, CLAUDE.local.md, .husky from origin/main (PR head is
+      # untrusted)". That is a deliberate anti-prompt-injection control — a
+      # fork's CLAUDE.md is attacker-controlled, and executing it as
+      # instructions is the attack. Do not defeat it.
+      #
+      # The consequence is worth knowing when reading a review: on a fork PR
+      # that MODIFIES one of those files, the agent sees the BASE branch's copy.
+      # A reviewer that `Read`s CLAUDE.md will describe main's text and can file
+      # a stale-doc finding against a doc the branch already fixed (this is what
+      # happened on ofw-mcp#175). Diff those files; don't read them.
       - name: Checkout the PR under discussion (or the default branch)
         uses: actions/checkout@v7
         with:
