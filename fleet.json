@@ -7,6 +7,7 @@
     "test_command": "npm test",
     "release": "mcp",
     "conventions_hint": "",
+    "skill_path": "",
     "lockfix": "",
     "java_version": "21",
     "connector": "",
@@ -22,7 +23,8 @@
     },
     {
       "repo": "chrischall/zola-mcp",
-      "connector": "true"
+      "connector": "true",
+      "skill_path": "skills/zola/SKILL.md"
     },
     {
       "repo": "chrischall/artsonia-mcp",
@@ -50,7 +52,8 @@
       "repo": "chrischall/homes-mcp"
     },
     {
-      "repo": "chrischall/honeybook-mcp"
+      "repo": "chrischall/honeybook-mcp",
+      "skill_path": "skills/honeybook/SKILL.md"
     },
     {
       "repo": "chrischall/infinitecampus-mcp"
@@ -68,7 +71,8 @@
       "repo": "chrischall/redfin-mcp"
     },
     {
-      "repo": "chrischall/resy-mcp"
+      "repo": "chrischall/resy-mcp",
+      "skill_path": "skills/resy/SKILL.md"
     },
     {
       "repo": "chrischall/setlist-mcp",
@@ -105,7 +109,8 @@
     {
       "repo": "chrischall/ofw-mcp",
       "test_command": "npm run test:coverage",
-      "connector": "true"
+      "connector": "true",
+      "skill_path": "skills/ofw/SKILL.md"
     },
     {
       "repo": "chrischall/ioffice-mcp",
@@ -113,7 +118,7 @@
     },
     {
       "repo": "chrischall/mcp-utils",
-      "conventions_hint": "Shared library: README.md documents the core-vs-optional-subpath module boundary; this package handles bearer tokens \u2014 error messages must never echo a credential; public API changes need tests.",
+      "conventions_hint": "Shared library: README.md documents the core-vs-optional-subpath module boundary; this package handles bearer tokens — error messages must never echo a credential; public API changes need tests.",
       "ci": "custom",
       "release": "custom"
     },
@@ -196,10 +201,12 @@
       "release": "none"
     },
     {
-      "repo": "chrischall/viator-mcp"
+      "repo": "chrischall/viator-mcp",
+      "skill_path": "skills/viator-mcp/SKILL.md"
     },
     {
-      "repo": "chrischall/tock-mcp"
+      "repo": "chrischall/tock-mcp",
+      "skill_path": "skills/tock-mcp/SKILL.md"
     },
     {
       "repo": "chrischall/getyourguide-mcp",
@@ -223,7 +230,8 @@
       "repo": "chrischall/etix-mcp"
     },
     {
-      "repo": "chrischall/flightaware-mcp"
+      "repo": "chrischall/flightaware-mcp",
+      "skill_path": "skills/flightaware-mcp/SKILL.md"
     },
     {
       "repo": "chrischall/hemnet-mcp"
@@ -236,7 +244,7 @@
     {
       "repo": "chrischall/mcp-connector",
       "test_command": "npm run typecheck && npm test",
-      "conventions_hint": "Shared connector harness: every hosted Cloudflare Worker connector in the fleet is built on it and pins it, so a change here is a change to all of them \u2014 see CLAUDE.md's blast-radius section. Peer deps (workers-oauth-provider, agents, @modelcontextprotocol/sdk) are provided by the consumer; bumping a peer range is a breaking change for consumers still on the old one.",
+      "conventions_hint": "Shared connector harness: every hosted Cloudflare Worker connector in the fleet is built on it and pins it, so a change here is a change to all of them — see CLAUDE.md's blast-radius section. Peer deps (workers-oauth-provider, agents, @modelcontextprotocol/sdk) are provided by the consumer; bumping a peer range is a breaking change for consumers still on the old one.",
       "ci": "standard",
       "release": "custom"
     },
