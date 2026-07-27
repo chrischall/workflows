@@ -93,8 +93,11 @@ PR head is checked out without credentials so the lockfix command never sees
 the PAT. The stub must grant `contents: read` — a `permissions: {}` caller
 startup-fails, since the called job requests `contents: read` for checkout.
 Onboard a repo by setting `lockfix: npm|gradle` in `fleet.json` and running
-`scripts/rollout.sh`. Live consumers: untappd-mcp (npm) and curtaincall
-(gradle).
+`scripts/rollout.sh`; off-board by clearing `lockfix` there and deleting the
+rendered stub, in that order — the file alone comes back on the next rollout.
+Live consumer: curtaincall (gradle). untappd-mcp was the npm one until its
+`file:`-linked package moved to its own repo and the derived lockfile stopped
+existing (untappd-mcp#105, #83).
 
 Rollout tooling: `fleet.json` (per-repo parameters), `scripts/rollout.sh`
 (stub-conversion PRs), `scripts/update-ruleset.sh` (required-check rename).
