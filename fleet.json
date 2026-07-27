@@ -167,7 +167,7 @@
       "lockfix": "gradle"
     },
     {
-      "repo": "nullnet-app/encore-ios",
+      "repo": "nullnet-app/encore",
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "custom",
       "release": "custom",
