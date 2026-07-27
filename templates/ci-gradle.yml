@@ -50,7 +50,7 @@ jobs:
         with:
           mode: status
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: steps.gate.outputs.run == 'true'
 
       - uses: actions/setup-java@v5
