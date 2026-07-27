@@ -198,22 +198,68 @@ runs:
         # publishing (OIDC auth) itself works either way.
         REPO_PRIVATE: ${{ github.event.repository.private }}
       run: |
-        if [ "$(node -p "require('./package.json').private === true")" = "true" ]; then
-          echo "package.json is marked private — skipping npm publish."
+        # Publish one package directory (idempotent: skip if this exact version
+        # is already on the registry). Runs in a subshell so `cd` doesn't leak.
+        publish_dir() {
+          cd "$1"
+          local PKG PUBLISHED
+          PKG=$(node -p "require('./package.json').name")
+          PUBLISHED=$(npm view "${PKG}@${VERSION}" version 2>/dev/null || true)
+          if [ "$PUBLISHED" = "$VERSION" ]; then
+            echo "npm already has ${PKG}@${VERSION} — skipping."
+            return 0
+          fi
+          if [ "$REPO_PRIVATE" = "true" ]; then
+            echo "Publishing ${PKG}@${VERSION} (no provenance; private source repo)…"
+            npm publish --access public
+          else
+            echo "Publishing ${PKG}@${VERSION} with provenance…"
+            npm publish --access public --provenance
+          fi
+        }
+
+        # Which package(s) to publish? A single-package repo publishes its
+        # (public) root package — unchanged. A workspace monorepo marks the root
+        # private and publishes each non-private `packages/*` workspace instead
+        # of silently skipping on the private root (which froze several monorepos
+        # on npm while their tags/releases advanced — the "green tag ≠ green
+        # publish" trap).
+        #
+        # Capture the resolver via command substitution, NOT process
+        # substitution: `< <(node …)` would discard node's exit code, so a
+        # FAILED `npm query` (bad npm version, transient error, polluted stdout)
+        # would look identical to "nothing to publish" and skip silently —
+        # re-creating the very bug this fixes. `if ! DIRS_RAW=$(…)` propagates it.
+        if ! DIRS_RAW=$(node -e '
+          const cp = require("child_process");
+          const root = require("./package.json");
+          if (root.private !== true) { console.log("."); process.exit(0); }
+          let ws;
+          try { ws = JSON.parse(cp.execSync("npm query .workspace", { encoding: "utf8" })); }
+          catch (e) { console.error("npm query .workspace failed: " + e.message); process.exit(1); }
+          for (const w of ws) if (w.private !== true && w.location) console.log(w.location);
+        '); then
+          echo "Failed to resolve publishable packages — refusing to skip npm publish silently." >&2
+          exit 1
+        fi
+
+        DIRS=()
+        while IFS= read -r d; do
+          [ -n "$d" ] && DIRS+=("$d")
+        done <<< "$DIRS_RAW"
+
+        if [ "${#DIRS[@]}" -eq 0 ]; then
+          # Resolver SUCCEEDED and found nothing public — a genuinely
+          # publish-nothing repo (private root, all workspaces private).
+          echo "Root package.json is private and no public workspaces were found — nothing to publish to npm."
           exit 0
         fi
-        PKG=$(node -p "require('./package.json').name")
-        PUBLISHED=$(npm view "${PKG}@${VERSION}" version 2>/dev/null || true)
-        if [ "$PUBLISHED" = "$VERSION" ]; then
-          echo "npm already has ${PKG}@${VERSION} — skipping publish."
-          exit 0
-        fi
-        if [ "$REPO_PRIVATE" = "true" ]; then
-          echo "Private source repo — publishing without provenance."
-          npm publish --access public
-        else
-          npm publish --access public --provenance
-        fi
+
+        rc=0
+        for dir in "${DIRS[@]}"; do
+          ( publish_dir "$dir" ) || rc=1
+        done
+        exit "$rc"
 
     - name: Check for server.json
       id: registry-check
