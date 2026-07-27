@@ -8,7 +8,7 @@
 # Run scripts/update-ruleset.sh after the PR is open.
 set -euo pipefail
 
-REPO="${1:?usage: rollout.sh <owner/repo> [--execute|--check]}"
+REPO="${1:?usage: rollout.sh <owner/repo> [--execute|--check|--render <dir>]}"
 EXECUTE="${2:-}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 FLEET="$HERE/fleet.json"
@@ -99,9 +99,20 @@ if [ "$RELEASE_MODE" = "mcp" ]; then
 fi
 [ -n "$LOCKFIX" ] && render "dependabot-lockfix-$LOCKFIX.yml" "$STAGE/dependabot-lockfix.yml"
 
-if [ "$EXECUTE" != "--check" ]; then
+if [ "$EXECUTE" != "--check" ] && [ "$EXECUTE" != "--render" ]; then
   echo "=== $REPO  (pat=$PAT_SECRET ci=$CI_MODE release=$RELEASE_MODE lockfix=${LOCKFIX:-none} connector=${CONNECTOR:-no} fly=${FLY_DIR:-no}) ==="
   for f in "$STAGE"/*; do echo "--- $(basename "$f")"; cat "$f"; done
+fi
+
+if [ "$EXECUTE" = "--render" ]; then
+  # Write the rendered stubs somewhere and stop. Exists so CI can validate the
+  # cross product of templates x fleet.json — the synthetic __X__ -> "x" parse
+  # never sees a real value, so a placeholder that renders wrong for a specific
+  # repo's config gets through it.
+  DEST="${3:?usage: rollout.sh <owner/repo> --render <dir>}"
+  mkdir -p "$DEST"
+  cp "$STAGE"/* "$DEST"/
+  exit 0
 fi
 
 if [ "$EXECUTE" = "--check" ]; then

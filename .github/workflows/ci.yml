@@ -23,3 +23,10 @@ jobs:
         run: |
           ruby -ryaml -e 'Dir.glob(".github/actions/*/action.yml").each { |f| YAML.load_file(f) }; puts "actions OK"'
           ruby -ryaml -e 'Dir.glob("templates/*.yml").each { |f| YAML.load(File.read(f).gsub(/__[A-Z_]+__/, "x")) }; puts "templates OK"'
+      - name: validate rendered output for every repo
+        # The check above substitutes __X__ -> "x": synthetic, so it never sees
+        # a real fleet.json value and cannot tell whether one landed in the
+        # right place. This renders the actual cross product and asserts
+        # structure — a skill-path pin outside `with:` parses perfectly and
+        # still breaks the release.
+        run: ruby scripts/validate-render.rb
