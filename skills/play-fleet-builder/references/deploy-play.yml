@@ -2,8 +2,10 @@
 # proven on a real publish (versionCode 1001 -> internal track, 2026-07).
 #
 # CHANGE: PACKAGE_NAME + the `packageName:` input; the keystore alias
-# (`encore-upload`); and the scripts path if yours differs. The org secrets
-# are fleet-wide and reusable as-is.
+# (`encore-upload`); the `encoreVersionName` variable the step summary greps
+# for (and the "Encore → Google Play" heading beside it) — a verbatim copy
+# finds nothing and reports a blank Version; and the scripts path if yours
+# differs. The org secrets are fleet-wide and reusable as-is.
 
 # Deploy Encore to Google Play.
 #
