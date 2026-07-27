@@ -24,11 +24,13 @@
     {
       "repo": "chrischall/zola-mcp",
       "connector": "true",
-      "skill_path": "skills/zola/SKILL.md"
+      "skill_path": "skills/zola/SKILL.md",
+      "test_command": "npm test && npm run worker:test"
     },
     {
       "repo": "chrischall/artsonia-mcp",
-      "connector": "true"
+      "connector": "true",
+      "test_command": "npm test && npm run worker:test"
     },
     {
       "repo": "chrischall/canvas-parent-mcp"
@@ -76,14 +78,16 @@
     },
     {
       "repo": "chrischall/setlist-mcp",
-      "connector": "true"
+      "connector": "true",
+      "test_command": "npm test && npm run worker:test"
     },
     {
       "repo": "chrischall/signupgenius-mcp"
     },
     {
       "repo": "chrischall/splitwise-mcp",
-      "connector": "true"
+      "connector": "true",
+      "test_command": "npm test && npm run worker:test"
     },
     {
       "repo": "chrischall/tempo-api-mcp"
@@ -108,7 +112,7 @@
     },
     {
       "repo": "chrischall/ofw-mcp",
-      "test_command": "npm run test:coverage",
+      "test_command": "npm run test:coverage && npm run worker:test",
       "connector": "true",
       "skill_path": "skills/ofw/SKILL.md"
     },
@@ -215,16 +219,19 @@
     {
       "repo": "chrischall/untappd-mcp",
       "lockfix": "npm",
-      "connector": "true"
+      "connector": "true",
+      "test_command": "npm test && npm run worker:test"
     },
     {
       "repo": "chrischall/easytable-mcp"
     },
     {
-      "repo": "chrischall/booli-mcp"
+      "repo": "chrischall/booli-mcp",
+      "test_command": "npm run test:coverage"
     },
     {
-      "repo": "chrischall/alltrails-mcp"
+      "repo": "chrischall/alltrails-mcp",
+      "test_command": "npm run test:coverage"
     },
     {
       "repo": "chrischall/etix-mcp"
@@ -234,7 +241,8 @@
       "skill_path": "skills/flightaware-mcp/SKILL.md"
     },
     {
-      "repo": "chrischall/hemnet-mcp"
+      "repo": "chrischall/hemnet-mcp",
+      "test_command": "npm run test:coverage"
     },
     {
       "repo": "chrischall/mcp-marketplace",
@@ -255,7 +263,8 @@
     },
     {
       "repo": "chrischall/vibo-mcp",
-      "connector": "true"
+      "connector": "true",
+      "test_command": "npm test && npm run worker:test"
     },
     {
       "repo": "chrischall/workday-mcp"
@@ -264,11 +273,13 @@
       "repo": "nullnet-app/allotmint",
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "custom",
-      "release": "custom"
+      "release": "custom",
+      "conventions_hint": "TDD project (every behavior ships with a failing test first; never weaken assertions). Pure deterministic KMP engine in :shared/commonMain — no java.*/platform APIs and no platform RNG (seeded SplitMix64 only), except the LP solver's JVM actual. Conventional-Commit PR titles (squash-merged → release-please). Design spec: docs/superpowers/specs/2026-06-16-allotmint-engine-design.md."
     },
     {
       "repo": "chrischall/sixflags-mcp",
-      "connector": "true"
+      "connector": "true",
+      "test_command": "npm run test:coverage"
     }
   ]
 }
