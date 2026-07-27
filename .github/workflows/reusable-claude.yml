@@ -82,3 +82,9 @@ jobs:
           # `claude setup-token`). Counts against the Max subscription's
           # quota instead of pay-per-token API billing.
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
+          # Pinned rather than inherited: the action's default moves on its own
+          # schedule, and an ad-hoc "@claude review this" is the ONLY review a
+          # fork PR gets — it should not silently run on a different model than
+          # the automated path picks for the same diff.
+          claude_args: |
+            --model claude-opus-5

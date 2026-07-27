@@ -112,7 +112,7 @@ jobs:
           # consumes this workflow via @main, so model bumps land here only.
           CHANGED=$(gh api "/repos/${REPO}/pulls/${PR}" --jq '.additions + .deletions')
           if [ "$HAS_OPUS_LABEL" = "true" ]; then
-            MODEL="claude-opus-4-8"
+            MODEL="claude-opus-5"
             REASON="\`review-with-opus\` label (forced)"
           elif [ "$CHANGED" -le 50 ]; then
             MODEL="claude-haiku-4-5"
@@ -121,7 +121,7 @@ jobs:
             MODEL="claude-sonnet-5"
             REASON="${CHANGED} lines (51-500)"
           elif [ "$CHANGED" -le 10000 ]; then
-            MODEL="claude-opus-4-8"
+            MODEL="claude-opus-5"
             REASON="${CHANGED} lines (501-10000, complex)"
           else
             MODEL="claude-fable-5"
