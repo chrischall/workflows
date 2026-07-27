@@ -58,7 +58,7 @@ jobs:
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout the PR under discussion (or the default branch)
-        uses: actions/checkout@v7
+        uses: actions/checkout@v6
         with:
           # Full history: the agent compares against main constantly, and a
           # depth-1 clone has none of it.
