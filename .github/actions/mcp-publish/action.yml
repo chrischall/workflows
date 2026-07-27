@@ -224,21 +224,34 @@ runs:
         # of silently skipping on the private root (which froze several monorepos
         # on npm while their tags/releases advanced — the "green tag ≠ green
         # publish" trap).
-        DIRS=()
-        while IFS= read -r d; do
-          [ -n "$d" ] && DIRS+=("$d")
-        done < <(node -e '
+        #
+        # Capture the resolver via command substitution, NOT process
+        # substitution: `< <(node …)` would discard node's exit code, so a
+        # FAILED `npm query` (bad npm version, transient error, polluted stdout)
+        # would look identical to "nothing to publish" and skip silently —
+        # re-creating the very bug this fixes. `if ! DIRS_RAW=$(…)` propagates it.
+        if ! DIRS_RAW=$(node -e '
           const cp = require("child_process");
           const root = require("./package.json");
           if (root.private !== true) { console.log("."); process.exit(0); }
-          let ws = [];
+          let ws;
           try { ws = JSON.parse(cp.execSync("npm query .workspace", { encoding: "utf8" })); }
-          catch (e) { console.error("npm query .workspace failed: " + e.message); }
+          catch (e) { console.error("npm query .workspace failed: " + e.message); process.exit(1); }
           for (const w of ws) if (w.private !== true && w.location) console.log(w.location);
-        ')
+        '); then
+          echo "Failed to resolve publishable packages — refusing to skip npm publish silently." >&2
+          exit 1
+        fi
+
+        DIRS=()
+        while IFS= read -r d; do
+          [ -n "$d" ] && DIRS+=("$d")
+        done <<< "$DIRS_RAW"
 
         if [ "${#DIRS[@]}" -eq 0 ]; then
-          echo "Root package.json is private and no public workspaces were found — skipping npm publish."
+          # Resolver SUCCEEDED and found nothing public — a genuinely
+          # publish-nothing repo (private root, all workspaces private).
+          echo "Root package.json is private and no public workspaces were found — nothing to publish to npm."
           exit 0
         fi
 
