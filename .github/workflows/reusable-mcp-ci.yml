@@ -146,12 +146,17 @@ jobs:
     runs-on: ubuntu-latest
     # fail mode: always run so an un-armed PR FAILS the required `ci / ci`
     # check (a skipped required check counts as satisfied). status mode: run
-    # only when the gate armed CI — un-armed leaves this SKIPPED, with the
-    # pending `ci-gated` status doing the blocking.
+    # when the gate armed CI — un-armed leaves this SKIPPED, with the pending
+    # `ci-gated` status doing the blocking — OR when the gate job itself FAILED,
+    # in which case every build step below stays skipped (`run` is empty) and
+    # this job exists only to run the reporter. Without that last clause a gate
+    # that errors leaves `ci-gated` on whatever it was, forever: the required
+    # status never resolves and only a new push can clear it.
     if: >-
       always() &&
       ( inputs.gate-mode == 'fail' ||
-        (needs.gate.result == 'success' && needs.gate.outputs.run == 'true') )
+        (needs.gate.result == 'success' && needs.gate.outputs.run == 'true') ||
+        (inputs.gate-mode == 'status' && needs.gate.result == 'failure') )
     # No `permissions:` key on purpose: it would either drop the caller's
     # `statuses: write` grant (if we pinned contents: read) or fail validation
     # on legacy read-only callers (if we requested statuses: write). The stub
@@ -160,7 +165,9 @@ jobs:
       # fail mode only (in status mode this job is skipped while un-armed): make
       # the required `ci / ci` check red until the PR is armed.
       - name: Un-armed → fail the required check
-        if: needs.gate.outputs.run != 'true'
+        # Mode-guarded: in status mode `run != 'true'` is now also reachable via
+        # the gate-failure reporter path, where this message would be a lie.
+        if: inputs.gate-mode == 'fail' && needs.gate.outputs.run != 'true'
         env:
           MSG: ${{ needs.gate.outputs.msg }}
         run: |
@@ -189,14 +196,21 @@ jobs:
       # build/test posts `failure` (merge stays blocked, and the checks UI
       # explains why) instead of leaving a stale `pending`.
       - name: Report ci-gated status
-        if: always() && inputs.gate-mode == 'status' && needs.gate.outputs.run == 'true' && github.event_name == 'pull_request'
+        if: >-
+          always() && inputs.gate-mode == 'status' && github.event_name == 'pull_request' &&
+          (needs.gate.outputs.run == 'true' || needs.gate.result == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
+          GATE_RESULT: ${{ needs.gate.result }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: |
-          if [ "$JOB_STATUS" = "success" ]; then STATE=success; DESC="CI passed"; else STATE=failure; DESC="CI failed — see the ci / ci job log"; fi
+          # GATE_RESULT first: when the gate job failed, every build step here
+          # was skipped, so this job's own status is `success` and would
+          # otherwise report a CI pass that never ran.
+          if [ "$GATE_RESULT" = "failure" ]; then STATE=failure; DESC="arm gate failed — see the gate job log";
+          elif [ "$JOB_STATUS" = "success" ]; then STATE=success; DESC="CI passed"; else STATE=failure; DESC="CI failed — see the ci / ci job log"; fi
           gh api "repos/$REPO/statuses/$HEAD_SHA" \
             -f state="$STATE" -f context=ci-gated -f description="$DESC" >/dev/null
           echo "ci-gated → $STATE"
