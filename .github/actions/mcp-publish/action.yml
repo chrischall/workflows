@@ -190,6 +190,10 @@ runs:
     # transient error, polluted stdout) would look identical to "nothing to
     # publish" and skip silently — re-creating the very bug this fixes.
     - name: Resolve publish dirs
+      # Only when something downstream consumes the list — a caller that
+      # disabled npm/.mcpb/registry shouldn't pay for `npm query` or be failed
+      # by a transient resolver error for steps it isn't running.
+      if: inputs.publish-npm == 'true' || inputs.publish-mcpb == 'true' || inputs.publish-registry == 'true'
       shell: bash
       run: |
         if ! DIRS_RAW=$(node -e '
@@ -224,6 +228,7 @@ runs:
         # asset filename is byte-for-byte what it was before.
         [ -s "$PUBLISH_DIRS_FILE" ] || { echo "No packages resolved — skipping .mcpb."; exit 0; }
         OUTDIR="$GITHUB_WORKSPACE"
+        rc=0
         while IFS= read -r dir; do
           [ -n "$dir" ] || continue
           ( cd "$dir"
@@ -232,14 +237,22 @@ runs:
               exit 0
             fi
             if [ "$dir" = "." ]; then NAME="$MCP_PUBLISH_NAME"; else NAME=$(node -p "require('./package.json').name"); fi
+            # Sanitize the name for use in a FILE path: a scoped package name
+            # like @org/pkg contains a '/', which would make `mv` target a
+            # nonexistent @org/ subdirectory. Drop the leading '@' and turn '/'
+            # into '-' (@org/pkg -> org-pkg), collision-free across scopes. For
+            # the single-package (".") case NAME is the unscoped repo name, so
+            # this is a no-op and the asset filename is unchanged.
+            SAFE=$(printf '%s' "$NAME" | sed 's#^@##; s#/#-#g')
             npx @anthropic-ai/mcpb pack
             # pack writes <manifest name>.mcpb into cwd; rename the file it made
             # rather than assuming its name.
             built=$(ls -t ./*.mcpb 2>/dev/null | head -1)
-            mv "$built" "$OUTDIR/${NAME}-${VERSION}.mcpb"
-            echo "Built ${NAME}-${VERSION}.mcpb"
-          )
+            mv "$built" "$OUTDIR/${SAFE}-${VERSION}.mcpb"
+            echo "Built ${SAFE}-${VERSION}.mcpb"
+          ) || rc=1
         done < "$PUBLISH_DIRS_FILE"
+        exit "$rc"
 
     # Idempotent: skip if this version is already on the registry.
     - name: Publish to npm
