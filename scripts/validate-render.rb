@@ -22,9 +22,15 @@ defaults = fleet['defaults']
 repos = fleet['repos']
 entries = repos.is_a?(Hash) ? repos.map { |k, v| [k, v] } : repos.map { |e| [e['repo'], e] }
 
+# Mirrors rollout.sh's jq `($r[$key] // .defaults[$key] // "")` EXACTLY.
+# jq's `//` falls back only on null (or false) — an explicit "" in a repo entry
+# is a value and wins. Treating "" as absent here would make this validator
+# expect the default while rollout.sh rendered empty, i.e. a RENDER VALIDATION
+# FAILED for a fleet.json that is perfectly correct. Two implementations of one
+# lookup have to agree on the edge, or the checker becomes the thing that lies.
 def cfg(entry, defaults, key)
   v = entry[key]
-  (v.nil? || v.to_s.empty?) ? defaults[key].to_s : v.to_s
+  v.nil? ? defaults[key].to_s : v.to_s
 end
 
 failures = []
