@@ -167,7 +167,7 @@ jobs:
           echo "::error::$MSG This failing check is expected and clears once the PR is armed."
           exit 1
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: needs.gate.outputs.run == 'true'
 
       - uses: actions/setup-node@v6
