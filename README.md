@@ -7,6 +7,7 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 |---|---|---|
 | `.github/workflows/reusable-pr-auto-review.yml` | reusable workflow | all |
 | `.github/workflows/reusable-auto-merge.yml` | reusable workflow | all |
+| `.github/workflows/reusable-claude.yml` | reusable workflow | all |
 | `.github/workflows/reusable-mcp-ci.yml` | reusable workflow | node repos |
 | `.github/workflows/reusable-cloudflare-deploy.yml` | reusable workflow | web repos (OpenNext → Cloudflare Workers) |
 | `.github/workflows/reusable-mcp-connector-deploy.yml` | reusable workflow | MCP repos with a hosted connector (plain `wrangler deploy`) |

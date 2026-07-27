@@ -1,0 +1,84 @@
+name: Reusable Claude (ad-hoc @claude)
+
+# The manual escape hatch: "@claude can you look at this?" in an issue, a PR
+# comment, or a review. Automated PR review lives in reusable-pr-auto-review.yml.
+#
+# Two things this centralizes, both of which were wrong in all 59 hand-copied
+# copies of claude.yml:
+#
+# 1. IT MUST CHECK OUT THE PR, NOT THE DEFAULT BRANCH.
+#    `issue_comment`, `pull_request_review_comment` and `pull_request_review`
+#    are not `pull_request` events: for all three, GITHUB_REF points at the
+#    default branch, so a bare `actions/checkout` gives the agent `main`. It
+#    still reads the PR's diff (that comes from the API), so the failure is
+#    quiet and specific — the moment it opens a FILE to check something, it is
+#    reading main. A real review on ofw-mcp#175 reported "this doc line still
+#    says X" about a line the PR had already changed.
+#    This matters most where it is least visible: fork PRs cannot be
+#    auto-reviewed (see reusable-pr-auto-review.yml on why `pull_request`),
+#    so `@claude review this` is the ONLY review path for outside
+#    contributions — the one path reserved for code we did not write.
+#
+# 2. IT MUST NOT RUN FOR STRANGERS.
+#    The copies gated only on the comment containing "@claude", so any GitHub
+#    user could trigger a job holding CLAUDE_CODE_OAUTH_TOKEN with
+#    `contents: write`. Checking out PR head code (fix 1) raises the stakes on
+#    that, so the author gate ships with it: OWNER / MEMBER / COLLABORATOR only.
+
+on:
+  workflow_call:
+    secrets:
+      claude_code_oauth_token:
+        description: OAuth token from `claude setup-token` (Max plan quota)
+        required: true
+
+jobs:
+  claude:
+    # An @claude mention from someone with write access. The association field
+    # differs per event; `||` coalesces because reading a property off a null
+    # event object yields empty rather than erroring.
+    if: |
+      (
+        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+        (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      ) && contains(
+        fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+        github.event.comment.author_association ||
+        github.event.review.author_association ||
+        github.event.issue.author_association
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read # Required for Claude to read CI results on PRs
+    steps:
+      - name: Checkout the PR under discussion (or the default branch)
+        uses: actions/checkout@v7
+        with:
+          # Full history: the agent compares against main constantly, and a
+          # depth-1 clone has none of it.
+          fetch-depth: 0
+          # `refs/pull/N/head` — the contributor's commits as written.
+          # Deliberately not `/merge`: GitHub does not publish a merge ref for
+          # a PR with conflicts, which is exactly when a review is most wanted.
+          # Both forms live in the BASE repo, so this works for fork PRs where
+          # checking out by branch name would not.
+          # A comment on a plain issue falls through to the default branch.
+          ref: >-
+            ${{ (github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number))
+             || (github.event.pull_request && format('refs/pull/{0}/head', github.event.pull_request.number))
+             || '' }}
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          # Auth via the user's Claude Max plan (OAuth token from
+          # `claude setup-token`). Counts against the Max subscription's
+          # quota instead of pay-per-token API billing.
+          claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
