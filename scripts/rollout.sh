@@ -59,21 +59,19 @@ render() { # render <template> <dest>
       -e "s|__BUILD_COMMAND__|$(sed_escape "$BUILD_COMMAND")|g" \
       -e "s|__TEST_COMMAND__|$(sed_escape "$TEST_COMMAND")|g" \
       -e "s|__CONVENTIONS_HINT__|$(sed_escape "$HINT")|g" \
-      -e "s|__SKILL_PATH_LINE__|$(sed_escape "$SKILL_PATH_LINE")|g" \
+      -e "s|__SKILL_PATH__|$(sed_escape "$SKILL_PATH")|g" \
       -e "s|__FLY_DIR__|$(sed_escape "$FLY_DIR")|g" \
       "$HERE/templates/$1" > "$2"
 }
 
-# Rendered as a whole line so an unset skill_path leaves no orphaned key.
-# Repos that pin one MUST record it here — regenerating without it silently
+# Repos that pin a skill MUST record it here — regenerating without it silently
 # drops the pin, and the publish job then fails in the quiet way: tag cut,
 # GitHub Release created, npm never receives the package (issue #76).
+# Rendered in VALUE position rather than as a whole line: an empty
+# `skill-path:` is equivalent to omitting the input (the action treats unset
+# and empty identically), and a line-position placeholder lands at column 0,
+# which breaks the template-parse check in CI.
 SKILL_PATH="$(cfg skill_path)"
-if [ -n "$SKILL_PATH" ]; then
-  SKILL_PATH_LINE="          skill-path: $SKILL_PATH"
-else
-  SKILL_PATH_LINE=""
-fi
 
 STAGE="$WORK/stage"; mkdir -p "$STAGE"
 render pr-auto-review.yml "$STAGE/pr-auto-review.yml"
@@ -110,13 +108,22 @@ if [ "$EXECUTE" = "--check" ]; then
   # Drift detector: render what fleet.json SAYS this repo runs, diff it against
   # what the repo actually has, and report. Opens nothing. Exit 1 on drift so a
   # scheduled run can fail loudly instead of a future sweep reverting the repo.
-  drift=0
+  drift=0; unknown=0
   for f in "$STAGE"/*; do
     name=$(basename "$f")
-    actual=$(gh api "repos/$REPO/contents/.github/workflows/$name" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || true)
-    if [ -z "$actual" ]; then
-      echo "MISSING  $REPO/$name"; drift=1; continue
+    # A failed API call is NOT a missing file. Conflating them makes every
+    # auth blip, rate-limit, or network hiccup look like a repo that lost a
+    # workflow — which, once --check is scheduled (#76), is a false alarm that
+    # trains you to ignore it. 404 means missing; anything else means unknown.
+    if ! raw=$(gh api "repos/$REPO/contents/.github/workflows/$name" --jq '.content' 2>"$WORK/gh.err"); then
+      if grep -q "HTTP 404" "$WORK/gh.err"; then
+        echo "MISSING  $REPO/$name"; drift=1
+      else
+        echo "ERROR    $REPO/$name — $(head -1 "$WORK/gh.err")"; unknown=1
+      fi
+      continue
     fi
+    actual=$(printf '%s' "$raw" | base64 -d 2>/dev/null || true)
     # Compare with trailing newlines normalized away: several repos' files were
     # committed without one, and a "\ No newline at end of file" diff on every
     # repo makes the detector useless rather than informative.
@@ -126,6 +133,9 @@ if [ "$EXECUTE" = "--check" ]; then
       drift=1
     fi
   done
+  # Distinct exit codes so a scheduled run can tell "this repo drifted" (1)
+  # from "I could not find out" (2) — they need different responses.
+  [ "$unknown" = 1 ] && exit 2
   [ "$drift" = 0 ] && echo "OK       $REPO"
   exit "$drift"
 fi
