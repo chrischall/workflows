@@ -62,6 +62,7 @@ render() { # render <template> <dest>
 STAGE="$WORK/stage"; mkdir -p "$STAGE"
 render pr-auto-review.yml "$STAGE/pr-auto-review.yml"
 render auto-merge.yml "$STAGE/auto-merge.yml"
+render claude.yml "$STAGE/claude.yml"
 [ "$CI_MODE" = "standard" ] && render ci.yml "$STAGE/ci.yml"
 if [ "$RELEASE_MODE" = "mcp" ]; then
   render release-please.yml "$STAGE/release-please.yml"
