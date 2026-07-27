@@ -104,7 +104,10 @@ git checkout -b "$BRANCH"
 mkdir -p .github/workflows
 cp "$STAGE"/* .github/workflows/
 # Files not in the stub set are intentionally left untouched (custom ci.yml,
-# claude.yml, deploy workflows, release workflows for custom repos).
+# deploy workflows, release workflows for custom repos). claude.yml IS in the
+# stub set as of the reusable-claude rollout — a repo's local copy is replaced,
+# which is the point: every hand-copied version checks out the default branch
+# on `issue_comment` instead of the PR, and runs for any commenter.
 git add .github/workflows
 if git diff --cached --quiet; then
   echo "$REPO already converted — nothing to do."
