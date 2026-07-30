@@ -288,6 +288,11 @@
       "repo": "chrischall/simplisafe-mcp",
       "connector": "true",
       "test_command": "npm test && npm run worker:test"
+    },
+    {
+      "repo": "chrischall/eventbrite-mcp",
+      "connector": "true",
+      "test_command": "npm test && npm run worker:test"
     }
   ]
 }
