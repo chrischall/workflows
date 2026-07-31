@@ -295,7 +295,9 @@
       "test_command": "npm test && npm run worker:test"
     },
     {
-      "repo": "chrischall/crowntowncompost-mcp"
+      "repo": "chrischall/crowntowncompost-mcp",
+      "connector": "true",
+      "test_command": "npm test && npm run worker:test"
     }
   ]
 }
