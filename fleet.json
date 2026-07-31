@@ -293,6 +293,9 @@
       "repo": "chrischall/eventbrite-mcp",
       "connector": "true",
       "test_command": "npm test && npm run worker:test"
+    },
+    {
+      "repo": "chrischall/crowntowncompost-mcp"
     }
   ]
 }
