@@ -36,7 +36,13 @@ Any review that surfaced findings — a `warn`/`fail` verdict, or a `pass`
 whose structured output still lists nits — also opens or updates a per-PR
 `auto-review-followup` issue holding every finding (linked from the verdict
 comment): `pass`/`warn` still auto-merge — the issue carries the nits
-forward — while `fail` keeps a human in the loop. Release-please PRs follow the same gate, except the
+forward — while `fail` keeps a human in the loop. When a later review pass on
+the same PR comes back **clean** (a `pass` with no findings), that is taken as
+proof the findings were addressed: the pipeline appends `Closes #<issue>` to
+the PR body so the issue closes on merge. It links rather than closing outright
+because the fix is not on the default branch yet, and it does this only on a
+clean re-review — on `warn`/`fail` the convention still holds that deferred
+items stay open. Release-please PRs follow the same gate, except the
 review is triggered by adding `release-ready` (not on open): `release-ready`
 starts the review, the review's `pass`/`warn` adds `ready-to-merge`, and only
 then does deferred CI run — so CI never runs ahead of a successful review.
