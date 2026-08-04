@@ -98,6 +98,54 @@ jobs:
           # fails on release PRs whose CHANGELOG references older commits.
           fetch-depth: 0
 
+      # Reviewer models have twice issued false `fail` verdicts claiming a
+      # CHANGELOG-referenced commit was "not an ancestor of the release"
+      # (mcp-host#127, then mcp-host#134 — the second time with a fabricated
+      # command transcript, AFTER the prompt required quoted evidence).
+      # Instructions can compel the form of evidence but not its authenticity,
+      # so this claim family is taken away from the model entirely: compute
+      # the ancestry facts deterministically here and inject them into the
+      # prompt as ground truth the reviewer must not contradict.
+      - name: Precompute changelog commit ancestry (ground truth)
+        id: ancestry
+        env:
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Diff base: the checkout is refs/pull/N/merge, whose first parent
+          # is the current base tip — fresher than the event payload's
+          # base.sha on label-triggered re-reviews. Fall back to the payload
+          # if the ref is ever not a merge commit.
+          if git rev-parse -q --verify 'HEAD^2' >/dev/null 2>&1; then
+            BASE_SHA=$(git rev-parse 'HEAD^1')
+          else
+            BASE_SHA="$EVENT_BASE_SHA"
+          fi
+
+          {
+            echo "report<<ANCESTRY_EOF"
+            # {40,} then length==40: a 40-char slice of a longer hex string
+            # (e.g. a sha256 in the text) must not masquerade as a commit.
+            # Every segment is failure-guarded: this step must never be the
+            # reason a fleet repo's review job dies (pipefail is on).
+            SHAS=$({ git diff "$BASE_SHA"..HEAD -- CHANGELOG.md 2>/dev/null || true; } \
+              | { grep -E '^\+' || true; } | { grep -oE '[0-9a-f]{40,}' || true; } \
+              | awk 'length($0) == 40' | sort -u)
+            if [ -z "$SHAS" ]; then
+              echo "This PR adds no commit SHAs to CHANGELOG.md — no ancestry facts to assert."
+            else
+              for sha in $SHAS; do
+                if ! git cat-file -e "$sha" 2>/dev/null; then
+                  echo "- ${sha:0:7}: NOT PRESENT in this repository's object store"
+                elif git merge-base --is-ancestor "$sha" HEAD; then
+                  echo "- ${sha:0:7} ($(git log -1 --format=%s "$sha")): IS an ancestor of this PR's HEAD — included in the change"
+                else
+                  echo "- ${sha:0:7} ($(git log -1 --format=%s "$sha")): NOT an ancestor of this PR's HEAD"
+                fi
+              done
+            fi
+            echo "ANCESTRY_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Pick model by PR size (or label override)
         id: model
         env:
@@ -168,6 +216,12 @@ jobs:
               - History/reachability claims — "commit X is not on branch Y", "the CHANGELOG documents a change this release doesn't ship", "X is missing from this branch/tag" — verify with `git merge-base --is-ancestor`, `git rev-list`, `git branch --contains`, `git log`, or `git cat-file` (all allowed; the checkout has full history).
               - Absence claims — "no caller exists", "this symbol/file/test is missing" — verify with `rg`/`ls`/`find` and quote the search that came back empty.
             If you cannot run the check — the claim needs a build, a test run, or network access (e.g. "this test would fail", "this endpoint is unreachable", "this doesn't compile", "package X doesn't export Y") — you MUST NOT present the claim as a finding. Raise it as an explicit open question in the summary comment instead: not counted toward the verdict, not listed in `important_findings` or `nits`. An unverified assertion presented as a finding is worse than silence — it blocks a correct change and invites a "fix" that introduces a real defect.
+            "Quoted output" means text copied from a tool result returned to you in THIS session. Never write what a command "would" print — reconstructed or remembered output is fabrication even when it happens to look plausible. Note that `git merge-base --is-ancestor` prints NOTHING (it answers via exit code alone), so quote it as `git merge-base --is-ancestor X Y; echo $?` with the actual digit; any prose "output" attributed to it is fabricated on its face.
+
+            PIPELINE-VERIFIED GROUND TRUTH (computed by a deterministic workflow step before this review — not by a model):
+            Every commit SHA this PR adds to CHANGELOG.md, ancestry-checked with `git merge-base --is-ancestor` against this PR's HEAD:
+            ${{ steps.ancestry.outputs.report }}
+            Any statement you make about these commits' inclusion, reachability, or ancestry MUST agree with this table. If you believe the table is wrong, re-run the checks yourself and quote the real transcript — but you may never assert the opposite of the table without one.
 
             SEVERITY MODEL (matches the official code-review plugin):
               🔴 Important — bug, broken behavior, security/data risk, or violation of a convention you can QUOTE from the docs. Confidence ≥80 to count.
