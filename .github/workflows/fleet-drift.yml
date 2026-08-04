@@ -1,0 +1,140 @@
+name: Fleet drift check
+
+# fleet.json is the source of truth for what every fleet repo runs, and
+# regenerating stubs from a stale fleet.json reverts hand-edits with quietly
+# catastrophic effect — dropped skill-path pins ship tags npm never receives,
+# reverted test-commands disable coverage gates (issue #76). rollout.sh
+# --check answers "is fleet.json still true?" for one repo; this schedule
+# asks it for the whole fleet daily so drift surfaces the day it happens,
+# not during the next sweep.
+#
+# On drift: opens or updates ONE marker-tagged issue with per-repo diffs and
+# fails the run. On a fully clean sweep: closes that issue. Repos that could
+# not be checked (API errors, exit 2) are warned about and listed, but do not
+# fail the run on their own — and they block the clean-sweep issue close, so
+# an auth outage can't masquerade as "no drift".
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+# The drift issue is find-or-create by marker: two overlapping runs (a manual
+# dispatch during the scheduled run) could both see "no issue" and create
+# duplicates. Queue instead — never cancel a sweep mid-flight.
+concurrency:
+  group: fleet-drift
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check every fleet repo against its rendered stubs
+        env:
+          # Per-repo PATs, not GITHUB_TOKEN: --check reads other repos'
+          # workflow files, which the job-scoped token cannot see. fleet.json's
+          # pat_secret names which credential reads each repo (the nullnet-app
+          # repos use NULLNET_RELEASE_PAT, not RELEASE_PAT — CLAUDE.md). Every
+          # distinct pat_secret value must also exist as a secret on THIS repo;
+          # env keys below are named to match so bash indirection can pick one
+          # per repo. A repo whose named secret is missing is skipped into the
+          # unchecked bucket — never probed with the wrong token, whose 404s on
+          # private repos would read back as MISSING, i.e. false drift.
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
+          NULLNET_RELEASE_PAT: ${{ secrets.NULLNET_RELEASE_PAT }}
+          # The marker-issue bookkeeping below targets this repo only.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          drifted=(); unknown=(); ok=0
+          : > /tmp/drift-details.md
+          for repo in $(jq -r '.repos[].repo' fleet.json); do
+            secret_name=$(jq -r --arg r "$repo" \
+              '(.repos[] | select(.repo == $r) | .pat_secret) // .defaults.pat_secret' fleet.json)
+            token="${!secret_name:-}"
+            if [ -z "$token" ]; then
+              unknown+=("$repo")
+              echo "::warning::skipping $repo — its pat_secret (${secret_name}) is not configured as a secret on $GITHUB_REPOSITORY"
+              continue
+            fi
+            code=0
+            out=$(GH_TOKEN="$token" scripts/rollout.sh "$repo" --check 2>&1) || code=$?
+            case "$code" in
+              0) ok=$((ok+1)) ;;
+              1) drifted+=("$repo")
+                 {
+                   echo "<details><summary><code>$repo</code></summary>"
+                   echo
+                   echo '```diff'
+                   echo "$out"
+                   echo '```'
+                   echo "</details>"
+                   echo
+                 } >> /tmp/drift-details.md ;;
+              *) unknown+=("$repo")
+                 echo "::warning::could not check $repo (exit $code): $(printf '%s' "$out" | head -1)" ;;
+            esac
+          done
+
+          {
+            echo "## Fleet drift check"
+            echo "OK: $ok · drifted: ${#drifted[@]} · unchecked: ${#unknown[@]}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          MARKER="<!-- fleet-drift-report -->"
+          EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" --paginate \
+            --jq "[.[] | select(.pull_request == null) | select(.body != null and (.body | contains(\"$MARKER\"))) | .number][0] // empty" \
+            | grep . | head -n1 || true)
+
+          if [ "${#drifted[@]}" -gt 0 ]; then
+            {
+              echo "$MARKER"
+              echo
+              echo "\`rollout.sh --check\` found **${#drifted[@]}** repo(s) whose workflow stubs no longer match what fleet.json renders ([run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}))."
+              echo
+              echo "For each repo, either the stub was hand-edited (record the real values in fleet.json) or a template/fleet.json change was never rolled out (sync with \`scripts/rollout.sh <repo> --execute --only <stub>\`). Do **not** blind-regenerate all stubs: that reverts hand-edits (issue #76)."
+              echo
+              cat /tmp/drift-details.md
+              if [ "${#unknown[@]}" -gt 0 ]; then
+                echo "Could not check (API error or missing PAT secret — see the run's warnings; not drift): ${unknown[*]}"
+              fi
+            } > /tmp/issue-full.md
+            # Issue bodies cap at 65536 chars; keep headroom for the marker to
+            # survive intact (it leads the body, but never risk a mid-diff cut
+            # producing an unparseable close).
+            head -c 60000 /tmp/issue-full.md > /tmp/issue-body.md
+
+            if [ -n "$EXISTING" ]; then
+              gh issue edit "$EXISTING" --repo "$GITHUB_REPOSITORY" \
+                --title "fleet.json drift: ${#drifted[@]} repo(s) diverge from their rendered stubs" \
+                --body-file /tmp/issue-body.md >/dev/null
+              echo "Updated drift issue #$EXISTING."
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" \
+                --title "fleet.json drift: ${#drifted[@]} repo(s) diverge from their rendered stubs" \
+                --body-file /tmp/issue-body.md
+            fi
+            echo "::error::${#drifted[@]} repo(s) drifted from fleet.json — see the drift issue"
+            exit 1
+          fi
+
+          if [ "${#unknown[@]}" -gt 0 ]; then
+            # No observed drift, but the sweep was partial — leave any open
+            # drift issue alone rather than declaring the fleet clean.
+            echo "No drift in the ${ok} repos checked; ${#unknown[@]} unchecked."
+            exit 0
+          fi
+
+          if [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" \
+              --comment "Scheduled fleet drift check came back clean across all ${ok} repos." >/dev/null
+            echo "Clean sweep — closed drift issue #$EXISTING."
+          else
+            echo "Clean sweep across ${ok} repos."
+          fi
