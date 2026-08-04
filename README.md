@@ -106,7 +106,13 @@ Live consumer: curtaincall (gradle). untappd-mcp was the npm one until its
 existing (untappd-mcp#105, #83).
 
 Rollout tooling: `fleet.json` (per-repo parameters), `scripts/rollout.sh`
-(stub-conversion PRs), `scripts/update-ruleset.sh` (required-check rename).
+(stub-conversion PRs; `--check` reports drift without opening one, `--only
+<stub>` narrows any mode to a single workflow file — prefer it for
+single-template rollouts, since full regeneration reverts hand-edits, #76),
+`scripts/update-ruleset.sh` (required-check rename). `fleet-drift.yml` runs
+`--check` across the whole fleet daily and maintains one marker-tagged drift
+issue, so a hand-edited stub or unrolled template change surfaces the day it
+happens instead of during the next sweep.
 Design: `docs/superpowers/specs/2026-06-12-fleet-reusable-workflows-design.md`.
 
 `docs/fleet-conventions.md` is the canonical home for the technical conventions

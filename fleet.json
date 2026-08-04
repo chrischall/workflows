@@ -79,7 +79,7 @@
     {
       "repo": "chrischall/setlist-mcp",
       "connector": "true",
-      "test_command": "npm test && npm run worker:test"
+      "test_command": "npm test && npm run worker:typecheck && npm run worker:test"
     },
     {
       "repo": "chrischall/signupgenius-mcp"
@@ -282,7 +282,8 @@
       "test_command": "npm run test:coverage"
     },
     {
-      "repo": "chrischall/kiaaccess-mcp"
+      "repo": "chrischall/kiaaccess-mcp",
+      "test_command": "npm run test:coverage && npm run worker:typecheck && npm run worker:test"
     },
     {
       "repo": "chrischall/simplisafe-mcp",
@@ -297,7 +298,7 @@
     {
       "repo": "chrischall/crowntowncompost-mcp",
       "connector": "true",
-      "test_command": "npm test && npm run worker:test"
+      "test_command": "npm test && npm run typecheck:worker && npm run worker:test"
     },
     {
       "repo": "chrischall/myersparkathleticzone-mcp"

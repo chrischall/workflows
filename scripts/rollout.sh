@@ -1,22 +1,46 @@
 #!/usr/bin/env bash
 # Convert one fleet repo to chrischall/workflows stubs via PR.
 #
-# Usage: scripts/rollout.sh <owner/repo> [--execute]
+# Usage: scripts/rollout.sh <owner/repo> [--execute|--check|--render <dir>] [--only <stub>]
 # Dry-run by default: prints generated stubs and planned actions.
+#
+# --only <stub> narrows every mode to a single stub file (e.g. `--only claude`,
+# `--only ci`): --check diffs just that file, --execute syncs just that file.
+# Issue #76's sweep only needed claude.yml; regenerating everything is what
+# turned a one-file rollout into a fleet-wide revert of hand-edits. Reach for
+# --only whenever the change you are rolling out touches one template.
 #
 # Does NOT merge the PR and does NOT add ready-to-merge — the pipeline does.
 # Run scripts/update-ruleset.sh after the PR is open.
 set -euo pipefail
 
-REPO="${1:?usage: rollout.sh <owner/repo> [--execute|--check|--render <dir>]}"
-EXECUTE="${2:-}"
+REPO="${1:?usage: rollout.sh <owner/repo> [--execute|--check|--render <dir>] [--only <stub>]}"
+shift
+EXECUTE=""; ONLY=""; DEST=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --execute|--check) EXECUTE="$1" ;;
+    --render) EXECUTE="--render"; DEST="${2:?usage: rollout.sh <owner/repo> --render <dir>}"; shift ;;
+    --only)   ONLY="${2:?--only needs a stub name, e.g. claude, ci, release-please}"; ONLY="${ONLY%.yml}"; shift ;;
+    *) echo "::error::unknown argument: $1"; exit 1 ;;
+  esac
+  shift
+done
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 FLEET="$HERE/fleet.json"
 # Overridable because the default is a FIXED name: re-running against a repo
 # converted earlier hits a leftover branch from that merge and the push is
 # rejected non-fast-forward. Deleting the old ref would work but is other
 # people's history; a fresh name is free. Set ROLLOUT_BRANCH to re-run.
-BRANCH="${ROLLOUT_BRANCH:-ci/reusable-workflows}"
+# A single-stub sync gets its own default name for the same reason: it must
+# not collide with the conversion branch a repo already merged.
+if [ -n "${ROLLOUT_BRANCH:-}" ]; then
+  BRANCH="$ROLLOUT_BRANCH"
+elif [ -n "$ONLY" ]; then
+  BRANCH="ci/sync-$ONLY"
+else
+  BRANCH="ci/reusable-workflows"
+fi
 
 cfg() { # cfg <key> -> value with defaults applied
   jq -r --arg repo "$REPO" --arg key "$1" '
@@ -106,6 +130,13 @@ if [ "$RELEASE_MODE" = "mcp" ]; then
 fi
 [ -n "$LOCKFIX" ] && render "dependabot-lockfix-$LOCKFIX.yml" "$STAGE/dependabot-lockfix.yml"
 
+if [ -n "$ONLY" ]; then
+  # Filter AFTER staging so the name is validated against what this repo
+  # actually gets — `--only ci` on a custom-CI repo is an error, not a no-op.
+  [ -f "$STAGE/$ONLY.yml" ] || { echo "::error::--only $ONLY: not in this repo's stub set ($(cd "$STAGE" && ls | tr '\n' ' '))"; exit 1; }
+  find "$STAGE" -type f ! -name "$ONLY.yml" -delete
+fi
+
 if [ "$EXECUTE" != "--check" ] && [ "$EXECUTE" != "--render" ]; then
   echo "=== $REPO  (pat=$PAT_SECRET ci=$CI_MODE release=$RELEASE_MODE lockfix=${LOCKFIX:-none} connector=${CONNECTOR:-no} fly=${FLY_DIR:-no}) ==="
   for f in "$STAGE"/*; do echo "--- $(basename "$f")"; cat "$f"; done
@@ -116,7 +147,6 @@ if [ "$EXECUTE" = "--render" ]; then
   # cross product of templates x fleet.json — the synthetic __X__ -> "x" parse
   # never sees a real value, so a placeholder that renders wrong for a specific
   # repo's config gets through it.
-  DEST="${3:?usage: rollout.sh <owner/repo> --render <dir>}"
   mkdir -p "$DEST"
   cp "$STAGE"/* "$DEST"/
   exit 0
@@ -183,31 +213,49 @@ if git diff --cached --quiet; then
   echo "$REPO already converted — nothing to do."
   exit 0
 fi
+if [ -n "$ONLY" ]; then
+  TITLE="ci: sync the $ONLY stub from chrischall/workflows"
+else
+  TITLE="ci: convert to chrischall/workflows reusable pipeline"
+fi
 EXTRAS=""
 [ "$CI_MODE" = "standard" ] && EXTRAS="$EXTRAS/CI"
 [ "$RELEASE_MODE" = "mcp" ] && EXTRAS="$EXTRAS/release"
 [ -n "$LOCKFIX" ] && EXTRAS="$EXTRAS/lockfix"
-git commit -m "ci: convert to chrischall/workflows reusable pipeline
+if [ -n "$ONLY" ]; then
+  git commit -m "$TITLE
+
+Regenerated from fleet.json + templates/$ONLY.yml (single-stub sync).
+Pipeline source: https://github.com/chrischall/workflows"
+else
+  git commit -m "$TITLE
 
 Thin stubs replace the vendored auto-review/auto-merge${EXTRAS} workflows.
 Pipeline source: https://github.com/chrischall/workflows"
+fi
 git push -u origin "$BRANCH"
 {
-  echo "Replaces vendored pipeline workflows with thin stubs calling chrischall/workflows@main."
+  if [ -n "$ONLY" ]; then
+    echo "Single-stub sync: regenerates \`.github/workflows/$ONLY.yml\` from fleet.json and the current template. Other workflow files are untouched."
+  else
+    echo "Replaces vendored pipeline workflows with thin stubs calling chrischall/workflows@main."
+  fi
   echo ""
-  echo "- pr-auto-review: reusable (forced verdict + fail-loud + pass-only arming)"
-  echo "- auto-merge: reusable (dependabot + ready-to-merge label arms)"
-  [ "$CI_MODE" = "standard" ] && echo "- ci: reusable node CI (deferred gate) — required check becomes \`ci / ci\`"
-  [ "$RELEASE_MODE" = "mcp" ] && echo "- release-please: thin stub + mcp-publish composite action (OIDC identity preserved)"
-  [ -n "$LOCKFIX" ] && echo "- dependabot-lockfix: reusable ($LOCKFIX — regenerates derived lockfiles dependabot can't refresh)"
-  [ -n "$CONNECTOR" ] && echo "- deploy-connector: Worker deployed on release (reusable) + workflow_dispatch stub"
-  [ -n "$FLY_DIR" ] && echo "- deploy-runner: Fly backend in \`$FLY_DIR\` deployed on release, before the Worker"
-  echo ""
-  echo "After this PR is open, run \`scripts/update-ruleset.sh $REPO\` in chrischall/workflows."
-  echo ""
+  if [ -z "$ONLY" ]; then
+    echo "- pr-auto-review: reusable (forced verdict + fail-loud + pass-only arming)"
+    echo "- auto-merge: reusable (dependabot + ready-to-merge label arms)"
+    [ "$CI_MODE" = "standard" ] && echo "- ci: reusable node CI (deferred gate) — required check becomes \`ci / ci\`"
+    [ "$RELEASE_MODE" = "mcp" ] && echo "- release-please: thin stub + mcp-publish composite action (OIDC identity preserved)"
+    [ -n "$LOCKFIX" ] && echo "- dependabot-lockfix: reusable ($LOCKFIX — regenerates derived lockfiles dependabot can't refresh)"
+    [ -n "$CONNECTOR" ] && echo "- deploy-connector: Worker deployed on release (reusable) + workflow_dispatch stub"
+    [ -n "$FLY_DIR" ] && echo "- deploy-runner: Fly backend in \`$FLY_DIR\` deployed on release, before the Worker"
+    echo ""
+    echo "After this PR is open, run \`scripts/update-ruleset.sh $REPO\` in chrischall/workflows."
+    echo ""
+  fi
   echo "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 } > "$WORK/pr-body.md"
 gh pr create --repo "$REPO" --head "$BRANCH" \
-  --title "ci: convert to chrischall/workflows reusable pipeline" \
+  --title "$TITLE" \
   --body-file "$WORK/pr-body.md"
 echo "PR opened for $REPO."
