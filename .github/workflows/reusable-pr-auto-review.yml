@@ -98,14 +98,17 @@ jobs:
           # fails on release PRs whose CHANGELOG references older commits.
           fetch-depth: 0
 
-      # Reviewer models have twice issued false `fail` verdicts claiming a
-      # CHANGELOG-referenced commit was "not an ancestor of the release"
-      # (mcp-host#127, then mcp-host#134 — the second time with a fabricated
-      # command transcript, AFTER the prompt required quoted evidence).
-      # Instructions can compel the form of evidence but not its authenticity,
-      # so this claim family is taken away from the model entirely: compute
-      # the ancestry facts deterministically here and inject them into the
-      # prompt as ground truth the reviewer must not contradict.
+      # Reviewer models issued three false `fail` verdicts in one day claiming
+      # a CHANGELOG-referenced commit was "not an ancestor of the release"
+      # (mcp-host#127, mcp-host#134, untappd-mcp#110) — escalating from
+      # asserting without checking, to fabricating a command transcript after
+      # the prompt required quoted evidence, to contradicting a correct
+      # ground-truth table injected into the prompt. Instructions cannot make
+      # a model's evidence authentic, so the pipeline owns this claim family
+      # outright: this step computes the facts with real git, a genuine
+      # violation fails the review deterministically (the model never runs),
+      # and on a clean table the verdict step discards any contradicting
+      # finding the model emits anyway.
       - name: Precompute changelog commit ancestry (ground truth)
         id: ancestry
         env:
@@ -121,30 +124,41 @@ jobs:
             BASE_SHA="$EVENT_BASE_SHA"
           fi
 
+          # {40,} then length==40: a 40-char slice of a longer hex string
+          # (e.g. a sha256 in the text) must not masquerade as a commit.
+          # Every segment is failure-guarded: this step must never be the
+          # reason a fleet repo's review job dies (pipefail is on).
+          SHAS=$({ git diff "$BASE_SHA"..HEAD -- CHANGELOG.md 2>/dev/null || true; } \
+            | { grep -E '^\+' || true; } | { grep -oE '[0-9a-f]{40,}' || true; } \
+            | awk 'length($0) == 40' | sort -u)
+
+          VIOLATIONS=""; MISSING=""
           {
             echo "report<<ANCESTRY_EOF"
-            # {40,} then length==40: a 40-char slice of a longer hex string
-            # (e.g. a sha256 in the text) must not masquerade as a commit.
-            # Every segment is failure-guarded: this step must never be the
-            # reason a fleet repo's review job dies (pipefail is on).
-            SHAS=$({ git diff "$BASE_SHA"..HEAD -- CHANGELOG.md 2>/dev/null || true; } \
-              | { grep -E '^\+' || true; } | { grep -oE '[0-9a-f]{40,}' || true; } \
-              | awk 'length($0) == 40' | sort -u)
             if [ -z "$SHAS" ]; then
               echo "This PR adds no commit SHAs to CHANGELOG.md — no ancestry facts to assert."
             else
               for sha in $SHAS; do
                 if ! git cat-file -e "$sha" 2>/dev/null; then
+                  # Not provably wrong (a hand-edited entry may cite another
+                  # repo's commit), so surfaced but not a violation.
                   echo "- ${sha:0:7}: NOT PRESENT in this repository's object store"
+                  MISSING="${MISSING:+$MISSING, }${sha:0:7}"
                 elif git merge-base --is-ancestor "$sha" HEAD; then
                   echo "- ${sha:0:7} ($(git log -1 --format=%s "$sha")): IS an ancestor of this PR's HEAD — included in the change"
                 else
                   echo "- ${sha:0:7} ($(git log -1 --format=%s "$sha")): NOT an ancestor of this PR's HEAD"
+                  VIOLATIONS="${VIOLATIONS:+$VIOLATIONS, }${sha:0:7}"
                 fi
               done
             fi
             echo "ANCESTRY_EOF"
+            echo "violations=$VIOLATIONS"
           } >> "$GITHUB_OUTPUT"
+          [ -n "$MISSING" ] && echo "::warning::CHANGELOG references commit(s) not in this repository: $MISSING"
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::CHANGELOG documents commits not included in this PR: $VIOLATIONS"
+          fi
 
       - name: Pick model by PR size (or label override)
         id: model
@@ -153,6 +167,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           HAS_OPUS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'review-with-opus') }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           # Four-tier ladder by additions+deletions; `review-with-opus`
           # label forces Opus. Never the [1m] context variant.
@@ -175,12 +190,25 @@ jobs:
             MODEL="claude-fable-5"
             REASON="${CHANGED} lines (>10000, frontier)"
           fi
+          # Release PRs never get the smallest tier. All three fabricated
+          # ancestry false-fails (mcp-host#127, mcp-host#134, untappd-mcp#110,
+          # all 2026-08-04) were claude-haiku-4-5 reviewing a release PR — the
+          # tiny changelog diff routes there, yet these are the PRs that arm a
+          # publish, the highest blast radius per line in the fleet.
+          if [ "$MODEL" = "claude-haiku-4-5" ] && [[ "$HEAD_REF" == release-please--* ]]; then
+            MODEL="claude-sonnet-5"
+            REASON="release PR floor (${REASON})"
+          fi
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "Selected ${MODEL} — ${REASON}"
           echo "**Model:** \`${MODEL}\` — ${REASON}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Claude review with structured verdict
         id: review
+        # A deterministic ancestry violation IS the verdict — running a model
+        # review on top would only produce prose beside a fact the pipeline
+        # already established (the verdict step emits the fail directly).
+        if: ${{ steps.ancestry.outputs.violations == '' }}
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
@@ -218,10 +246,10 @@ jobs:
             If you cannot run the check — the claim needs a build, a test run, or network access (e.g. "this test would fail", "this endpoint is unreachable", "this doesn't compile", "package X doesn't export Y") — you MUST NOT present the claim as a finding. Raise it as an explicit open question in the summary comment instead: not counted toward the verdict, not listed in `important_findings` or `nits`. An unverified assertion presented as a finding is worse than silence — it blocks a correct change and invites a "fix" that introduces a real defect.
             "Quoted output" means text copied from a tool result returned to you in THIS session. Never write what a command "would" print — reconstructed or remembered output is fabrication even when it happens to look plausible. Note that `git merge-base --is-ancestor` prints NOTHING (it answers via exit code alone), so quote it as `git merge-base --is-ancestor X Y; echo $?` with the actual digit; any prose "output" attributed to it is fabricated on its face.
 
-            PIPELINE-VERIFIED GROUND TRUTH (computed by a deterministic workflow step before this review — not by a model):
-            Every commit SHA this PR adds to CHANGELOG.md, ancestry-checked with `git merge-base --is-ancestor` against this PR's HEAD:
+            CHANGELOG COMMIT INCLUSION IS PIPELINE-OWNED — NEVER YOUR FINDING:
+            Before this review ran, a deterministic workflow step ancestry-checked every commit SHA this PR adds to CHANGELOG.md against this PR's HEAD with real `git merge-base --is-ancestor`. Had any been missing, the pipeline would have failed the review itself and you would not be running. The verified facts:
             ${{ steps.ancestry.outputs.report }}
-            Any statement you make about these commits' inclusion, reachability, or ancestry MUST agree with this table. If you believe the table is wrong, re-run the checks yourself and quote the real transcript — but you may never assert the opposite of the table without one.
+            Therefore claims of the form "this CHANGELOG commit is not included / not an ancestor / missing from the release" are categorically OUT OF SCOPE for you — never a finding, never in `important_findings` or `nits`, regardless of what you believe you checked. Any such finding is discarded by the pipeline and publicly noted as discarded. If you think the table is wrong, say so as an open question in the summary comment; it does not count toward the verdict.
 
             SEVERITY MODEL (matches the official code-review plugin):
               🔴 Important — bug, broken behavior, security/data risk, or violation of a convention you can QUOTE from the docs. Confidence ≥80 to count.
@@ -285,8 +313,36 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           OUT: ${{ steps.review.outputs.structured_output }}
+          VIOLATIONS: ${{ steps.ancestry.outputs.violations }}
         run: |
-          verdict=""; summary=""
+          verdict=""; summary=""; DISCARD_NOTE=""
+          if [ -n "$VIOLATIONS" ]; then
+            # Deterministic path: the ancestry step proved the CHANGELOG
+            # documents commits this PR does not contain, and the model review
+            # was skipped. Synthesize the structured output the rest of the
+            # pipeline (verdict comment, follow-up issue) expects.
+            OUT=$(jq -nc --arg f "CHANGELOG documents commit(s) not included in this PR: ${VIOLATIONS} — established by the pipeline's deterministic git ancestry check (see the run log); the model review was skipped" \
+              '{verdict: "fail", summary: $f, important_findings: [$f], nits: []}')
+          elif [ -n "$OUT" ]; then
+            # The ancestry table was clean, so any model finding claiming a
+            # CHANGELOG commit is missing contradicts a verified git fact —
+            # three fabricated incidents of exactly this (mcp-host#127/#134,
+            # untappd-mcp#110) are why the pipeline, not the model, owns this
+            # claim family. Drop such findings and recompute the verdict from
+            # what remains; the comment discloses the discard.
+            KEPT=$(echo "$OUT" | jq -c '(.important_findings // []) | map(select(
+              (test("not (an |the )?ancestor|ancestors? of (the |this )?(release|branch|pr|head|current)"; "i")
+               or (test("changelog"; "i") and test("missing|not (actually )?(includ|ship|present)"; "i"))) | not))')
+            DROPPED=$(echo "$OUT" | jq -r --argjson kept "$KEPT" '((.important_findings // []) | length) - ($kept | length)')
+            if [ "$DROPPED" -gt 0 ] 2>/dev/null; then
+              OUT=$(echo "$OUT" | jq -c --argjson kept "$KEPT" '
+                .important_findings = $kept
+                | if .verdict == "fail" and ($kept | length) == 0 then
+                    .verdict = (if ((.nits // []) | length) > 0 then "warn" else "pass" end)
+                  else . end')
+              DISCARD_NOTE="🛡️ ${DROPPED} finding(s) claiming a CHANGELOG-documented commit is missing from this release were discarded: the pipeline's deterministic git ancestry check verified every referenced commit is an ancestor of this PR (table in the run log)."
+            fi
+          fi
           if [ -n "$OUT" ]; then
             verdict=$(echo "$OUT" | jq -r '.verdict // empty')
             summary=$(echo "$OUT" | jq -r '.summary // empty')
@@ -301,6 +357,15 @@ jobs:
             esac
             [ -n "$verdict" ] && summary="(verdict recovered from the review comment — structured output was empty)"
           fi
+
+          # Downstream (the follow-up issue) must see the same findings this
+          # step judged on — post-discard, post-synthesis — not the raw model
+          # output.
+          {
+            echo "filtered_output<<FILTERED_EOF"
+            printf '%s\n' "$OUT"
+            echo "FILTERED_EOF"
+          } >> "$GITHUB_OUTPUT"
 
           # Export before any later command can fail: an empty value reads as
           # "no verdict" downstream, which fails safe (never arms).
@@ -323,7 +388,8 @@ jobs:
           if [ -n "$verdict" ]; then
             case "$verdict" in pass) ICON="✅";; warn) ICON="🟡";; fail) ICON="🔴";; esac
             NEW_BODY="$MARKER
-          $ICON Auto-review verdict: **$verdict**${summary:+ — $summary}"
+          $ICON Auto-review verdict: **$verdict**${summary:+ — $summary}${DISCARD_NOTE:+
+          $DISCARD_NOTE}"
           else
             NEW_BODY="$MARKER
           ⚠️ Auto-review issued **no verdict** — structured output was empty and no verdict line was found in the review comment. Treat this PR as un-reviewed."
@@ -368,7 +434,9 @@ jobs:
           REPO: ${{ github.repository }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           VERDICT: ${{ steps.verdict.outputs.verdict }}
-          OUT: ${{ steps.review.outputs.structured_output }}
+          # Post-discard/post-synthesis findings from the verdict step — the
+          # raw model output may contain findings the pipeline overruled.
+          OUT: ${{ steps.verdict.outputs.filtered_output }}
         run: |
           MARKER="<!-- auto-review-followup:PR-${PR} -->"
 
