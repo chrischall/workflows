@@ -429,7 +429,10 @@ jobs:
           # Idempotent: re-running must not append a second keyword. Match the
           # whole set GitHub honors, any case, so a hand-written "Fixes #12"
           # is respected instead of duplicated.
-          if printf '%s' "$BODY" | grep -qiE "(close[sd]?|fix(e[sd])?|resolve[sd]?) #${NUM}\b"; then
+          # \b on both flanks: without the left one, "discloses #12" and
+          # "prefixes #12" read as closing keywords, and the step silently
+          # skips appending the real `Closes #12` (issue #96).
+          if printf '%s' "$BODY" | grep -qiE "\b(close[sd]?|fix(e[sd])?|resolve[sd]?) #${NUM}\b"; then
             echo "PR #${PR} already references issue #${NUM} with a closing keyword."
             exit 0
           fi
