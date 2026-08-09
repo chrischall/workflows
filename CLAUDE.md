@@ -56,9 +56,14 @@ both a `<name>` and a `<name>-fpx` skill must pin `skill-path` — that failure
 lands in the publish job, *after* the tag and GitHub Release already exist, so
 the release looks green while npm never gets the package.
 
-There are no tests in this repo. The only way to validate an action change is
-to run it against a real consumer repo, so make changes small and verify in the
-Actions UI of the repo you rolled out to.
+The composite actions have no tests. The only way to validate an action change
+is to run it against a real consumer repo, so make changes small and verify in
+the Actions UI of the repo you rolled out to.
+
+`scripts/` is different — `scripts/rollout.test.sh` unit-tests `rollout.sh
+--check` by stubbing `gh` and pointing the real script at a fixture fleet, and
+CI runs it. Add a case there for any `--check` change: its failure mode is a
+report that quietly says less than it should, which nothing downstream notices.
 
 ## Fleet-wide conventions
 

@@ -30,3 +30,9 @@ jobs:
         # structure — a skill-path pin outside `with:` parses perfectly and
         # still breaks the release.
         run: ruby scripts/validate-render.rb
+      - name: rollout.sh unit tests
+        # --check is what the daily drift sweep runs, and its failure mode is
+        # silent under-reporting rather than a crash — nothing downstream would
+        # notice. These stub `gh` and assert the whole report, not just the
+        # first line.
+        run: bash scripts/rollout.test.sh
