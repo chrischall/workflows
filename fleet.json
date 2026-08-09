@@ -15,6 +15,10 @@
   },
   "repos": [
     {
+      "repo": "chrischall/jobber-mcp",
+      "skill_path": "skills/jobber-fpx/SKILL.md"
+    },
+    {
       "repo": "chrischall/groupon-mcp"
     },
     {
