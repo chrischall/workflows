@@ -177,7 +177,14 @@ if [ "$EXECUTE" = "--check" ]; then
     # repo makes the detector useless rather than informative.
     if ! diff -q <(printf '%s\n' "$(printf '%s' "$actual")") <(printf '%s\n' "$(cat "$f")") >/dev/null 2>&1; then
       echo "DRIFT    $REPO/$name"
-      diff <(printf '%s\n' "$(printf '%s' "$actual")") <(printf '%s\n' "$(cat "$f")") | sed 's/^/    /' | head -20
+      # `|| true` is load-bearing, twice over: `diff` exits 1 BY DESIGN when the
+      # files differ (which is the only case that reaches this line), and
+      # `head -20` can SIGPIPE `sed` on a long diff. Under `set -euo pipefail`
+      # either one aborts the whole script mid-loop, and the failure mode is
+      # silent UNDER-REPORTING — the first drifted stub is printed, every later
+      # stub in the set is never even fetched, and the exit code still says 1,
+      # so the report looks complete while hiding the rest (issue #104).
+      diff <(printf '%s\n' "$(printf '%s' "$actual")") <(printf '%s\n' "$(cat "$f")") | sed 's/^/    /' | head -20 || true
       drift=1
     fi
   done
