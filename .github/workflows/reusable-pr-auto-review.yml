@@ -330,16 +330,29 @@ jobs:
             # untappd-mcp#110) are why the pipeline, not the model, owns this
             # claim family. Drop such findings and recompute the verdict from
             # what remains; the comment discloses the discard.
-            KEPT=$(echo "$OUT" | jq -c '(.important_findings // []) | map(select(
-              (test("not (an |the )?ancestor|ancestors? of (the |this )?(release|branch|pr|head|current)"; "i")
-               or (test("changelog"; "i") and test("missing|not (actually )?(includ|ship|present)"; "i"))) | not))')
-            DROPPED=$(echo "$OUT" | jq -r --argjson kept "$KEPT" '((.important_findings // []) | length) - ($kept | length)')
+            #
+            # Both arrays are scrubbed, not just `important_findings`: a model
+            # that demotes an ancestry claim to a nit would otherwise route it
+            # straight past pipeline ownership into the follow-up issue, which
+            # keys on the combined count and copies nit titles verbatim.
+            FILTERED=$(echo "$OUT" | jq -c '
+              def ancestry_claim:
+                test("not (an |the )?ancestor|ancestors? of (the |this )?(release|branch|pr|head|current)"; "i")
+                or (test("changelog"; "i") and test("missing|not (actually )?(includ|ship|present)"; "i"));
+              def scrub: (. // []) | map(select(ancestry_claim | not));
+              .important_findings = (.important_findings | scrub)
+              | .nits = (.nits | scrub)')
+            DROPPED=$(jq -rn --argjson a "$OUT" --argjson b "$FILTERED" '
+              ((($a.important_findings // []) | length) + (($a.nits // []) | length))
+              - (($b.important_findings | length) + ($b.nits | length))' 2>/dev/null || echo 0)
             if [ "$DROPPED" -gt 0 ] 2>/dev/null; then
-              OUT=$(echo "$OUT" | jq -c --argjson kept "$KEPT" '
-                .important_findings = $kept
-                | if .verdict == "fail" and ($kept | length) == 0 then
-                    .verdict = (if ((.nits // []) | length) > 0 then "warn" else "pass" end)
-                  else . end')
+              # Only a verdict with nothing left to justify it is recomputed: a
+              # surviving important finding keeps `fail`, a surviving nit keeps
+              # `warn`. `pass` is never escalated.
+              OUT=$(echo "$FILTERED" | jq -c '
+                if (.important_findings | length) == 0 and .verdict != "pass" then
+                  .verdict = (if (.nits | length) > 0 then "warn" else "pass" end)
+                else . end')
               DISCARD_NOTE="🛡️ ${DROPPED} finding(s) claiming a CHANGELOG-documented commit is missing from this release were discarded: the pipeline's deterministic git ancestry check verified every referenced commit is an ancestor of this PR (table in the run log)."
             fi
           fi
