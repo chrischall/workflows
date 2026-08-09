@@ -131,5 +131,40 @@ assert_has   D "ERROR    FAKE/x/"
 assert_lacks D "MISSING"
 assert_code  D 2
 
+# --- E: a diff LONGER than the pipe buffer still reports every later stub ----
+# Case A covers the `diff` half of rollout.sh's `|| true`: diff exits 1 on any
+# difference, so a 2-line edit is enough to catch a regression that drops it.
+# It cannot catch the OTHER half. `head -20` exits after 20 lines and `sed`
+# keeps writing into a closed pipe, so a half-fix that neutralises only diff's
+# exit status (`{ diff ... || true; } | sed ... | head -20`) still dies of
+# SIGPIPE mid-loop and silently under-reports every stub after this one.
+# (Note the braces must enclose the `|| true`: `{ diff ...; } || true | sed ...`
+# parses as `{ diff ...; } || (true | sed ...)` and is a different bug.)
+#
+# SIGPIPE needs sed to still be WRITING when head exits — i.e. enough output to
+# outlast the pipe buffer, not merely more than the 20-line cap. macOS sizes
+# that buffer up to 64KB, so a "21 line" fixture proves nothing: it truncates
+# without ever signalling. Measured against the half-fix above, 21 / 50 / 200
+# filler lines all leave the suite GREEN on a broken script; it only starts
+# failing around 1000. The 5000 lines below are what `sed` actually writes:
+# 160KB of filler, ~190KB once diff framing and the 4-space prefix are added —
+# roughly 5x the observed trigger point, and the whole point of this case.
+# Do not "simplify" them down.
+#
+# ci.yml is early in the stub glob and release-please.yml is last, so the
+# assertion that BOTH are reported is what fails if the loop dies early.
+DIR=$(fixtures e)
+awk 'BEGIN{for(i=1;i<=5000;i++) printf "# hand-edited filler line %05d\n", i}' >> "$DIR/ci.yml"
+printf '\n# hand-edited: release-please\n' >> "$DIR/release-please.yml"
+run_check "$DIR"
+assert_has  E "DRIFT    FAKE/x/ci.yml"
+assert_has  E "DRIFT    FAKE/x/release-please.yml"
+assert_code E 1
+# ...and the cap itself still holds: the indented diff body printed under
+# ci.yml's header is exactly 20 lines, not 5000 pasted into a GitHub issue.
+BODY=$(awk '/^DRIFT    FAKE\/x\/ci\.yml$/{f=1;next} f&&/^    /{c++;next} f{exit} END{print c+0}' "$OUT")
+if [ "$BODY" = 20 ]; then ok "E: ci.yml diff body capped at 20 lines"
+else bad "E: expected a 20-line diff body for ci.yml, got $BODY" "head of output:$(printf '\n')$(head -5 "$OUT" | sed 's/^/       /')"; fi
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
