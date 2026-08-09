@@ -18,19 +18,14 @@
       "repo": "chrischall/groupon-mcp"
     },
     {
-      "repo": "chrischall/onthecheap-mcp",
-      "connector": "true"
+      "repo": "chrischall/onthecheap-mcp"
     },
     {
       "repo": "chrischall/zola-mcp",
-      "connector": "true",
-      "skill_path": "skills/zola/SKILL.md",
-      "test_command": "npm test && npm run worker:test"
+      "skill_path": "skills/zola/SKILL.md"
     },
     {
-      "repo": "chrischall/artsonia-mcp",
-      "connector": "true",
-      "test_command": "npm test && npm run worker:test"
+      "repo": "chrischall/artsonia-mcp"
     },
     {
       "repo": "chrischall/canvas-parent-mcp"
@@ -42,8 +37,7 @@
       "repo": "chrischall/creditkarma-mcp"
     },
     {
-      "repo": "chrischall/gemini-mcp",
-      "connector": "true"
+      "repo": "chrischall/gemini-mcp"
     },
     {
       "repo": "chrischall/gogcli-mcp",
@@ -77,17 +71,13 @@
       "skill_path": "skills/resy/SKILL.md"
     },
     {
-      "repo": "chrischall/setlist-mcp",
-      "connector": "true",
-      "test_command": "npm test && npm run worker:typecheck && npm run worker:test"
+      "repo": "chrischall/setlist-mcp"
     },
     {
       "repo": "chrischall/signupgenius-mcp"
     },
     {
-      "repo": "chrischall/splitwise-mcp",
-      "connector": "true",
-      "test_command": "npm test && npm run worker:test"
+      "repo": "chrischall/splitwise-mcp"
     },
     {
       "repo": "chrischall/tempo-api-mcp"
@@ -112,8 +102,7 @@
     },
     {
       "repo": "chrischall/ofw-mcp",
-      "test_command": "npm run test:coverage && npm run worker:test",
-      "connector": "true",
+      "test_command": "npm run test:coverage",
       "skill_path": "skills/ofw/SKILL.md"
     },
     {
@@ -218,9 +207,7 @@
     },
     {
       "repo": "chrischall/untappd-mcp",
-      "lockfix": "",
-      "connector": "true",
-      "test_command": "npm test && npm run worker:test"
+      "lockfix": ""
     },
     {
       "repo": "chrischall/easytable-mcp"
@@ -262,9 +249,7 @@
       "release": "custom"
     },
     {
-      "repo": "chrischall/vibo-mcp",
-      "connector": "true",
-      "test_command": "npm test && npm run worker:test"
+      "repo": "chrischall/vibo-mcp"
     },
     {
       "repo": "chrischall/workday-mcp"
@@ -278,27 +263,20 @@
     },
     {
       "repo": "chrischall/sixflags-mcp",
-      "connector": "true",
       "test_command": "npm run test:coverage"
     },
     {
       "repo": "chrischall/kiaaccess-mcp",
-      "test_command": "npm run test:coverage && npm run worker:typecheck && npm run worker:test"
+      "test_command": "npm run test:coverage"
     },
     {
-      "repo": "chrischall/simplisafe-mcp",
-      "connector": "true",
-      "test_command": "npm test && npm run worker:test"
+      "repo": "chrischall/simplisafe-mcp"
     },
     {
-      "repo": "chrischall/eventbrite-mcp",
-      "connector": "true",
-      "test_command": "npm test && npm run worker:test"
+      "repo": "chrischall/eventbrite-mcp"
     },
     {
-      "repo": "chrischall/crowntowncompost-mcp",
-      "connector": "true",
-      "test_command": "npm test && npm run typecheck:worker && npm run worker:test"
+      "repo": "chrischall/crowntowncompost-mcp"
     },
     {
       "repo": "chrischall/myersparkathleticzone-mcp"
