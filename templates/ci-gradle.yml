@@ -121,7 +121,10 @@ jobs:
           # run red. The gate posted nothing either — ci-gated stays unreported
           # and the merge stays blocked, which is the intended fork behaviour.
           if [ "$IS_FORK" = "true" ]; then
-            echo "fork PR → not posting ci-gated (read-only token). The job result above is the real one; the required ci-gated context stays unreported, so the merge stays blocked until a maintainer acts."
+            echo "fork PR → not posting ci-gated (read-only token). The job result above is the real one; the required ci-gated context stays unreported, so the merge stays blocked."
+            echo "To merge once you have reviewed this run, post the status yourself — that IS the maintainer decision this gate defers to:"
+            echo "  gh api repos/$REPO/statuses/$HEAD_SHA -f state=success -f context=ci-gated -f description='fork PR - CI verified by maintainer'"
+            echo "Then: gh pr merge <n> --squash. Note --admin does NOT bypass a repository RULESET, only its bypass_actors list does."
             exit 0
           fi
           if [ "$JOB_STATUS" = "success" ]; then STATE=success; DESC="CI passed"; else STATE=failure; DESC="CI failed — see the ci job log"; fi

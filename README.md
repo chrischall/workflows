@@ -38,8 +38,23 @@ Fork PRs are the one case status mode cannot gate with a status at all: their
 shows a real pass/fail while the unreported `ci-gated` context keeps the merge
 blocked for a human — never green by accident. Bespoke-CI repos get the same
 rule from `arm-gate`, which publishes `is_fork` for their reporter step to
-guard on (`templates/ci-gradle.yml` shows the shape); a bespoke repo whose
-reporter predates that output still 403s at the reporter, after its tests run.
+guard on (`templates/ci-gradle.yml` shows the shape).
+
+**Merging a fork PR.** Nothing posts `ci-gated`, so the required context is never
+satisfied and the merge is blocked by design. "Blocked until a maintainer acts"
+means *you post the status*, after reading the run:
+
+```sh
+gh api repos/<owner>/<repo>/statuses/<head-sha> \
+  -f state=success -f context=ci-gated \
+  -f description="fork PR - CI verified by maintainer"
+gh pr merge <n> --squash          # no --admin needed once the context is green
+```
+
+`gh pr merge --admin` does **not** help: it bypasses classic branch protection,
+not a repository **ruleset**, which only yields to an entry in its
+`bypass_actors` list. Adding yourself there works, but loosens every rule in the
+ruleset for every PR — posting one status for one SHA does not.
 Any review that surfaced findings — a `warn`/`fail` verdict, or a `pass`
 whose structured output still lists nits — also opens or updates a per-PR
 `auto-review-followup` issue holding every finding (linked from the verdict
