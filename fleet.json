@@ -290,6 +290,9 @@
     },
     {
       "repo": "chrischall/thumbtack-mcp"
+    },
+    {
+      "repo": "chrischall/angi-mcp"
     }
   ]
 }
