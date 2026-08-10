@@ -130,6 +130,11 @@ echo "── Arm gate, fork PRs (status mode) ──"
 gate_case "fork un-armed → run, post nothing"        true  none    PR_HEAD_REPO=someone/example-mcp
 gate_case "fork armed → run, post nothing"           true  none    PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge
 gate_case "fork with release-please-shaped ref"      true  none    PR_HEAD_REPO=someone/example-mcp HEAD_REF=release-please--x
+# #113: the fork short-circuit used to run BEFORE the armed case, pre-empting
+# the duplicate-run suppression, so an already-armed fork PR rebuilt on every
+# relabel where a same-repo PR was skipped. Same expectation as same-repo now.
+gate_case "fork armed + non-arming label → no dup" false none    PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=documentation
+gate_case "fork armed + ready-to-merge label → run" true none    PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=ready-to-merge
 
 echo "── Arm gate, fail mode (legacy — must be untouched by the fork path) ──"
 # In fail mode the un-armed block IS a red `ci / ci`. Arming a fork here would
@@ -147,6 +152,7 @@ gate_case "bot PR → always run"                      true  none    USER_TYPE=B
 gate_case "fork un-armed → run, post nothing"        true  none    PR_HEAD_REPO=someone/example
 gate_case "fork armed → run, post nothing"           true  none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge
 gate_case "fail mode: fork un-armed stays blocked"   false none    MODE=fail PR_HEAD_REPO=someone/example
+gate_case "fork armed + non-arming label → no dup"   false none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=documentation
 
 # The composite's contract with a consumer's reporter step: `is_fork` must be
 # published on EVERY path, or a reporter guarding on it 403s on a fork.

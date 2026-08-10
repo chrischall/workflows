@@ -104,21 +104,14 @@ runs:
         if [ "$EVENT_NAME" != "pull_request" ]; then run_ci "non-PR event → run CI"; fi
         if [ "$USER_TYPE" != "User" ]; then run_ci "bot PR → run CI"; fi
 
-        # Fork PR in status mode: the read-only token makes the ci-gated POST
-        # below impossible (403 → this step fails → every guarded build step is
-        # skipped → red, untested). Run the build and post nothing; the
-        # unreported ci-gated context keeps the merge blocked. Status mode only:
-        # in fail mode the un-armed block IS a red check, so arming here would
-        # turn it green before review.
-        if [ "$MODE" = "status" ] && [ "$IS_FORK" = "true" ]; then
-          run_ci "fork PR ($PR_HEAD_REPO) → run CI, post no ci-gated status (fork tokens are read-only; the required context stays unreported, so the merge stays blocked)"
-        fi
 
         case ",$LABELS," in
           *,ready-to-merge,*)
             # Already armed. Status mode: suppress the duplicate run a
             # non-arming label would trigger — the SHA's ci-gated status is
-            # already set and stays untouched. Unsafe in fail mode.
+            # already set and stays untouched (on a fork it was deliberately
+            # never posted, so skipping leaves the merge blocked either way).
+            # Unsafe in fail mode.
             if [ "$MODE" = "status" ] && [ "$EVENT_ACTION" = "labeled" ] && [ "$EVENT_LABEL" != "ready-to-merge" ]; then
               echo "already armed; label '$EVENT_LABEL' is not an arming event → skip duplicate CI (ci-gated status unchanged)"
               echo "run=false" >> "$GITHUB_OUTPUT"
@@ -126,6 +119,20 @@ runs:
             fi
             run_ci "PR armed (ready-to-merge) → run CI" ;;
         esac
+
+        # Fork PR in status mode: the read-only token makes the ci-gated POST
+        # below impossible (403 → this step fails → every guarded build step is
+        # skipped → red, untested). Run the build and post nothing; the
+        # unreported ci-gated context keeps the merge blocked. Status mode only:
+        # in fail mode the un-armed block IS a red check, so arming here would
+        # turn it green before review.
+        #
+        # Deliberately AFTER the armed case: when it ran before, an
+        # already-armed fork PR pre-empted the duplicate-run suppression and
+        # rebuilt on every relabel, where a same-repo PR was skipped (#113).
+        if [ "$MODE" = "status" ] && [ "$IS_FORK" = "true" ]; then
+          run_ci "fork PR ($PR_HEAD_REPO) → run CI, post no ci-gated status (fork tokens are read-only; the required context stays unreported, so the merge stays blocked)"
+        fi
 
         # Un-armed.
         echo "run=false" >> "$GITHUB_OUTPUT"
