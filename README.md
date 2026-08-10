@@ -32,6 +32,14 @@ red then only ever means a real failure). Status mode needs the stub to grant
 Status mode also suppresses the duplicate CI run a non-arming label would
 trigger on an already-armed PR (#12) — unsafe to suppress in fail mode, where
 a green skip would overwrite a legitimately red check on the same SHA.
+Fork PRs are the one case status mode cannot gate with a status at all: their
+`GITHUB_TOKEN` is capped read-only whatever the stub requests, so the
+`ci-gated` POST 403s. The gate arms CI for them and posts nothing, so the run
+shows a real pass/fail while the unreported `ci-gated` context keeps the merge
+blocked for a human — never green by accident. Bespoke-CI repos get the same
+rule from `arm-gate`, which publishes `is_fork` for their reporter step to
+guard on (`templates/ci-gradle.yml` shows the shape); a bespoke repo whose
+reporter predates that output still 403s at the reporter, after its tests run.
 Any review that surfaced findings — a `warn`/`fail` verdict, or a `pass`
 whose structured output still lists nits — also opens or updates a per-PR
 `auto-review-followup` issue holding every finding (linked from the verdict

@@ -35,6 +35,18 @@ description: >
   not — arms on the same `ready-to-merge` signal, and CI never runs ahead of a
   successful review.
 
+  Fork PRs (status mode): GitHub caps GITHUB_TOKEN to read-only for
+  `pull_request` runs from a fork, whatever the workflow's `permissions:` block
+  asks for, so the ci-gated POST is impossible — it 403s, this step fails, every
+  guarded build step is skipped, and the PR goes red without a single test
+  having run. On a fork the gate therefore sets `run=true` and posts nothing,
+  and sets output `is_fork=true`. Your reporter step MUST skip its POST when
+  `is_fork == 'true'` (see templates/ci-gradle.yml) or it will 403 in turn and
+  turn a legitimately green run red. Nothing posts `ci-gated` for a fork, so the
+  required context stays unreported and the merge stays blocked for a human —
+  fail-safe. Fail mode is deliberately untouched: there the un-armed block IS a
+  red check, and arming a fork would flip it green before review.
+
   Use as the FIRST step of any CI job whose check gates the merge, so no build
   runs until the PR is armed. This is the one shared, load-bearing piece of the
   fleet's deferred-merge gate; it lives here so the fix is defined once and
@@ -51,6 +63,12 @@ inputs:
     default: fail
 
 outputs:
+  is_fork:
+    description: >-
+      "true" when the PR head is on a fork, whose token is read-only. A
+      reporter step must skip its `ci-gated` POST when this is "true" — the
+      POST would 403 and fail an otherwise-green job.
+    value: ${{ steps.gate.outputs.is_fork }}
   run:
     description: >-
       "true" when real CI should run; "false" when the gate blocked (status
@@ -73,11 +91,28 @@ runs:
         HEAD_REF: ${{ github.event.pull_request.head.ref }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         REPO: ${{ github.repository }}
       run: |
         run_ci() { echo "$1"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
+
+        # Published unconditionally so a reporter can always read it.
+        IS_FORK=false
+        if [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$REPO" ]; then IS_FORK=true; fi
+        echo "is_fork=$IS_FORK" >> "$GITHUB_OUTPUT"
+
         if [ "$EVENT_NAME" != "pull_request" ]; then run_ci "non-PR event → run CI"; fi
         if [ "$USER_TYPE" != "User" ]; then run_ci "bot PR → run CI"; fi
+
+        # Fork PR in status mode: the read-only token makes the ci-gated POST
+        # below impossible (403 → this step fails → every guarded build step is
+        # skipped → red, untested). Run the build and post nothing; the
+        # unreported ci-gated context keeps the merge blocked. Status mode only:
+        # in fail mode the un-armed block IS a red check, so arming here would
+        # turn it green before review.
+        if [ "$MODE" = "status" ] && [ "$IS_FORK" = "true" ]; then
+          run_ci "fork PR ($HEAD_REPO) → run CI, post no ci-gated status (fork tokens are read-only; the required context stays unreported, so the merge stays blocked)"
+        fi
 
         case ",$LABELS," in
           *,ready-to-merge,*)

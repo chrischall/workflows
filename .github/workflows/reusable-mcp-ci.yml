@@ -38,6 +38,20 @@ name: Reusable node CI
 #   - bot PRs (dependabot): always (bots never get auto-review);
 #   - push events: always.
 #
+# Fork PRs (status mode only): GitHub caps `GITHUB_TOKEN` to read-only for
+# `pull_request` runs from a fork, whatever the stub's `permissions:` block
+# asks for. So the `ci-gated` POST is impossible: it 403s, the gate job fails,
+# `needs: gate` skips every build step, and the PR goes red without a single
+# test having run — a fork PR could never go green or show a real result. The
+# gate therefore arms CI for fork PRs and posts NOTHING: `ci / ci` carries the
+# real pass/fail, and `ci-gated` is simply never reported, so the required
+# context stays unsatisfied and the merge stays blocked for a human to decide.
+# Fail-safe: the fork path can only ever leave the gate closed. Status mode
+# only — in fail mode an un-armed PR is blocked by a RED `ci / ci`, so arming a
+# fork there would flip that block green before review. (GitHub separately
+# holds fork runs at `action_required` until a maintainer approves them, so
+# this never executes unreviewed code.)
+#
 # Duplicate-run suppression (status mode only): a `labeled` event for a
 # NON-arming label on an already-armed PR skips the build — the head SHA's
 # `ci-gated` status is already set and is left untouched. This is only safe in
@@ -93,12 +107,23 @@ jobs:
           USER_TYPE: ${{ github.event.pull_request.user.type }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
           REPO: ${{ github.repository }}
         run: |
           run_ci() { echo "$1"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
           if [ "$EVENT_NAME" != "pull_request" ]; then run_ci "non-PR event → run CI"; fi
           if [ "$USER_TYPE" != "User" ]; then run_ci "bot PR → run CI"; fi
+
+          # Fork PR in status mode: a read-only token makes the ci-gated POST
+          # below impossible (403 → this job fails → every build step is
+          # skipped → red, untested). Run the build and post nothing instead;
+          # the unreported ci-gated context keeps the merge blocked. See the
+          # header block. Status mode only: in fail mode the un-armed block IS
+          # a red `ci / ci`, and arming here would turn it green.
+          if [ "$MODE" = "status" ] && [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$REPO" ]; then
+            run_ci "fork PR ($HEAD_REPO) → run CI, post no ci-gated status (fork tokens are read-only; the required context stays unreported, so the merge stays blocked)"
+          fi
 
           case ",$LABELS," in
             *,ready-to-merge,*)
@@ -204,8 +229,16 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           GATE_RESULT: ${{ needs.gate.result }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPO: ${{ github.repository }}
         run: |
+          # Fork PR: read-only token, so this POST would 403 and turn a
+          # legitimately green run red. The gate deliberately posted nothing
+          # either, so ci-gated stays unreported and the merge stays blocked.
+          if [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "fork PR ($HEAD_REPO) → not posting ci-gated (read-only token). The 'ci / ci' result above is the real one; the required ci-gated context stays unreported, so the merge stays blocked until a maintainer acts."
+            exit 0
+          fi
           # GATE_RESULT first: when the gate job failed, every build step here
           # was skipped, so this job's own status is `success` and would
           # otherwise report a CI pass that never ran.
