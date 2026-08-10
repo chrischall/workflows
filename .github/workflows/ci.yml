@@ -30,6 +30,14 @@ jobs:
         # structure — a skill-path pin outside `with:` parses perfectly and
         # still breaks the release.
         run: ruby scripts/validate-render.rb
+      - name: arm-gate unit tests
+        # The gate is the fleet's merge interlock, and it is bash inside YAML —
+        # invisible to actionlint beyond syntax. These extract the shipped
+        # `Arm gate` / `Report ci-gated status` scripts, stub `gh`, and assert
+        # the whole run/post matrix, including the fork rows where a read-only
+        # token means the status can never be posted.
+        run: bash scripts/gate.test.sh
+
       - name: rollout.sh unit tests
         # --check is what the daily drift sweep runs, and its failure mode is
         # silent under-reporting rather than a crash — nothing downstream would
