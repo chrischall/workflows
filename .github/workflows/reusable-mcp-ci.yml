@@ -107,7 +107,7 @@ jobs:
           USER_TYPE: ${{ github.event.pull_request.user.type }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
           REPO: ${{ github.repository }}
         run: |
@@ -121,8 +121,8 @@ jobs:
           # the unreported ci-gated context keeps the merge blocked. See the
           # header block. Status mode only: in fail mode the un-armed block IS
           # a red `ci / ci`, and arming here would turn it green.
-          if [ "$MODE" = "status" ] && [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$REPO" ]; then
-            run_ci "fork PR ($HEAD_REPO) → run CI, post no ci-gated status (fork tokens are read-only; the required context stays unreported, so the merge stays blocked)"
+          if [ "$MODE" = "status" ] && [ -n "$PR_HEAD_REPO" ] && [ "$PR_HEAD_REPO" != "$REPO" ]; then
+            run_ci "fork PR ($PR_HEAD_REPO) → run CI, post no ci-gated status (fork tokens are read-only; the required context stays unreported, so the merge stays blocked)"
           fi
 
           case ",$LABELS," in
@@ -229,14 +229,14 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           GATE_RESULT: ${{ needs.gate.result }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPO: ${{ github.repository }}
         run: |
           # Fork PR: read-only token, so this POST would 403 and turn a
           # legitimately green run red. The gate deliberately posted nothing
           # either, so ci-gated stays unreported and the merge stays blocked.
-          if [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$REPO" ]; then
-            echo "fork PR ($HEAD_REPO) → not posting ci-gated (read-only token). The 'ci / ci' result above is the real one; the required ci-gated context stays unreported, so the merge stays blocked until a maintainer acts."
+          if [ -n "$PR_HEAD_REPO" ] && [ "$PR_HEAD_REPO" != "$REPO" ]; then
+            echo "fork PR ($PR_HEAD_REPO) → not posting ci-gated (read-only token). The 'ci / ci' result above is the real one; the required ci-gated context stays unreported, so the merge stays blocked until a maintainer acts."
             exit 0
           fi
           # GATE_RESULT first: when the gate job failed, every build step here

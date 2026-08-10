@@ -78,7 +78,7 @@ gate_case() {
   # Baseline: same-repo, un-armed, human PR, status mode.
   export GH_TOKEN=x MODE=status EVENT_NAME=pull_request EVENT_ACTION=synchronize \
          EVENT_LABEL="" USER_TYPE=User HEAD_REF=feature HEAD_SHA=deadbeef \
-         HEAD_REPO="$BASE" LABELS="" REPO="$BASE"
+         PR_HEAD_REPO="$BASE" LABELS="" REPO="$BASE"
   local kv; for kv in "$@"; do export "${kv?}"; done
 
   bash "$GATE_SCRIPT" >"$dir/log" 2>&1
@@ -100,7 +100,7 @@ report_case() {
   local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
   export GH_CALLS="$dir/gh"; : > "$GH_CALLS"
   export GH_TOKEN=x JOB_STATUS=success GATE_RESULT=success HEAD_SHA=deadbeef \
-         HEAD_REPO="$BASE" REPO="$BASE"
+         PR_HEAD_REPO="$BASE" REPO="$BASE"
   local kv; for kv in "$@"; do export "${kv?}"; done
 
   bash "$TMP/report.sh" >"$dir/log" 2>&1
@@ -121,32 +121,32 @@ gate_case "armed + non-arming label → no duplicate"  false none    LABELS=read
 gate_case "armed + ready-to-merge label → run"       true  none    LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=ready-to-merge
 gate_case "bot PR → always run"                      true  none    USER_TYPE=Bot
 gate_case "release-please un-armed → pending"        false pending HEAD_REF=release-please--branches--main
-gate_case "push event → run"                         true  none    EVENT_NAME=push HEAD_REPO=""
+gate_case "push event → run"                         true  none    EVENT_NAME=push PR_HEAD_REPO=""
 
 echo "── Arm gate, fork PRs (status mode) ──"
 # A fork's token is read-only, so the pending POST is impossible. Run the build
 # so `ci / ci` carries a real result, and post nothing: the unreported ci-gated
 # context is what keeps the merge blocked.
-gate_case "fork un-armed → run, post nothing"        true  none    HEAD_REPO=someone/example-mcp
-gate_case "fork armed → run, post nothing"           true  none    HEAD_REPO=someone/example-mcp LABELS=ready-to-merge
-gate_case "fork with release-please-shaped ref"      true  none    HEAD_REPO=someone/example-mcp HEAD_REF=release-please--x
+gate_case "fork un-armed → run, post nothing"        true  none    PR_HEAD_REPO=someone/example-mcp
+gate_case "fork armed → run, post nothing"           true  none    PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge
+gate_case "fork with release-please-shaped ref"      true  none    PR_HEAD_REPO=someone/example-mcp HEAD_REF=release-please--x
 
 echo "── Arm gate, fail mode (legacy — must be untouched by the fork path) ──"
 # In fail mode the un-armed block IS a red `ci / ci`. Arming a fork here would
 # turn that block green before review, so the fork short-circuit must not apply.
 gate_case "same-repo un-armed → no run, no post"     false none    MODE=fail
 gate_case "same-repo armed → run"                    true  none    MODE=fail LABELS=ready-to-merge
-gate_case "fork un-armed → still blocked red"        false none    MODE=fail HEAD_REPO=someone/example-mcp
-gate_case "fork armed → run"                         true  none    MODE=fail HEAD_REPO=someone/example-mcp LABELS=ready-to-merge
+gate_case "fork un-armed → still blocked red"        false none    MODE=fail PR_HEAD_REPO=someone/example-mcp
+gate_case "fork armed → run"                         true  none    MODE=fail PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge
 
 echo "── arm-gate composite (same rule, bespoke-CI repos) ──"
 GATE_SCRIPT="$TMP/armgate.sh"
 gate_case "same-repo un-armed → blocked by pending"  false pending
 gate_case "same-repo armed → run"                    true  none    LABELS=ready-to-merge
 gate_case "bot PR → always run"                      true  none    USER_TYPE=Bot
-gate_case "fork un-armed → run, post nothing"        true  none    HEAD_REPO=someone/example
-gate_case "fork armed → run, post nothing"           true  none    HEAD_REPO=someone/example LABELS=ready-to-merge
-gate_case "fail mode: fork un-armed stays blocked"   false none    MODE=fail HEAD_REPO=someone/example
+gate_case "fork un-armed → run, post nothing"        true  none    PR_HEAD_REPO=someone/example
+gate_case "fork armed → run, post nothing"           true  none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge
+gate_case "fail mode: fork un-armed stays blocked"   false none    MODE=fail PR_HEAD_REPO=someone/example
 
 # The composite's contract with a consumer's reporter step: `is_fork` must be
 # published on EVERY path, or a reporter guarding on it 403s on a fork.
@@ -156,7 +156,7 @@ armgate_is_fork() {
   export GITHUB_OUTPUT="$dir/out" GH_CALLS="$dir/gh"; : > "$GITHUB_OUTPUT"; : > "$GH_CALLS"
   export GH_TOKEN=x MODE=status EVENT_NAME=pull_request EVENT_ACTION=synchronize \
          EVENT_LABEL="" USER_TYPE=User HEAD_REF=feature HEAD_SHA=deadbeef \
-         HEAD_REPO="$BASE" LABELS="" REPO="$BASE"
+         PR_HEAD_REPO="$BASE" LABELS="" REPO="$BASE"
   local kv; for kv in "$@"; do export "${kv?}"; done
   bash "$TMP/armgate.sh" >"$dir/log" 2>&1
   local got; got="$(grep -oE 'is_fork=(true|false)' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)"
@@ -167,17 +167,17 @@ armgate_is_fork() {
 armgate_is_fork "same-repo un-armed"  false
 armgate_is_fork "same-repo armed"     false LABELS=ready-to-merge
 armgate_is_fork "bot PR"              false USER_TYPE=Bot
-armgate_is_fork "push event"          false EVENT_NAME=push HEAD_REPO=""
-armgate_is_fork "fork"                true  HEAD_REPO=someone/example
-armgate_is_fork "fork in fail mode"   true  MODE=fail HEAD_REPO=someone/example
+armgate_is_fork "push event"          false EVENT_NAME=push PR_HEAD_REPO=""
+armgate_is_fork "fork"                true  PR_HEAD_REPO=someone/example
+armgate_is_fork "fork in fail mode"   true  MODE=fail PR_HEAD_REPO=someone/example
 
 echo "── Report ci-gated status ──"
 report_case "same-repo tests passed → success"       success
 report_case "same-repo tests failed → failure"       failure JOB_STATUS=failure
 report_case "gate job errored → failure, not success" failure GATE_RESULT=failure JOB_STATUS=success
-report_case "fork passed → post nothing"             none    HEAD_REPO=someone/example-mcp
-report_case "fork failed → post nothing"             none    HEAD_REPO=someone/example-mcp JOB_STATUS=failure
-report_case "fork + gate errored → post nothing"     none    HEAD_REPO=someone/example-mcp GATE_RESULT=failure
+report_case "fork passed → post nothing"             none    PR_HEAD_REPO=someone/example-mcp
+report_case "fork failed → post nothing"             none    PR_HEAD_REPO=someone/example-mcp JOB_STATUS=failure
+report_case "fork + gate errored → post nothing"     none    PR_HEAD_REPO=someone/example-mcp GATE_RESULT=failure
 
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
