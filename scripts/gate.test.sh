@@ -145,14 +145,26 @@ gate_case "fork un-armed → still blocked red"        false none    MODE=fail P
 gate_case "fork armed → run"                         true  none    MODE=fail PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge
 
 echo "── arm-gate composite (same rule, bespoke-CI repos) ──"
+# Row-for-row the same matrix as the reusable workflow above. Keep them in
+# lockstep: a row that exists on only one side is exactly how the two drifted
+# apart before, and a divergence here is invisible until it wedges a repo.
 GATE_SCRIPT="$TMP/armgate.sh"
 gate_case "same-repo un-armed → blocked by pending"  false pending
 gate_case "same-repo armed → run"                    true  none    LABELS=ready-to-merge
+gate_case "armed + non-arming label → no duplicate"  false none    LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=documentation
+gate_case "armed + ready-to-merge label → run"       true  none    LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=ready-to-merge
 gate_case "bot PR → always run"                      true  none    USER_TYPE=Bot
+gate_case "release-please un-armed → pending"        false pending HEAD_REF=release-please--branches--main
+gate_case "push event → run"                         true  none    EVENT_NAME=push PR_HEAD_REPO=""
 gate_case "fork un-armed → run, post nothing"        true  none    PR_HEAD_REPO=someone/example
 gate_case "fork armed → run, post nothing"           true  none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge
-gate_case "fail mode: fork un-armed stays blocked"   false none    MODE=fail PR_HEAD_REPO=someone/example
+gate_case "fork with release-please-shaped ref"      true  none    PR_HEAD_REPO=someone/example HEAD_REF=release-please--x
 gate_case "fork armed + non-arming label → no dup"   false none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=documentation
+gate_case "fork armed + ready-to-merge label → run"  true  none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=ready-to-merge
+gate_case "fail mode: same-repo un-armed → no run"   false none    MODE=fail
+gate_case "fail mode: same-repo armed → run"         true  none    MODE=fail LABELS=ready-to-merge
+gate_case "fail mode: fork un-armed stays blocked"   false none    MODE=fail PR_HEAD_REPO=someone/example
+gate_case "fail mode: fork armed → run"              true  none    MODE=fail PR_HEAD_REPO=someone/example LABELS=ready-to-merge
 
 # The composite's contract with a consumer's reporter step: `is_fork` must be
 # published on EVERY path, or a reporter guarding on it 403s on a fork.
