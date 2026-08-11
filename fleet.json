@@ -293,7 +293,8 @@
       "repo": "chrischall/maxpreps-mcp"
     },
     {
-      "repo": "chrischall/thumbtack-mcp"
+      "repo": "chrischall/thumbtack-mcp",
+      "test_command": "npm run test:coverage"
     },
     {
       "repo": "chrischall/angi-mcp"
