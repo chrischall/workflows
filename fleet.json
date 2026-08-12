@@ -15,6 +15,10 @@
   },
   "repos": [
     {
+      "repo": "chrischall/freshbooks-mcp",
+      "skill_path": "skills/freshbooks-curl/SKILL.md"
+    },
+    {
       "repo": "chrischall/jobber-mcp",
       "skill_path": "skills/jobber-fpx/SKILL.md",
       "test_command": "npm run test:coverage"
