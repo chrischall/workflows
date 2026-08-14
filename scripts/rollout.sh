@@ -189,13 +189,19 @@ if [ "$EXECUTE" = "--check" ]; then
       # code still says 1, so the report looks complete while hiding the rest
       # (issue #104).
       #
-      # `sed -n '1,20p'` rather than `| head -20`, because head EXITS at 20
-      # lines: on a long diff everything upstream is then writing into a closed
-      # pipe, and a bash builtin `printf` in a process substitution can report
-      # that as `printf: write error: Broken pipe` on stderr — landing mid
-      # report, between a DRIFT header and its own diff body, which is where it
-      # corrupts the text pasted into the drift issue. sed consumes the whole
-      # stream and prints the first 20, so the cap costs a full read instead.
+      # One `sed -n '1,20{s/^/    /;p;}'` rather than `sed 's/^/    /' | head
+      # -20`: it does BOTH jobs the old pipeline split across two stages —
+      # indent every reported line by four spaces, and cap the body at 20 — in
+      # a single pass that reads to EOF.
+      #
+      # The cap is the part that matters. `head` EXITS at 20 lines, so on a
+      # long diff everything upstream is left writing into a closed pipe, and a
+      # bash builtin `printf` in a process substitution can report that as
+      # `printf: write error: Broken pipe` on stderr — landing mid report,
+      # between a DRIFT header and its own diff body, which is where it
+      # corrupts the text pasted into the drift issue. A range-limited sed
+      # consumes the whole stream and prints only the first 20, so the cap
+      # costs a full read instead of abandoning a writer.
       #
       # This was observed once on CI and never reproduced locally (tried across
       # bash 3.2/5.3, BSD and GNU diff, up to 200k-line inputs) — it is a race
