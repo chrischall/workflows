@@ -38,6 +38,15 @@ jobs:
         # token means the status can never be posted.
         run: bash scripts/gate.test.sh
 
+      - name: fleet drift sweep unit tests
+        # The daily sweep is bash inside YAML, and every way it can be wrong is
+        # quiet: it reports coverage in prose that nothing downstream reads.
+        # These extract the shipped step, stub gh/rollout.sh, and pin the
+        # exit-code matrix — including the #122 rows where a repo with no
+        # usable credential must make the run red instead of warning into a
+        # green log.
+        run: bash scripts/fleet-drift.test.sh
+
       - name: rollout.sh unit tests
         # --check is what the daily drift sweep runs, and its failure mode is
         # silent under-reporting rather than a crash — nothing downstream would

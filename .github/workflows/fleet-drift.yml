@@ -9,10 +9,19 @@ name: Fleet drift check
 # not during the next sweep.
 #
 # On drift: opens or updates ONE marker-tagged issue with per-repo diffs and
-# fails the run. On a fully clean sweep: closes that issue. Repos that could
-# not be checked (API errors, exit 2) are warned about and listed, but do not
-# fail the run on their own — and they block the clean-sweep issue close, so
-# an auth outage can't masquerade as "no drift".
+# fails the run (exit 1). On a fully clean sweep: closes that issue.
+#
+# A repo that could not be checked never counts as clean — it blocks the issue
+# close, so an outage can't masquerade as "no drift" — and the two ways that
+# happens are not the same failure:
+#
+#   transient (API error, --check exit 2) -> ::warning::, run stays green
+#   permanent (no pat_secret on THIS repo) -> ::error::, run fails, exit 3
+#
+# The second is issue #122: a missing secret is a coverage hole that waits on a
+# human, and as a warning on a green run it hid 8 of the fleet's repos from
+# every daily sweep for months. Exit 3 rather than 1 keeps "the fleet drifted"
+# distinguishable from "the sweep could not see the fleet".
 
 on:
   schedule:
@@ -45,21 +54,22 @@ jobs:
           # distinct pat_secret value must also exist as a secret on THIS repo;
           # env keys below are named to match so bash indirection can pick one
           # per repo. A repo whose named secret is missing is skipped into the
-          # unchecked bucket — never probed with the wrong token, whose 404s on
-          # private repos would read back as MISSING, i.e. false drift.
+          # unconfigured bucket and fails the run — never probed with the wrong
+          # token, whose 404s on private repos would read back as MISSING, i.e.
+          # false drift.
           RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
           NULLNET_RELEASE_PAT: ${{ secrets.NULLNET_RELEASE_PAT }}
           # The marker-issue bookkeeping below targets this repo only.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          drifted=(); unknown=(); ok=0
+          drifted=(); unconfigured=(); unknown=(); ok=0
           : > /tmp/drift-details.md
           for repo in $(jq -r '.repos[].repo' fleet.json); do
             secret_name=$(jq -r --arg r "$repo" \
               '(.repos[] | select(.repo == $r) | .pat_secret) // .defaults.pat_secret' fleet.json)
             token="${!secret_name:-}"
             if [ -z "$token" ]; then
-              unknown+=("$repo")
+              unconfigured+=("$repo")
               echo "::warning::skipping $repo — its pat_secret (${secret_name}) is not configured as a secret on $GITHUB_REPOSITORY"
               continue
             fi
@@ -84,8 +94,16 @@ jobs:
 
           {
             echo "## Fleet drift check"
-            echo "OK: $ok · drifted: ${#drifted[@]} · unchecked: ${#unknown[@]}"
+            echo "OK: $ok · drifted: ${#drifted[@]} · unconfigured: ${#unconfigured[@]} · unchecked: ${#unknown[@]}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # Loud on every path, including the drift path below (which exits
+          # first): a repo with no usable credential here has never been swept
+          # at all, and that is worth more than a warning nobody opens a green
+          # run to read.
+          if [ "${#unconfigured[@]}" -gt 0 ]; then
+            echo "::error::${#unconfigured[@]} repo(s) can never be checked — their pat_secret is not configured as a secret on $GITHUB_REPOSITORY: ${unconfigured[*]}"
+          fi
 
           MARKER="<!-- fleet-drift-report -->"
           EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" --paginate \
@@ -101,8 +119,12 @@ jobs:
               echo "For each repo, either the stub was hand-edited (record the real values in fleet.json) or a template/fleet.json change was never rolled out (sync with \`scripts/rollout.sh <repo> --execute --only <stub>\`). Do **not** blind-regenerate all stubs: that reverts hand-edits (issue #76)."
               echo
               cat /tmp/drift-details.md
+              if [ "${#unconfigured[@]}" -gt 0 ]; then
+                echo "Never checked — no pat_secret for them on this repo, so they are absent from every sweep, not clean: ${unconfigured[*]}"
+                echo
+              fi
               if [ "${#unknown[@]}" -gt 0 ]; then
-                echo "Could not check (API error or missing PAT secret — see the run's warnings; not drift): ${unknown[*]}"
+                echo "Could not check this run (API error — see the run's warnings; not drift): ${unknown[*]}"
               fi
             } > /tmp/issue-full.md
             # Issue bodies cap at 65536 chars; keep headroom for the marker to
@@ -124,10 +146,17 @@ jobs:
             exit 1
           fi
 
+          if [ "${#unconfigured[@]}" -gt 0 ]; then
+            # Nothing drifted in what could be reached, but part of the fleet
+            # is structurally invisible to this check. Red, and no issue close.
+            echo "No drift in the ${ok} repos checked; ${#unconfigured[@]} never checked, ${#unknown[@]} unchecked this run."
+            exit 3
+          fi
+
           if [ "${#unknown[@]}" -gt 0 ]; then
             # No observed drift, but the sweep was partial — leave any open
             # drift issue alone rather than declaring the fleet clean.
-            echo "No drift in the ${ok} repos checked; ${#unknown[@]} unchecked."
+            echo "No drift in the ${ok} repos checked; ${#unknown[@]} unchecked this run."
             exit 0
           fi
 
