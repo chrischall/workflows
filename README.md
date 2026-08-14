@@ -70,6 +70,22 @@ review is triggered by adding `release-ready` (not on open): `release-ready`
 starts the review, the review's `pass`/`warn` adds `ready-to-merge`, and only
 then does deferred CI run — so CI never runs ahead of a successful review.
 
+A verdict is bound to the commit it reviewed, which is why
+`rereview_on_push` exists. Once a PR is armed, a force-push replaces the code
+but not the standing verdict or the arming label, so the PR can merge on a
+review describing code it no longer contains — that is how
+`opencode-copilot-plugin#7` merged. Setting the input re-runs the review on
+`synchronize`, at the cost of a review per push.
+
+It is opt-in per repo, off by default, and recorded in `fleet.json` as
+`"rereview_on_push": "true"` rather than hand-edited into a stub — a hand-edit
+there is silently reverted by the next `rollout.sh --execute` (issue #76).
+`rollout.sh` drops the line entirely when the value is empty, so repos that do
+not opt in render byte-identical stubs; a bare `rereview_on_push:` would pass
+an explicit null where the caller means unset. Currently one repo carries it,
+as the canary for #126 — flipping the default would change review behaviour in
+every repo at once, which is a separate decision from having the input.
+
 `mcp-publish` is a composite action (not a reusable workflow) on purpose:
 npm trusted publishing and mcp-publisher validate the OIDC token's workflow
 identity, which must remain the consuming repo's own `release-please.yml`.
