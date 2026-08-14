@@ -26,7 +26,11 @@ name: Reusable PR auto-review
 #
 # Bot PRs (dependabot etc.) skip review entirely (user.type filter) and go
 # straight to CI + auto-merge. PRs already labeled `ready-to-merge` skip
-# re-review. Release-please PRs review only once `release-ready` is added — and
+# re-review. That is a trap when the PR is then force-pushed: the standing
+# verdict describes code no longer in the PR, and auto-merge ships the new diff
+# on the old approval. Set `rereview_on_push: true` to close it — such a run
+# de-arms the PR first and re-reviews, so the arming label always corresponds to
+# the diff that was actually reviewed. Release-please PRs review only once `release-ready` is added — and
 # their CI stays deferred until that review passes and arms `ready-to-merge`,
 # exactly like a human PR (`release-ready` triggers the review, it does not arm
 # CI on its own).
@@ -41,6 +45,17 @@ on:
         type: string
         required: false
         default: ""
+      rereview_on_push:
+        description: >-
+          Re-review a PR that already carries `ready-to-merge` when new commits
+          are pushed to it, de-arming it until the new verdict lands. Off by
+          default: it only ADDS review runs, but it also delays merges (an armed
+          PR stops being armed until re-reviewed), and release-please PRs are
+          force-pushed whenever main moves. Opt in per repo, confirm, then
+          consider flipping the default.
+        type: boolean
+        required: false
+        default: false
     secrets:
       claude_code_oauth_token:
         description: OAuth token from `claude setup-token` (Max plan quota)
@@ -63,9 +78,23 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       (!startsWith(github.event.pull_request.head.ref, 'release-please--') || contains(github.event.pull_request.labels.*.name, 'release-ready')) &&
       (!contains(github.event.pull_request.labels.*.name, 'autorelease: pending') || contains(github.event.pull_request.labels.*.name, 'release-ready')) &&
-      !contains(github.event.pull_request.labels.*.name, 'ready-to-merge') &&
+      (!contains(github.event.pull_request.labels.*.name, 'ready-to-merge') || (inputs.rereview_on_push && github.event.action == 'synchronize')) &&
       (github.event.action != 'labeled' || github.event.label.name == 'review-with-opus' || github.event.label.name == 'release-ready')
     steps:
+      # A push to an ALREADY-ARMED PR must not keep the old verdict: the arming
+      # label was granted for a diff that no longer exists, and auto-merge will
+      # happily ship the new one. De-arm first; the verdict step re-adds the
+      # label if this diff also passes.
+      - name: De-arm on new commits
+        if: ${{ inputs.rereview_on_push && github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ready-to-merge') }}
+        env:
+          GH_TOKEN: ${{ secrets.release_pat || secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh pr edit "$PR" --repo "$REPO" --remove-label ready-to-merge
+          echo "New commits pushed to an armed PR — removed ready-to-merge pending re-review."
+
       - name: Apply auto-review label
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

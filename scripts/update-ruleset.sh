@@ -18,6 +18,23 @@ REPO="${1:?usage: update-ruleset.sh <owner/repo> [<new-context>] [--execute]}"
 NEW_CONTEXT="${2:-ci / ci}"
 EXECUTE="${3:-}"
 
+# Auto-merge must be ALLOWED on the repo, or the whole pipeline stalls at the
+# last step: arm-gate posts ci-gated, the review adds ready-to-merge, and then
+# `gh pr merge --auto` fails with
+#   GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)
+# The PR just sits there looking mergeable. `gh repo create` leaves this OFF, so
+# every new fleet repo needs it set once — checked here because this is already
+# the "make merging work" script.
+AUTO_MERGE=$(gh api "repos/$REPO" --jq '.allow_auto_merge')
+if [ "$AUTO_MERGE" = "true" ]; then
+  echo "$REPO already allows auto-merge."
+elif [ "$EXECUTE" = "--execute" ]; then
+  gh api -X PATCH "repos/$REPO" -F allow_auto_merge=true >/dev/null
+  echo "$REPO: enabled allow_auto_merge."
+else
+  echo "$REPO does NOT allow auto-merge — the pipeline will arm PRs that never merge. Re-run with --execute to enable. (dry run)"
+fi
+
 # The list endpoint omits rules; find the branch ruleset that actually
 # carries a required_status_checks rule (repos also have a separate
 # force-push/deletion ruleset).
@@ -59,3 +76,4 @@ else
     ]}' | gh api -X POST "repos/$REPO/rulesets" --input - >/dev/null
   echo "Created."
 fi
+
