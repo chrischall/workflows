@@ -88,6 +88,21 @@ entries.each do |repo, entry|
         got  = doc.dig('jobs', 'ci', 'with', 'test-command').to_s
         failures << "#{repo}/#{name}: test-command #{got.inspect} != fleet.json #{want.inspect}" unless got == want
 
+      when 'pr-auto-review.yml'
+        want = cfg(entry, defaults, 'rereview_on_push')
+        got  = doc.dig('jobs', 'review', 'with', 'rereview_on_push')
+        if want.empty?
+          # Assert on the SOURCE, not just the parsed doc. A bare
+          # `rereview_on_push:` left behind by a broken drop-line rule parses
+          # to nil, so a `got.nil?` check alone would pass while every repo
+          # shipped a line meaning "explicitly null" instead of "unset".
+          if src =~ /^\s*rereview_on_push:/
+            failures << "#{repo}/#{name}: renders a rereview_on_push line but fleet.json records none"
+          end
+        elsif got.to_s != want
+          failures << "#{repo}/#{name}: rereview_on_push #{got.inspect} != fleet.json #{want.inspect} (must sit inside the review job's with:)"
+        end
+
       when 'claude.yml'
         uses = doc.dig('jobs', 'claude', 'uses').to_s
         unless uses.include?('reusable-claude.yml')

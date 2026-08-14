@@ -7,6 +7,7 @@
     "test_command": "npm test",
     "release": "mcp",
     "conventions_hint": "",
+    "rereview_on_push": "",
     "skill_path": "",
     "lockfix": "",
     "java_version": "21",
@@ -115,6 +116,7 @@
       "repo": "chrischall/opencode-copilot-plugin",
       "ci": "custom",
       "release": "custom",
+      "rereview_on_push": "true",
       "conventions_hint": "Reverse-engineered protocol client: AGENTS.md is the source of truth for why logic lives in the proxy rather than in opencode hooks — a change moving trimming back into an opencode hook needs evidence that hook now works. Prompt text in fenced.ts/plugin.ts must stay soft: no fake role turns, no shouted absolutes (M365's Disengaged filter tracks prompt shape). Never add code that deletes a Copilot Studio agent. Tests must never require network, credentials, or live M365. Access tokens must never be logged or echoed in an error."
     },
     {

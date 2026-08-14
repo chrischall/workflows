@@ -85,6 +85,7 @@ render() { # render <template> <dest>
       -e "s|__CONVENTIONS_HINT__|$(sed_escape "$HINT")|g" \
       -e "s|__SKILL_PATH__|$(sed_escape "$SKILL_PATH")|g" \
       -e "s|__FLY_DIR__|$(sed_escape "$FLY_DIR")|g" \
+      -e "s|__REREVIEW_ON_PUSH__|$(sed_escape "$REREVIEW_ON_PUSH")|g" \
       "$HERE/templates/$1" > "$2"
   # An unset skill_path renders `skill-path:` with no value. That is harmless
   # (the action treats unset and empty identically) but it is a meaningless
@@ -92,7 +93,14 @@ render() { # render <template> <dest>
   # rather than by making the placeholder occupy its own line: a line-position
   # placeholder lands at column 0 in the template, which is precisely the break
   # that took out two repos' release workflows.
-  sed -i.bak '/^[[:space:]]*skill-path:[[:space:]]*$/d' "$2" && rm -f "$2.bak"
+  #
+  # rereview_on_push is the same shape and has to behave the same way, for a
+  # sharper reason: the reusable workflow defaults it to false, so a bare
+  # `rereview_on_push:` passes an explicit null where the caller means "unset".
+  # Dropping the line is what keeps the other 70 repos rendering byte-identical
+  # stubs while one canary carries the opt-in.
+  sed -i.bak -e '/^[[:space:]]*skill-path:[[:space:]]*$/d' \
+             -e '/^[[:space:]]*rereview_on_push:[[:space:]]*$/d' "$2" && rm -f "$2.bak"
 }
 
 # Repos that pin a skill MUST record it here — regenerating without it silently
@@ -103,6 +111,7 @@ render() { # render <template> <dest>
 # and empty identically), and a line-position placeholder lands at column 0,
 # which breaks the template-parse check in CI.
 SKILL_PATH="$(cfg skill_path)"
+REREVIEW_ON_PUSH="$(cfg rereview_on_push)"
 
 STAGE="$WORK/stage"; mkdir -p "$STAGE"
 render pr-auto-review.yml "$STAGE/pr-auto-review.yml"
