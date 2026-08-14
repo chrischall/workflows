@@ -71,10 +71,24 @@ fixtures() { # fixtures <case> -> fresh copy of the canonical stubs, echoes dir
   printf '%s' "$dir"
 }
 
-run_check() { # run_check <fixture-dir> -> writes $OUT, sets $CODE
-  OUT="$TMP/out.txt"
-  GH_FIXTURES="$1" bash "$ROLLOUT" FAKE/x --check > "$OUT" 2>&1
+run_check() { # run_check <fixture-dir> -> writes $OUT and $ERR, sets $CODE
+  # stdout and stderr are captured SEPARATELY on purpose. The report is stdout;
+  # stderr is diagnostics. Merging them let a stray diagnostic land in the
+  # middle of the report — which is exactly how the EPIPE bug below hid, since
+  # every assertion here still matched with a broken-pipe line wedged between a
+  # DRIFT header and its diff body.
+  OUT="$TMP/out.txt"; ERR="$TMP/err.txt"
+  GH_FIXTURES="$1" bash "$ROLLOUT" FAKE/x --check > "$OUT" 2> "$ERR"
   CODE=$?
+}
+
+# --check talks to the network and reports what it found; anything on stderr is
+# a bug in the script itself, and it corrupts the body pasted into the drift
+# issue. Asserting emptiness is what catches a SIGPIPE/EPIPE regression: the
+# stdout assertions alone all passed while the report was being polluted.
+assert_clean_stderr() { # assert_clean_stderr <case>
+  if [ ! -s "$ERR" ]; then ok "$1: nothing written to stderr"
+  else bad "$1: expected clean stderr" "$(sed 's/^/       /' "$ERR")"; fi
 }
 
 assert_has() { # assert_has <test> <needle>
@@ -105,6 +119,7 @@ assert_has  A "DRIFT    FAKE/x/release-please.yml"
 # stops printing it ships green through the CI step this suite backs.
 assert_has  A "# hand-edited: ci"
 assert_code A 1
+assert_clean_stderr A
 
 # --- B: drift does not hide a MISSING stub later in the set ----------------
 DIR=$(fixtures b)
@@ -124,32 +139,39 @@ assert_code  C 0
 
 # --- D: a non-404 API failure is "unknown" (exit 2), not "missing" ---------
 DIR=$(fixtures d)
-OUT="$TMP/out.txt"
-GH_FIXTURES="$DIR" GH_FAIL_MODE=500 bash "$ROLLOUT" FAKE/x --check > "$OUT" 2>&1
+OUT="$TMP/out.txt"; ERR="$TMP/err.txt"
+GH_FIXTURES="$DIR" GH_FAIL_MODE=500 bash "$ROLLOUT" FAKE/x --check > "$OUT" 2> "$ERR"
 CODE=$?
 assert_has   D "ERROR    FAKE/x/"
 assert_lacks D "MISSING"
 assert_code  D 2
+# The stub's 500 goes to rollout.sh's own gh.err buffer and comes back on
+# stdout as `ERROR`; an API failure is reported, never leaked raw.
+assert_clean_stderr D
 
 # --- E: a diff LONGER than the pipe buffer still reports every later stub ----
 # Case A covers the `diff` half of rollout.sh's `|| true`: diff exits 1 on any
 # difference, so a 2-line edit is enough to catch a regression that drops it.
-# It cannot catch the OTHER half. `head -20` exits after 20 lines and `sed`
-# keeps writing into a closed pipe, so a half-fix that neutralises only diff's
-# exit status (`{ diff ... || true; } | sed ... | head -20`) still dies of
-# SIGPIPE mid-loop and silently under-reports every stub after this one.
-# (Note the braces must enclose the `|| true`: `{ diff ...; } || true | sed ...`
-# parses as `{ diff ...; } || (true | sed ...)` and is a different bug.)
+# It cannot catch the OTHER half — a reader that stops early while something
+# upstream is still writing, which costs either the rest of the loop or the
+# integrity of the report.
 #
-# SIGPIPE needs sed to still be WRITING when head exits — i.e. enough output to
-# outlast the pipe buffer, not merely more than the 20-line cap. macOS sizes
-# that buffer up to 64KB, so a "21 line" fixture proves nothing: it truncates
-# without ever signalling. Measured against the half-fix above, 21 / 50 / 200
-# filler lines all leave the suite GREEN on a broken script; it only starts
-# failing around 1000. The 5000 lines below are what `sed` actually writes:
-# 160KB of filler, ~190KB once diff framing and the 4-space prefix are added —
-# roughly 5x the observed trigger point, and the whole point of this case.
+# rollout.sh now has no such reader: the comparison is a string test rather
+# than `diff -q`, and the 20-line cap is `sed -n '1,20p'` (consumes the stream)
+# rather than `| head -20` (exits at 20). This case is the regression test for
+# both, and it needs a diff big enough to outlast a pipe buffer before any of
+# it bites — not merely longer than the 20-line cap. macOS sizes that buffer up
+# to 64KB, so a "21 line" fixture proves nothing. The 5000 lines below are
+# 160KB of filler, ~190KB once diff framing and the 4-space prefix are added.
 # Do not "simplify" them down.
+#
+# Note this has only ever FAILED on a CI runner, and did not reproduce locally
+# across bash 3.2/5.3, BSD and GNU diff, or inputs up to 200k lines — it is a
+# race on whether the reader exits before the writer finishes. A green local
+# run therefore does not clear this case; the stderr assertion below is what
+# reports it honestly if it ever comes back.
+# (Note also the braces must enclose the `|| true`: `{ diff ...; } || true |
+# sed ...` parses as `{ diff ...; } || (true | sed ...)` and is a different bug.)
 #
 # ci.yml is early in the stub glob and release-please.yml is last, so the
 # assertion that BOTH are reported is what fails if the loop dies early.
@@ -165,6 +187,9 @@ assert_code E 1
 BODY=$(awk '/^DRIFT    FAKE\/x\/ci\.yml$/{f=1;next} f&&/^    /{c++;next} f{exit} END{print c+0}' "$OUT")
 if [ "$BODY" = 20 ]; then ok "E: ci.yml diff body capped at 20 lines"
 else bad "E: expected a 20-line diff body for ci.yml, got $BODY" "head of output:$(printf '\n')$(head -5 "$OUT" | sed 's/^/       /')"; fi
+# The assertion that actually catches EPIPE: a 190KB diff must not make the
+# script say anything on stderr. This is the row that was red on CI.
+assert_clean_stderr E
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

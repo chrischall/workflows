@@ -174,17 +174,36 @@ if [ "$EXECUTE" = "--check" ]; then
     actual=$(printf '%s' "$raw" | base64 -d 2>/dev/null || true)
     # Compare with trailing newlines normalized away: several repos' files were
     # committed without one, and a "\ No newline at end of file" diff on every
-    # repo makes the detector useless rather than informative.
-    if ! diff -q <(printf '%s\n' "$(printf '%s' "$actual")") <(printf '%s\n' "$(cat "$f")") >/dev/null 2>&1; then
+    # repo makes the detector useless rather than informative. Both sides come
+    # out of `$(...)`, which strips trailing newlines already, so a plain string
+    # comparison IS the normalized comparison — and unlike `diff -q` it cannot
+    # abandon a half-written pipe (see below).
+    want=$(cat "$f")
+    if [ "$actual" != "$want" ]; then
       echo "DRIFT    $REPO/$name"
-      # `|| true` is load-bearing, twice over: `diff` exits 1 BY DESIGN when the
-      # files differ (which is the only case that reaches this line), and
-      # `head -20` can SIGPIPE `sed` on a long diff. Under `set -euo pipefail`
-      # either one aborts the whole script mid-loop, and the failure mode is
-      # silent UNDER-REPORTING — the first drifted stub is printed, every later
-      # stub in the set is never even fetched, and the exit code still says 1,
-      # so the report looks complete while hiding the rest (issue #104).
-      diff <(printf '%s\n' "$(printf '%s' "$actual")") <(printf '%s\n' "$(cat "$f")") | sed 's/^/    /' | head -20 || true
+      # `|| true` is load-bearing: `diff` exits 1 BY DESIGN when the files
+      # differ (which is the only case that reaches this line). Under
+      # `set -euo pipefail` that aborts the whole script mid-loop, and the
+      # failure mode is silent UNDER-REPORTING — the first drifted stub is
+      # printed, every later stub in the set is never even fetched, and the exit
+      # code still says 1, so the report looks complete while hiding the rest
+      # (issue #104).
+      #
+      # `sed -n '1,20p'` rather than `| head -20`, because head EXITS at 20
+      # lines: on a long diff everything upstream is then writing into a closed
+      # pipe, and a bash builtin `printf` in a process substitution can report
+      # that as `printf: write error: Broken pipe` on stderr — landing mid
+      # report, between a DRIFT header and its own diff body, which is where it
+      # corrupts the text pasted into the drift issue. sed consumes the whole
+      # stream and prints the first 20, so the cap costs a full read instead.
+      #
+      # This was observed once on CI and never reproduced locally (tried across
+      # bash 3.2/5.3, BSD and GNU diff, up to 200k-line inputs) — it is a race
+      # on who finishes first, so the fix is to remove the early-exiting reader
+      # rather than to out-time it. The `diff -q` that used to sit above was
+      # dropped for the same reason: it was a second reader over the same data
+      # whose only job was a yes/no that a string comparison already answers.
+      diff <(printf '%s\n' "$actual") <(printf '%s\n' "$want") | sed -n '1,20{s/^/    /;p;}' || true
       drift=1
     fi
   done
