@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test)",
+      "Bash(npm run typecheck)",
+      "Bash(npm run test:coverage)",
+      "Bash(npm view *)",
+      "Bash(npm ls *)",
+      "Bash(pnpm test)",
+      "Bash(pnpm typecheck)",
+      "Bash(actionlint)",
+      "Bash(actionlint *)",
+      "Bash(gh search *)",
+      "mcp__claude-in-chrome__read_network_requests",
+      "mcp__claude-in-chrome__tabs_context_mcp",
+      "mcp__claude-in-chrome__find",
+      "mcp__claude-in-chrome__read_page",
+      "mcp__claude-in-chrome__get_page_text",
+      "mcp__claude-in-chrome__read_console_messages",
+      "mcp__claude_ai_gog_gmail__gog_auth_health",
+      "mcp__claude_ai_etix__etix_healthcheck",
+      "mcp__claude_ai_alltrails__alltrails_healthcheck",
+      "mcp__claude_ai_alltrails__alltrails_search",
+      "mcp__claude_ai_musescore__musescore_healthcheck",
+      "mcp__tock-mcp__tock_list_reservations",
+      "mcp__opentable-mcp__opentable_find_slots"
+    ]
+  }
+}
