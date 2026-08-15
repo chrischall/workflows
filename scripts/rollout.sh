@@ -99,8 +99,19 @@ render() { # render <template> <dest>
   # `rereview_on_push:` passes an explicit null where the caller means "unset".
   # Dropping the line is what keeps the other 70 repos rendering byte-identical
   # stubs while one canary carries the opt-in.
-  sed -i.bak -e '/^[[:space:]]*skill-path:[[:space:]]*$/d' \
-             -e '/^[[:space:]]*rereview_on_push:[[:space:]]*$/d' "$2" && rm -f "$2.bak"
+  # An unset skill_path drops the `skill-path:` line *and* the rationale
+  # comment above it — that comment only makes sense next to a real pin, and
+  # leaving it would have 60 repos explaining a line they don't have.
+  #
+  # Guarded on the value rather than run unconditionally as a sed range: an
+  # unterminated range runs to end of file, so when the pin IS set (the end
+  # pattern matches an empty value only) the range would swallow the rest of
+  # the workflow. validate-render.rb caught exactly that.
+  if [ -z "$SKILL_PATH" ]; then
+    sed -i.bak -e '/^[[:space:]]*# skill-path — REQUIRED/,/^[[:space:]]*skill-path:[[:space:]]*$/d' \
+               "$2" && rm -f "$2.bak"
+  fi
+  sed -i.bak -e '/^[[:space:]]*rereview_on_push:[[:space:]]*$/d' "$2" && rm -f "$2.bak"
 }
 
 # Repos that pin a skill MUST record it here — regenerating without it silently
