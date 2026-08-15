@@ -25,6 +25,11 @@
       "test_command": "npm run test:coverage"
     },
     {
+      "repo": "chrischall/housecallpro-mcp",
+      "skill_path": "skills/housecallpro/SKILL.md",
+      "test_command": "npm run test:coverage"
+    },
+    {
       "repo": "chrischall/groupon-mcp"
     },
     {
