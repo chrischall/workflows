@@ -315,6 +315,11 @@
     },
     {
       "repo": "chrischall/angi-mcp"
+    },
+    {
+      "repo": "chrischall/pickuppatrol-mcp",
+      "skill_path": "skills/pickuppatrol-api/SKILL.md",
+      "test_command": "npm run test:coverage"
     }
   ]
 }
