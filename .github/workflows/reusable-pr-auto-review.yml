@@ -14,7 +14,10 @@ name: Reusable PR auto-review
 #     `pass` whose structured output still lists nits — opens or updates ONE
 #     `auto-review-followup` issue per PR (idempotent via a hidden marker)
 #     holding every finding as a checklist, and links it from the verdict
-#     comment so it is not forgotten.
+#     comment so it is not forgotten. Re-reviews regenerate that checklist but
+#     preserve ticks a human made (exact-text match) and stamp the reviewed
+#     commit. A follow-up whose PR closes UNMERGED is retired by
+#     `followup-orphan-sweep.yml` in chrischall/workflows, not here.
 #  5. On `pass` OR `warn`, adds `ready-to-merge` via the caller's PAT
 #     (GITHUB_TOKEN would not fire the auto-merge workflow): nits never block —
 #     they ride along on the tracking issue. `fail` blocks (never auto-arms).
@@ -479,8 +482,42 @@ jobs:
           # Post-discard/post-synthesis findings from the verdict step — the
           # raw model output may contain findings the pipeline overruled.
           OUT: ${{ steps.verdict.outputs.filtered_output }}
+          # Stamped into the body so a reader can tell whether a re-listed
+          # finding was judged against their fix or against an older commit.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           MARKER="<!-- auto-review-followup:PR-${PR} -->"
+
+          # Ensure the tracking label exists (idempotent).
+          gh label create auto-review-followup --repo "$REPO" \
+            --color FBCA04 --description "Auto-review findings to address" 2>/dev/null || true
+
+          # One issue per PR: find an open one carrying this PR's marker (filter
+          # out PRs, which the issues endpoint also returns). Resolved BEFORE
+          # the body is built — the existing body is an input to it.
+          EXISTING=$(gh api "repos/$REPO/issues?state=open&labels=auto-review-followup&per_page=100" --paginate \
+            --jq "[.[] | select(.pull_request == null) | select(.body != null and (.body | contains(\"$MARKER\"))) | .number][0] // empty" \
+            | grep . | head -n1 || true)
+
+          # Every review round REGENERATES this body, which used to silently
+          # un-tick every box a human had ticked (#139): on mcp-host#326 three
+          # verified fixes came back unchecked because a later round reviewed a
+          # two-commits-stale diff, so the issue reported work that was already
+          # done and pushed. Carry the prior tick state forward.
+          CHECKED=/tmp/followup-checked.txt
+          : > "$CHECKED"
+          if [ -n "$EXISTING" ]; then
+            gh issue view "$EXISTING" --repo "$REPO" --json body --jq '.body // ""' \
+              > /tmp/followup-old.md 2>/dev/null || : > /tmp/followup-old.md
+            grep -oE '^- \[[xX]\] .+' /tmp/followup-old.md | sed -E 's/^- \[[xX]\] //' > "$CHECKED" || true
+          fi
+
+          # Exact whole-line match only. A tick means "a human verified THIS
+          # sentence"; carrying it onto a reworded finding would manufacture a
+          # done-mark for something nobody has looked at, which is the failure
+          # this step exists to prevent, inverted.
+          box() { if grep -qxF -- "$1" "$CHECKED"; then printf 'x'; else printf ' '; fi; }
 
           # Build the checklist body. Prefer structured findings; fall back to a
           # pointer at the PR's review comments when structured output is empty.
@@ -496,12 +533,16 @@ jobs:
             fi
             if [ -n "$imp" ]; then
               echo "### 🔴 Important"
-              printf '%s\n' "$imp" | while IFS= read -r f; do [ -n "$f" ] && echo "- [ ] $f"; done
+              printf '%s\n' "$imp" | while IFS= read -r f; do
+                if [ -n "$f" ]; then echo "- [$(box "$f")] $f"; fi
+              done
               echo ""
             fi
             if [ -n "$nits" ]; then
               echo "### 🟡 Nits"
-              printf '%s\n' "$nits" | while IFS= read -r f; do [ -n "$f" ] && echo "- [ ] $f"; done
+              printf '%s\n' "$nits" | while IFS= read -r f; do
+                if [ -n "$f" ]; then echo "- [$(box "$f")] $f"; fi
+              done
               echo ""
             fi
             if [ -z "$imp" ] && [ -z "$nits" ]; then
@@ -509,18 +550,10 @@ jobs:
               echo ""
             fi
             echo "---"
+            echo "Checklist regenerated from the auto-review of \`${HEAD_SHA:0:7}\` ([run](${RUN_URL})). Ticks survive later rounds, but a round that reviewed an older commit can still re-list something already fixed — check that SHA before redoing an item."
+            echo ""
             echo "When addressing the review on #${PR}, resolve each item and add \`Closes #<this issue>\` to the PR once everything is genuinely fixed; deferred items stay open here. See the auto-review follow-up convention in CLAUDE.md."
           } > /tmp/followup-body.md
-
-          # Ensure the tracking label exists (idempotent).
-          gh label create auto-review-followup --repo "$REPO" \
-            --color FBCA04 --description "Auto-review findings to address" 2>/dev/null || true
-
-          # One issue per PR: find an open one carrying this PR's marker (filter
-          # out PRs, which the issues endpoint also returns).
-          EXISTING=$(gh api "repos/$REPO/issues?state=open&labels=auto-review-followup&per_page=100" --paginate \
-            --jq "[.[] | select(.pull_request == null) | select(.body != null and (.body | contains(\"$MARKER\"))) | .number][0] // empty" \
-            | grep . | head -n1 || true)
 
           TITLE="Auto-review follow-ups for PR #${PR}: ${PR_TITLE}"
           if [ -n "$EXISTING" ]; then

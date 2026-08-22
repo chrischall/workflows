@@ -1,0 +1,151 @@
+name: Orphaned follow-up sweep
+
+# The auto-review pipeline opens one `auto-review-followup` issue per PR that
+# surfaced findings, and the documented flow retires it exactly one way: the PR
+# merges with `Closes #<issue>` in its body. There is no path for a PR that
+# closes WITHOUT merging — a duplicate, a superseded branch, an abandoned
+# attempt. The issue keeps pointing at a dead PR, has no owner and no PR to be
+# fixed on, and nothing in its text says so: it reads exactly like a live
+# follow-up (issue #139).
+#
+# That is not a rare edge. In `mcp-host`, #323 got a `warn`, opened follow-up
+# #324 with one real nit, and was then closed as a duplicate of #319. The nit
+# was never carried over, so main briefly documented `min_machines_running = 1`
+# while running the opposite. It surfaced only because every open issue was
+# swept by hand.
+#
+# This is that hand-sweep, daily and fleet-wide. On an orphan it COMMENTS and
+# LABELS `orphaned-followup` — it deliberately does NOT close. Closing is wrong
+# in exactly the case that motivated this: mcp-host's finding was still live,
+# and only a human knows whether it moved to the superseding PR or stopped
+# applying. The pipeline makes the state visible; the human keeps the decision.
+#
+# Why a sweep rather than a job on `pull_request: closed`: an event-driven job
+# needs `closed` added to all 56 consumer stubs, so it would cover the fleet
+# only as fast as a 56-PR rollout, and not at all for a repo that lags. A
+# schedule here covers every repo in fleet.json the moment this merges, at the
+# cost of up to a day's latency on a decision no human was making today anyway.
+
+on:
+  schedule:
+    - cron: '43 6 * * *'
+  workflow_dispatch:
+
+# Commenting is find-or-create by marker, so two overlapping runs (a manual
+# dispatch during the scheduled one) could both see "not yet flagged" and
+# double-comment. Queue instead — the sweep is cheap and never worth cancelling.
+concurrency:
+  group: followup-orphan-sweep
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Sweep every fleet repo for orphaned follow-up issues
+        env:
+          # Per-repo PATs, exactly as fleet-drift.yml does it: GITHUB_TOKEN is
+          # scoped to THIS repo and cannot read — let alone comment on — another
+          # repo's issues. fleet.json's `pat_secret` names the credential per
+          # repo (nullnet-app uses NULLNET_RELEASE_PAT). A repo whose secret is
+          # missing is skipped rather than probed with the wrong token, whose
+          # 404s on a private repo would read back as "no follow-up issues".
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
+          NULLNET_RELEASE_PAT: ${{ secrets.NULLNET_RELEASE_PAT }}
+        run: |
+          orphaned=0; swept=0; skipped=(); unchecked=()
+          : > /tmp/orphans.md
+
+          for repo in $(jq -r '.repos[].repo' fleet.json); do
+            secret_name=$(jq -r --arg r "$repo" \
+              '(.repos[] | select(.repo == $r) | .pat_secret) // .defaults.pat_secret' fleet.json)
+            token="${!secret_name:-}"
+            if [ -z "$token" ]; then
+              # Warning, not an error: fleet-drift.yml already fails red on
+              # exactly this credential gap for exactly this repo list (#122).
+              # A second red for the same cause is noise, not a second signal.
+              skipped+=("$repo")
+              echo "::warning::skipping $repo — its pat_secret (${secret_name}) is not configured as a secret on ${GITHUB_REPOSITORY}"
+              continue
+            fi
+            export GH_TOKEN="$token"
+
+            # Every follow-up issue carries `<!-- auto-review-followup:PR-N -->`,
+            # which is the only trustworthy link back to its PR — the title is
+            # human-editable. `select(.pull_request == null)` because the issues
+            # endpoint returns PRs too; `scan` rather than `capture` because
+            # capture ERRORS on a non-matching body instead of yielding empty.
+            # shellcheck disable=SC2016  # $i/$pr are jq variables, not shell ones
+            issues=$(gh api "repos/$repo/issues?state=open&labels=auto-review-followup&per_page=100" --paginate \
+              --jq '.[] | select(.pull_request == null) | select(.body != null)
+                    | . as $i
+                    | ([$i.body | scan("auto-review-followup:PR-([0-9]+)")] | flatten | first) as $pr
+                    | select($pr != null) | "\($i.number) \($pr)"' 2>/dev/null) || {
+              unchecked+=("$repo")
+              echo "::warning::could not list follow-up issues in $repo"
+              continue
+            }
+            [ -n "$issues" ] || continue
+
+            while read -r issue pr; do
+              if [ -z "$issue" ] || [ -z "$pr" ]; then continue; fi
+              swept=$((swept+1))
+
+              # `.merged` distinguishes the two ways a PR reaches `closed`. A
+              # merged PR whose issue is still open is the DOCUMENTED state —
+              # deferred items stay open — so it must never be touched here.
+              pr_state=$(gh api "repos/$repo/pulls/$pr" --jq '"\(.state) \(.merged)"' 2>/dev/null) || {
+                echo "::warning::could not read $repo#$pr — leaving issue #$issue alone"
+                continue
+              }
+              if [ "$pr_state" != "closed false" ]; then continue; fi
+
+              CMARKER="<!-- auto-review-followup-orphaned:PR-${pr} -->"
+              already=$(gh api "repos/$repo/issues/$issue/comments?per_page=100" \
+                --jq "[.[] | select(.body != null and (.body | contains(\"$CMARKER\")))] | length" 2>/dev/null || echo "")
+              # Unreadable comments read as "already flagged": a duplicate
+              # nag every morning is worse than a missed one, and the next
+              # successful run still catches it.
+              if [ "${already:-1}" != "0" ]; then continue; fi
+
+              gh label create orphaned-followup --repo "$repo" --color D93F0B \
+                --description "Auto-review follow-ups whose PR closed without merging" >/dev/null 2>&1 || true
+              gh issue edit "$issue" --repo "$repo" --add-label orphaned-followup >/dev/null 2>&1 \
+                || echo "::warning::could not label $repo#$issue"
+
+              # Body via a file, not an inline string: a here-doc or a
+              # multi-line literal inside this block scalar would carry the
+              # step's own 14-space indentation into the comment, and GitHub
+              # renders that as a code block.
+              {
+                echo "$CMARKER"
+                echo ""
+                echo "⚠️ **PR #${pr} was closed without merging**, so nothing will ever close this issue and no PR carries these findings."
+                echo ""
+                echo "They are unowned, not resolved. Either move the unchecked items onto the PR that supersedes #${pr} (adding \`Closes #${issue}\` there), or close this issue if they no longer apply."
+                echo ""
+                echo "Left open and labelled \`orphaned-followup\` rather than auto-closed: a finding on an abandoned PR is often still true of \`main\`."
+              } > /tmp/orphan-comment.md
+              gh issue comment "$issue" --repo "$repo" --body-file /tmp/orphan-comment.md >/dev/null 2>&1 \
+                || echo "::warning::could not comment on $repo#$issue"
+
+              orphaned=$((orphaned+1))
+              echo "- \`$repo\` #$issue — tracked PR #$pr closed unmerged" >> /tmp/orphans.md
+            done <<< "$issues"
+          done
+
+          {
+            echo "## Orphaned follow-up sweep"
+            echo "Follow-up issues checked: ${swept} · newly flagged: ${orphaned} · repos skipped (no PAT): ${#skipped[@]} · repos unreadable: ${#unchecked[@]}"
+            if [ "$orphaned" -gt 0 ]; then
+              echo ""
+              cat /tmp/orphans.md
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "Checked ${swept} follow-up issue(s); flagged ${orphaned} orphan(s)."

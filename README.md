@@ -65,7 +65,17 @@ proof the findings were addressed: the pipeline appends `Closes #<issue>` to
 the PR body so the issue closes on merge. It links rather than closing outright
 because the fix is not on the default branch yet, and it does this only on a
 clean re-review — on `warn`/`fail` the convention still holds that deferred
-items stay open. Release-please PRs follow the same gate, except the
+items stay open. The one exit that path cannot cover is a PR that closes
+**without** merging (a duplicate, a superseded branch): nothing would ever
+close its follow-up issue, and the issue reads exactly like a live one.
+`followup-orphan-sweep.yml` walks the fleet daily for that state and comments
+on the issue plus labels it `orphaned-followup` — deliberately without closing
+it, because a finding on an abandoned PR is often still true of `main` (that is
+the mcp-host case in #139, where the abandoned nit shipped uncorrected).
+The checklist is regenerated on every review round, so it carries prior tick
+state forward — matched on the exact finding text, never on a reworded one —
+and stamps the commit the round reviewed, since a round judging a stale diff
+can re-list a finding that is already fixed. Release-please PRs follow the same gate, except the
 review is triggered by adding `release-ready` (not on open): `release-ready`
 starts the review, the review's `pass`/`warn` adds `ready-to-merge`, and only
 then does deferred CI run — so CI never runs ahead of a successful review.
