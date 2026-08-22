@@ -47,6 +47,14 @@ jobs:
         # green log.
         run: bash scripts/fleet-drift.test.sh
 
+      - name: follow-up lifecycle unit tests
+        # Both halves of the auto-review follow-up issue's life are bash inside
+        # YAML, and both fail QUIETLY: a regenerated checklist that un-ticks a
+        # human's boxes reports finished work as outstanding, and a follow-up
+        # whose PR closed unmerged reads like a live one forever (#139). These
+        # extract the shipped steps, stub gh, and pin both matrices.
+        run: bash scripts/followup.test.sh
+
       - name: rollout.sh unit tests
         # --check is what the daily drift sweep runs, and its failure mode is
         # silent under-reporting rather than a crash — nothing downstream would
