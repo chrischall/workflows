@@ -333,6 +333,9 @@
     {
       "repo": "chrischall/schoolpass-mcp",
       "skill_path": "skills/schoolpass/SKILL.md"
+    },
+    {
+      "repo": "chrischall/simplepractice-mcp"
     }
   ]
 }
