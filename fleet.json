@@ -325,6 +325,10 @@
       "repo": "chrischall/accessoticketing-mcp",
       "skill_path": "skills/accesso-tickets/SKILL.md",
       "test_command": "npm run test:coverage"
+    },
+    {
+      "repo": "chrischall/myhotlunchbox-mcp",
+      "skill_path": "skills/myhotlunchbox/SKILL.md"
     }
   ]
 }
