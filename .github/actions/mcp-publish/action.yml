@@ -371,8 +371,14 @@ runs:
             # the reader does not have.
             cp -R "$SRC_DIR/." "$SKILL_DIR/"
           fi
+          # --name is REQUIRED, not decorative. Without it ClawHub derives the
+          # listing's display name from the folder basename — and that folder is
+          # the mktemp -d above, so every skill the fleet has ever published is
+          # listed as "Tmp.KB654L59FE" or similar. Verified with
+          # `clawhub publish --dry-run --json`: no --name gives
+          # "displayName": "Tmp.X3JS6uYyx7"; with it, the slug.
           echo "Publishing $SLUG to ClawHub..."
-          npx --yes clawhub publish "$SKILL_DIR" --version "${VERSION}" --slug "${SLUG}" || {
+          npx --yes clawhub publish "$SKILL_DIR" --version "${VERSION}" --slug "${SLUG}" --name "${SLUG}" || {
             echo "::warning title=ClawHub publish failed::$SLUG did not publish"
             FAILED=1
           }
