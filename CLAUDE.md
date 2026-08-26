@@ -34,6 +34,25 @@ Consequences worth internalizing:
 When a change is genuinely risky, land it behind a new opt-in input first, flip
 one repo, confirm, then flip the rest via `scripts/rollout.sh`.
 
+## A PR that edits `pr-auto-review.yml` cannot be reviewed by it
+
+`pull_request` runs the caller workflow from the PR's own merge ref, so a PR
+touching `.github/workflows/pr-auto-review.yml` is reviewed by the very
+definition it is changing. In practice the review produces empty structured
+output and the `Post verdict to PR` step reports **"no verdict — treat this PR
+as un-reviewed"** rather than a `pass`/`warn`/`fail`. That is the fail-loud
+path working: it refuses to invent a verdict it never got.
+
+The consequence is that such a PR is never armed. `ready-to-merge` is not
+added, auto-merge never engages, and it sits until a human merges it
+deliberately. Reopening it does not help — #153 failed the same way twice on
+the same SHA before being merged by hand.
+
+So: expect no verdict on those PRs, do not treat the failed review job as a
+finding to chase, and do not add the arming label to force it through. Get the
+change right before opening, and let a human merge it. Every other file in this
+repo reviews normally — this applies only to the review workflow itself.
+
 ## fleet.json is the source of truth
 
 `scripts/rollout.sh <owner/repo>` generates a repo's stubs from `fleet.json`
