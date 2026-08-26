@@ -30,10 +30,22 @@ as its own `<slug>-<version>.skill` and publishing each to ClawHub under its own
 slug. A single skill keeps the repo-level name, so those artifacts are unchanged.
 
 `skill-path` is now only for deliberately publishing ONE skill out of several —
-it is no longer required to avoid a failure. Repos that pinned it back when more
-than one skill was a hard error (`ofw-mcp`, `resy-mcp`, `honeybook-mcp`,
-`zola-mcp`) are publishing just the pinned skill and can drop the input to ship
-the rest.
+it is no longer required to avoid a failure. The repos that pinned it under the
+old rule were unpinned in August 2026 and now ship their fpx/api companions
+alongside the primary skill (`ofw-fpx`, `resy-fpx`, `honeybook-fpx`, `zola-api`,
+`tock-fpx`), and `fleet.json` carries no `skill_path` at all.
+
+**Unpinning moves the slug**, which is the part to get right before doing it
+again. A pin publishes under the repo-level name; without one, each skill takes
+its DIRECTORY name. So `ofw-mcp` became `ofw` and the old ClawHub listing was
+orphaned at its last version — safe there only because every listing read 0
+installs. `tock-mcp`'s directory is `skills/tock-mcp/`, identical to the repo
+name, so it added `tock-fpx` without moving anything.
+
+A pin on a repo shipping exactly one skill is an exact no-op — the
+single-candidate branch keeps the repo-level slug either way — but not a
+harmless one: it silently withholds the second skill the day one is added.
+Nine such pins were removed for that reason.
 
 That hard failure was expensive: it exited before the npm publish, so a repo
 that grew a second skill kept tagging releases that shipped nothing. zola-mcp

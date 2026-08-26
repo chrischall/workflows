@@ -157,7 +157,10 @@ existing (untappd-mcp#105, #83).
 Rollout tooling: `fleet.json` (per-repo parameters), `scripts/rollout.sh`
 (stub-conversion PRs; `--check` reports drift without opening one, `--only
 <stub>` narrows any mode to a single workflow file — prefer it for
-single-template rollouts, since full regeneration reverts hand-edits, #76),
+single-template rollouts, since full regeneration reverts hand-edits, #76;
+`--reason <text>` adds a "Why this change" section to the PR body — use it
+whenever the motive lives here rather than in the consumer, or the reviewer
+there sees a diff and no reason for it),
 `scripts/update-ruleset.sh` (required-check rename). `fleet-drift.yml` runs
 `--check` across the whole fleet daily and maintains one marker-tagged drift
 issue, so a hand-edited stub or unrolled template change surfaces the day it
