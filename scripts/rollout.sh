@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
 # Convert one fleet repo to chrischall/workflows stubs via PR.
 #
-# Usage: scripts/rollout.sh <owner/repo> [--execute|--check|--render <dir>] [--only <stub>]
+# Usage: scripts/rollout.sh <owner/repo> [--execute|--check|--render <dir>|--pr-body]
+#                          [--only <stub>] [--reason <text>]
 # Dry-run by default: prints generated stubs and planned actions.
+#
+# --reason <text> adds a "Why this change" section to the PR body. Reach for it
+# whenever the REASON for a sync lives in this repo rather than the consumer's:
+# the generated body otherwise says only "regenerated from fleet.json", and the
+# auto-review sitting in the consumer repo has no way to see the template change
+# that motivated it. tock-mcp#73 was failed twice on exactly that — the reviewer
+# read the repo's own (stale) CLAUDE.md, found it contradicted, and correctly
+# refused. A cross-repo policy change needs its evidence carried across.
+#
+# --pr-body prints the PR body --execute would use and exits. No network, no
+# clone — it exists so the body is testable, since its failure mode is a PR that
+# merely under-explains itself, which nothing downstream flags.
 #
 # --only <stub> narrows every mode to a single stub file (e.g. `--only claude`,
 # `--only ci`): --check diffs just that file, --execute syncs just that file.
@@ -16,12 +29,13 @@ set -euo pipefail
 
 REPO="${1:?usage: rollout.sh <owner/repo> [--execute|--check|--render <dir>] [--only <stub>]}"
 shift
-EXECUTE=""; ONLY=""; DEST=""
+EXECUTE=""; ONLY=""; DEST=""; REASON=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --execute|--check) EXECUTE="$1" ;;
+    --execute|--check|--pr-body) EXECUTE="$1" ;;
     --render) EXECUTE="--render"; DEST="${2:?usage: rollout.sh <owner/repo> --render <dir>}"; shift ;;
     --only)   ONLY="${2:?--only needs a stub name, e.g. claude, ci, release-please}"; ONLY="${ONLY%.yml}"; shift ;;
+    --reason) REASON="${2:?--reason needs text}"; shift ;;
     *) echo "::error::unknown argument: $1"; exit 1 ;;
   esac
   shift
@@ -161,9 +175,48 @@ if [ -n "$ONLY" ]; then
   find "$STAGE" -type f ! -name "$ONLY.yml" -delete
 fi
 
-if [ "$EXECUTE" != "--check" ] && [ "$EXECUTE" != "--render" ]; then
+if [ "$EXECUTE" != "--check" ] && [ "$EXECUTE" != "--render" ] && [ "$EXECUTE" != "--pr-body" ]; then
   echo "=== $REPO  (pat=$PAT_SECRET ci=$CI_MODE release=$RELEASE_MODE lockfix=${LOCKFIX:-none} connector=${CONNECTOR:-no} fly=${FLY_DIR:-no}) ==="
   for f in "$STAGE"/*; do echo "--- $(basename "$f")"; cat "$f"; done
+fi
+
+# The PR body --execute posts. A function rather than an inline block so
+# `--pr-body` can print exactly what --execute would send without cloning
+# anything: an under-explaining body is invisible to every check we have, and
+# only shows up as a puzzled reviewer in someone else's repo.
+pr_body() {
+  if [ -n "$ONLY" ]; then
+    echo "Single-stub sync: regenerates \`.github/workflows/$ONLY.yml\` from fleet.json and the current template. Other workflow files are untouched."
+  else
+    echo "Replaces vendored pipeline workflows with thin stubs calling chrischall/workflows@main."
+  fi
+  echo ""
+  # The reason the sync exists, when it lives in chrischall/workflows rather
+  # than here. Without it the reviewer sees a diff and no motive.
+  if [ -n "$REASON" ]; then
+    echo "## Why this change"
+    echo ""
+    echo "$REASON"
+    echo ""
+  fi
+  if [ -z "$ONLY" ]; then
+    echo "- pr-auto-review: reusable (forced verdict + fail-loud + pass-only arming)"
+    echo "- auto-merge: reusable (dependabot + ready-to-merge label arms)"
+    [ "$CI_MODE" = "standard" ] && echo "- ci: reusable node CI (deferred gate) — required check becomes \`ci / ci\`"
+    [ "$RELEASE_MODE" = "mcp" ] && echo "- release-please: thin stub + mcp-publish composite action (OIDC identity preserved)"
+    [ -n "$LOCKFIX" ] && echo "- dependabot-lockfix: reusable ($LOCKFIX — regenerates derived lockfiles dependabot can't refresh)"
+    [ -n "$CONNECTOR" ] && echo "- deploy-connector: Worker deployed on release (reusable) + workflow_dispatch stub"
+    [ -n "$FLY_DIR" ] && echo "- deploy-runner: Fly backend in \`$FLY_DIR\` deployed on release, before the Worker"
+    echo ""
+    echo "After this PR is open, run \`scripts/update-ruleset.sh $REPO\` in chrischall/workflows."
+    echo ""
+  fi
+  echo "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+}
+
+if [ "$EXECUTE" = "--pr-body" ]; then
+  pr_body
+  exit 0
 fi
 
 if [ "$EXECUTE" = "--render" ]; then
@@ -290,27 +343,7 @@ Thin stubs replace the vendored auto-review/auto-merge${EXTRAS} workflows.
 Pipeline source: https://github.com/chrischall/workflows"
 fi
 git push -u origin "$BRANCH"
-{
-  if [ -n "$ONLY" ]; then
-    echo "Single-stub sync: regenerates \`.github/workflows/$ONLY.yml\` from fleet.json and the current template. Other workflow files are untouched."
-  else
-    echo "Replaces vendored pipeline workflows with thin stubs calling chrischall/workflows@main."
-  fi
-  echo ""
-  if [ -z "$ONLY" ]; then
-    echo "- pr-auto-review: reusable (forced verdict + fail-loud + pass-only arming)"
-    echo "- auto-merge: reusable (dependabot + ready-to-merge label arms)"
-    [ "$CI_MODE" = "standard" ] && echo "- ci: reusable node CI (deferred gate) — required check becomes \`ci / ci\`"
-    [ "$RELEASE_MODE" = "mcp" ] && echo "- release-please: thin stub + mcp-publish composite action (OIDC identity preserved)"
-    [ -n "$LOCKFIX" ] && echo "- dependabot-lockfix: reusable ($LOCKFIX — regenerates derived lockfiles dependabot can't refresh)"
-    [ -n "$CONNECTOR" ] && echo "- deploy-connector: Worker deployed on release (reusable) + workflow_dispatch stub"
-    [ -n "$FLY_DIR" ] && echo "- deploy-runner: Fly backend in \`$FLY_DIR\` deployed on release, before the Worker"
-    echo ""
-    echo "After this PR is open, run \`scripts/update-ruleset.sh $REPO\` in chrischall/workflows."
-    echo ""
-  fi
-  echo "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
-} > "$WORK/pr-body.md"
+pr_body > "$WORK/pr-body.md"
 gh pr create --repo "$REPO" --head "$BRANCH" \
   --title "$TITLE" \
   --body-file "$WORK/pr-body.md"

@@ -191,5 +191,42 @@ else bad "E: expected a 20-line diff body for ci.yml, got $BODY" "head of output
 # script say anything on stderr. This is the row that was red on CI.
 assert_clean_stderr E
 
+# --- F: the PR body carries --reason, and stays honest without it ----------
+# The body is the ONLY thing a consumer repo's auto-review sees explaining why
+# a stub changed. When the motive lives in chrischall/workflows, a body saying
+# just "regenerated from fleet.json" reads as an unexplained removal — and the
+# reviewer refuses, correctly (tock-mcp#73, failed twice on exactly that).
+#
+# This failure mode is silent: a PR that under-explains itself is structurally
+# indistinguishable from one that doesn't, and no check downstream looks. So
+# `--pr-body` renders the body with no network and no clone, and these pin it.
+run_body() { # run_body <args...> -> writes $OUT, sets $CODE
+  OUT="$TMP/body.txt"; ERR="$TMP/body-err.txt"
+  bash "$ROLLOUT" FAKE/x --pr-body "$@" > "$OUT" 2> "$ERR"
+  CODE=$?
+}
+
+run_body --only release-please --reason "The pin dodged a hard error #56 removed."
+assert_code  F1 0
+assert_has   F1 "## Why this change"
+assert_has   F1 "The pin dodged a hard error #56 removed."
+assert_has   F1 "Single-stub sync"
+assert_clean_stderr F1
+
+# No --reason: no empty heading. A "## Why this change" with nothing under it
+# is worse than none — it reads as a section someone forgot to fill in.
+run_body --only release-please
+assert_code  F2 0
+assert_lacks F2 "## Why this change"
+assert_has   F2 "Single-stub sync"
+
+# Full conversion body keeps its stub inventory AND takes a reason.
+run_body --reason "Fleet-wide template correction."
+assert_code  F3 0
+assert_has   F3 "## Why this change"
+assert_has   F3 "Fleet-wide template correction."
+assert_has   F3 "- pr-auto-review: reusable"
+assert_has   F3 "After this PR is open, run"
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
