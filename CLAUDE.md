@@ -5,15 +5,17 @@ Shared CI/CD for the fleet. `README.md` documents the pipeline contract
 action) — read it first and don't restate it here.
 
 This file covers what the README doesn't: the blast radius, and how to change
-things without breaking 56 repos.
+things without breaking 78 repos.
 
 ## Every consumer pins `@main`. There is no staged rollout.
 
-`fleet.json` lists **56 repos**, and every one references
-`chrischall/workflows/...@main`. Nothing pins a tag or SHA.
+`fleet.json` lists **78 repos**, and every one references
+`chrischall/workflows/...@main`. Nothing pins a tag or SHA. That count has gone
+stale twice — read it with `jq '.repos|length' fleet.json` rather than trusting
+the number written here.
 
 So a merge to `main` here is a fleet-wide deploy that takes effect on the next
-workflow run in all 56 repos, with no canary and no rollback window. Treat any
+workflow run in all 78 repos, with no canary and no rollback window. Treat any
 change to `.github/workflows/reusable-*.yml` or `.github/actions/*` as a
 production change to every repo simultaneously.
 
