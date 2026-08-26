@@ -79,7 +79,8 @@
       "repo": "chrischall/redfin-mcp"
     },
     {
-      "repo": "chrischall/resy-mcp"
+      "repo": "chrischall/resy-mcp",
+      "test_command": "npm run test:coverage"
     },
     {
       "repo": "chrischall/setlist-mcp"
