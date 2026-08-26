@@ -39,7 +39,8 @@
       "repo": "chrischall/artsonia-mcp"
     },
     {
-      "repo": "chrischall/canvas-parent-mcp"
+      "repo": "chrischall/canvas-parent-mcp",
+      "test_command": "npm run test:coverage"
     },
     {
       "repo": "chrischall/compass-mcp"
@@ -62,7 +63,8 @@
       "repo": "chrischall/honeybook-mcp"
     },
     {
-      "repo": "chrischall/infinitecampus-mcp"
+      "repo": "chrischall/infinitecampus-mcp",
+      "test_command": "npm run test:coverage"
     },
     {
       "repo": "chrischall/musescore-mcp"
@@ -83,7 +85,8 @@
       "repo": "chrischall/setlist-mcp"
     },
     {
-      "repo": "chrischall/signupgenius-mcp"
+      "repo": "chrischall/signupgenius-mcp",
+      "test_command": "npm run test:coverage"
     },
     {
       "repo": "chrischall/splitwise-mcp"
