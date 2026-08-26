@@ -222,8 +222,7 @@
       "skill_path": "skills/viator-mcp/SKILL.md"
     },
     {
-      "repo": "chrischall/tock-mcp",
-      "skill_path": "skills/tock-mcp/SKILL.md"
+      "repo": "chrischall/tock-mcp"
     },
     {
       "repo": "chrischall/getyourguide-mcp",
