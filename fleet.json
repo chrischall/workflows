@@ -16,17 +16,14 @@
   },
   "repos": [
     {
-      "repo": "chrischall/freshbooks-mcp",
-      "skill_path": "skills/freshbooks-curl/SKILL.md"
+      "repo": "chrischall/freshbooks-mcp"
     },
     {
       "repo": "chrischall/jobber-mcp",
-      "skill_path": "skills/jobber-fpx/SKILL.md",
       "test_command": "npm run test:coverage"
     },
     {
       "repo": "chrischall/housecallpro-mcp",
-      "skill_path": "skills/housecallpro/SKILL.md",
       "test_command": "npm run test:coverage"
     },
     {
@@ -51,8 +48,7 @@
       "repo": "chrischall/creditkarma-mcp"
     },
     {
-      "repo": "chrischall/gemini-mcp",
-      "skill_path": "skills/gemini-mcp/SKILL.md"
+      "repo": "chrischall/gemini-mcp"
     },
     {
       "repo": "chrischall/gogcli-mcp",
@@ -93,8 +89,7 @@
       "repo": "chrischall/splitwise-mcp"
     },
     {
-      "repo": "chrischall/tempo-api-mcp",
-      "skill_path": "skills/tempo-api-mcp/SKILL.md"
+      "repo": "chrischall/tempo-api-mcp"
     },
     {
       "repo": "chrischall/zillow-mcp"
@@ -214,8 +209,7 @@
       "release": "none"
     },
     {
-      "repo": "chrischall/viator-mcp",
-      "skill_path": "skills/viator-mcp/SKILL.md"
+      "repo": "chrischall/viator-mcp"
     },
     {
       "repo": "chrischall/tock-mcp"
@@ -243,8 +237,7 @@
       "repo": "chrischall/etix-mcp"
     },
     {
-      "repo": "chrischall/flightaware-mcp",
-      "skill_path": "skills/flightaware-mcp/SKILL.md"
+      "repo": "chrischall/flightaware-mcp"
     },
     {
       "repo": "chrischall/hemnet-mcp",
@@ -313,12 +306,10 @@
     },
     {
       "repo": "chrischall/pickuppatrol-mcp",
-      "skill_path": "skills/pickuppatrol-api/SKILL.md",
       "test_command": "npm run test:coverage"
     },
     {
       "repo": "chrischall/accessoticketing-mcp",
-      "skill_path": "skills/accesso-tickets/SKILL.md",
       "test_command": "npm run test:coverage"
     },
     {
