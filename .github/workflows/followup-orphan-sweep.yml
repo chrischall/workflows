@@ -106,11 +106,21 @@ jobs:
               if [ "$pr_state" != "closed false" ]; then continue; fi
 
               CMARKER="<!-- auto-review-followup-orphaned:PR-${pr} -->"
-              already=$(gh api "repos/$repo/issues/$issue/comments?per_page=100" \
-                --jq "[.[] | select(.body != null and (.body | contains(\"$CMARKER\")))] | length" 2>/dev/null || echo "")
-              # Unreadable comments read as "already flagged": a duplicate
-              # nag every morning is worse than a missed one, and the next
-              # successful run still catches it.
+              # --paginate like the EXISTING-issues query above: an issue with
+              # more than one page of comments would otherwise hide the marker
+              # on page 2+ and earn a duplicate nag every morning. The jq emits
+              # one line per match rather than a per-page count, because
+              # --paginate concatenates page results and `| length` would yield
+              # one number PER PAGE.
+              if marks=$(gh api "repos/$repo/issues/$issue/comments?per_page=100" --paginate \
+                   --jq ".[] | select(.body != null and (.body | contains(\"$CMARKER\"))) | .id" 2>/dev/null); then
+                already=$(printf '%s' "$marks" | grep -c . || true)
+              else
+                # Unreadable comments read as "already flagged": a duplicate
+                # nag every morning is worse than a missed one, and the next
+                # successful run still catches it.
+                already=1
+              fi
               if [ "${already:-1}" != "0" ]; then continue; fi
 
               gh label create orphaned-followup --repo "$repo" --color D93F0B \
