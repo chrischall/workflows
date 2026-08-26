@@ -49,12 +49,13 @@ to the fleet means adding it here first.
 
 ## Editing the composite actions
 
-`mcp-publish` resolves the skill to package in this order: an explicit
-`skill-path` input, else a root `SKILL.md`, else *exactly one*
-`skills/*/SKILL.md`. Two or more candidates is a hard `exit 1`. Repos shipping
-both a `<name>` and a `<name>-fpx` skill must pin `skill-path` — that failure
-lands in the publish job, *after* the tag and GitHub Release already exist, so
-the release looks green while npm never gets the package.
+`mcp-publish` resolves the skills to package in this order: an explicit
+`skill-path` input, else a root `SKILL.md`, else *every* `skills/*/SKILL.md`.
+Several candidates is no longer an error — #56 made it publish each under its
+own directory-name slug. So `skill-path` now only means "publish just this one
+of several", and dropping a pin doesn't fail a release, it silently starts
+shipping the repo's other skills under new slugs. `docs/fleet-conventions.md`
+is the canonical statement of this; don't restate it elsewhere.
 
 The composite actions have no tests. The only way to validate an action change
 is to run it against a real consumer repo, so make changes small and verify in

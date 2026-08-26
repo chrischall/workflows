@@ -327,12 +327,11 @@
       "test_command": "npm run test:coverage"
     },
     {
-      "repo": "chrischall/myhotlunchbox-mcp",
-      "skill_path": "skills/myhotlunchbox/SKILL.md"
+      "repo": "chrischall/myhotlunchbox-mcp"
     },
     {
       "repo": "chrischall/schoolpass-mcp",
-      "skill_path": "skills/schoolpass/SKILL.md"
+      "test_command": "npm run test:coverage"
     },
     {
       "repo": "chrischall/simplepractice-mcp"

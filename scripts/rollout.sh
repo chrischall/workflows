@@ -108,7 +108,11 @@ render() { # render <template> <dest>
   # pattern matches an empty value only) the range would swallow the rest of
   # the workflow. validate-render.rb caught exactly that.
   if [ -z "$SKILL_PATH" ]; then
-    sed -i.bak -e '/^[[:space:]]*# skill-path — REQUIRED/,/^[[:space:]]*skill-path:[[:space:]]*$/d' \
+    # Anchored on the comment block's opening words: reword its first line in
+    # the template without updating this and 60-odd unpinned repos start
+    # rendering an orphan comment, which YAML-parses fine and so slips past
+    # validate-render.rb. Keep the two in sync.
+    sed -i.bak -e '/^[[:space:]]*# skill-path pins ONE skill/,/^[[:space:]]*skill-path:[[:space:]]*$/d' \
                "$2" && rm -f "$2.bak"
   fi
   sed -i.bak -e '/^[[:space:]]*rereview_on_push:[[:space:]]*$/d' "$2" && rm -f "$2.bak"
