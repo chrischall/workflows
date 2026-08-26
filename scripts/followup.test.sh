@@ -160,7 +160,12 @@ cat > "$TMP/bin2/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "gh $*" >> "$GH_CALLS"
 case "$*" in
-  *"/comments"*)          cat "$FIX_COMMENTS" ;;
+  *"/comments"*)
+      # Page 2 exists only for a caller that passes --paginate. Dropping it
+      # (issue #143) hides a marker there and earns a duplicate nag daily.
+      cat "$FIX_COMMENTS"
+      case "$*" in *--paginate*) cat "$FIX_COMMENTS_P2" ;; esac
+      ;;
   *"issues?state=open"*)  cat "$FIX_ISSUES" ;;
   *"/pulls/"*)
       path=""
@@ -172,12 +177,21 @@ STUB
 chmod +x "$TMP/bin2/gh"
 
 # sweep_case <name> <issues> <pulls> <comments> <want_comments> <want_labels> [ENV=val ...]
+#
+# <comments> is what the already-flagged lookup PRINTS: the id of each comment
+# carrying the orphaned marker, one per line, empty when none match. A
+# `---PAGE---` line splits page 1 from page 2 of the comment list.
 sweep_case() {
   local name="$1" issues="$2" pulls="$3" comments="$4" want_c="$5" want_l="$6"; shift 6
   local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
   printf '%s\n' "$issues"   > "$dir/issues"
   printf '%s\n' "$pulls"    > "$dir/pulls"
-  printf '%s\n' "$comments" > "$dir/comments"
+  : > "$dir/comments"; : > "$dir/comments.p2"
+  local target="$dir/comments" line
+  while IFS= read -r line; do
+    if [ "$line" = "---PAGE---" ]; then target="$dir/comments.p2"; continue; fi
+    [ -n "$line" ] && printf '%s\n' "$line" >> "$target"
+  done <<< "$comments"
   : > "$dir/gh"
   cat > "$dir/fleet.json" <<JSON
 {"defaults":{"pat_secret":"RELEASE_PAT"},"repos":[{"repo":"$REPO"}]}
@@ -186,7 +200,7 @@ JSON
     cd "$dir" || exit 1
     export PATH="$TMP/bin2:$PATH"
     export GH_CALLS="$dir/gh" FIX_ISSUES="$dir/issues" FIX_PULLS="$dir/pulls" \
-           FIX_COMMENTS="$dir/comments"
+           FIX_COMMENTS="$dir/comments" FIX_COMMENTS_P2="$dir/comments.p2"
     export GITHUB_REPOSITORY=chrischall/workflows GITHUB_STEP_SUMMARY="$dir/summary" \
            RELEASE_PAT=tok NULLNET_RELEASE_PAT=tok2
     local kv; for kv in "$@"; do export "${kv?}"; done
@@ -205,15 +219,18 @@ JSON
 }
 
 echo "── Orphaned follow-up sweep ──"
-sweep_case "PR closed without merging → comment + label" "5 324" "324 closed false" "0" 1 1
-sweep_case "PR still open → left alone"                  "5 324" "324 open false"   "0" 0 0
-sweep_case "PR merged (deferred items) → left alone"     "5 324" "324 closed true"  "0" 0 0
-sweep_case "already flagged → no duplicate comment"      "5 324" "324 closed false" "1" 0 0
-sweep_case "no follow-up issues → no calls"              ""      ""                 "0" 0 0
+sweep_case "PR closed without merging → comment + label" "5 324" "324 closed false" "" 1 1
+sweep_case "PR still open → left alone"                  "5 324" "324 open false"   ""  0 0
+sweep_case "PR merged (deferred items) → left alone"     "5 324" "324 closed true"  ""  0 0
+sweep_case "already flagged → no duplicate comment"      "5 324" "324 closed false" "90210" 0 0
+sweep_case "already flagged on comment page 2 → no duplicate comment" \
+  "5 324" "324 closed false" "---PAGE---
+90211" 0 0
+sweep_case "no follow-up issues → no calls"              ""      ""                 ""  0 0
 sweep_case "several orphans in one repo"                 "5 324
 6 400" "324 closed false
-400 closed false" "0" 2 2
-sweep_case "repo whose PAT is absent is skipped, not probed" "5 324" "324 closed false" "0" 0 0 RELEASE_PAT=
+400 closed false" "" 2 2
+sweep_case "repo whose PAT is absent is skipped, not probed" "5 324" "324 closed false" "" 0 0 RELEASE_PAT=
 
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
