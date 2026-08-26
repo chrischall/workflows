@@ -27,7 +27,7 @@
 # Run scripts/update-ruleset.sh after the PR is open.
 set -euo pipefail
 
-REPO="${1:?usage: rollout.sh <owner/repo> [--execute|--check|--render <dir>] [--only <stub>]}"
+REPO="${1:?usage: rollout.sh <owner/repo> [--execute|--check|--render <dir>|--pr-body] [--only <stub>] [--reason <text>]}"
 shift
 EXECUTE=""; ONLY=""; DEST=""; REASON=""
 while [ $# -gt 0 ]; do
