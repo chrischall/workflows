@@ -36,8 +36,7 @@
       "repo": "chrischall/onthecheap-mcp"
     },
     {
-      "repo": "chrischall/zola-mcp",
-      "skill_path": "skills/zola/SKILL.md"
+      "repo": "chrischall/zola-mcp"
     },
     {
       "repo": "chrischall/artsonia-mcp"
@@ -64,8 +63,7 @@
       "repo": "chrischall/homes-mcp"
     },
     {
-      "repo": "chrischall/honeybook-mcp",
-      "skill_path": "skills/honeybook/SKILL.md"
+      "repo": "chrischall/honeybook-mcp"
     },
     {
       "repo": "chrischall/infinitecampus-mcp"
@@ -83,8 +81,7 @@
       "repo": "chrischall/redfin-mcp"
     },
     {
-      "repo": "chrischall/resy-mcp",
-      "skill_path": "skills/resy/SKILL.md"
+      "repo": "chrischall/resy-mcp"
     },
     {
       "repo": "chrischall/setlist-mcp"
@@ -126,8 +123,7 @@
     },
     {
       "repo": "chrischall/ofw-mcp",
-      "test_command": "npm run test:coverage",
-      "skill_path": "skills/ofw/SKILL.md"
+      "test_command": "npm run test:coverage"
     },
     {
       "repo": "chrischall/ioffice-mcp",
