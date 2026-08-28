@@ -27,7 +27,14 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # Real defaults, one synthetic repo: a connector repo gets the widest stub set
 # (auto-merge, ci, claude, deploy-connector, pr-auto-review, release-please),
 # which is what makes "report EVERY drifted stub" testable at all.
-jq '{defaults: .defaults, repos: [{repo: "FAKE/x", connector: "true"}]}' \
+# FAKE/y exists only to exercise the ci_dispatch opt-in: the render path that
+# adds `workflow_dispatch:` to ci.yml is conditional, and both branches have to
+# be pinned — an always-on trigger would silently drift all 60 standard-CI
+# repos, and an always-off one would silently drop the escape hatch the repo
+# that opted in is relying on.
+jq '{defaults: .defaults,
+     repos: [{repo: "FAKE/x", connector: "true"},
+             {repo: "FAKE/y", ci_dispatch: "true"}]}' \
   "$HERE/fleet.json" > "$ROOT/fleet.json"
 ROLLOUT="$ROOT/scripts/rollout.sh"
 
@@ -227,6 +234,26 @@ assert_has   F3 "## Why this change"
 assert_has   F3 "Fleet-wide template correction."
 assert_has   F3 "- pr-auto-review: reusable"
 assert_has   F3 "After this PR is open, run"
+
+# --- G: ci_dispatch renders the manual trigger, and only when opted in -----
+G="$TMP/g-off"; bash "$ROLLOUT" FAKE/x --render "$G" >/dev/null
+if grep -q '^  workflow_dispatch:$' "$G/ci.yml"; then
+  bad "G: unset ci_dispatch" "ci.yml gained workflow_dispatch without opting in"
+else ok "G: unset ci_dispatch leaves ci.yml without workflow_dispatch"; fi
+# The rationale comment must go with it — a stranded comment explaining a
+# trigger that is not there is how the skill-path block drifted (issue #138).
+if grep -q 'A manual gate, for when the automatic one' "$G/ci.yml"; then
+  bad "G: unset ci_dispatch" "the rationale comment was left behind without its trigger"
+else ok "G: unset ci_dispatch drops the rationale comment too"; fi
+
+G2="$TMP/g-on"; bash "$ROLLOUT" FAKE/y --render "$G2" >/dev/null
+if grep -q '^  workflow_dispatch:$' "$G2/ci.yml"; then
+  ok "G: ci_dispatch=true renders workflow_dispatch"
+else bad "G: ci_dispatch=true" "ci.yml has no workflow_dispatch:$(printf '\n')$(sed -n '10,20p' "$G2/ci.yml")"; fi
+# It has to sit under `on:`, not merely appear somewhere in the file.
+if ruby -ryaml -e 'y=YAML.load_file(ARGV[0]); exit(y[true].key?("workflow_dispatch") ? 0 : 1)' "$G2/ci.yml" 2>/dev/null; then
+  ok "G: workflow_dispatch parses as a trigger under on:"
+else bad "G: ci_dispatch=true" "workflow_dispatch is not a key under on:"; fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

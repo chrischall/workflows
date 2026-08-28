@@ -1,5 +1,6 @@
 {
   "defaults": {
+    "ci_dispatch": "",
     "pat_secret": "RELEASE_PAT",
     "ci": "standard",
     "node_version": "26",
@@ -107,8 +108,8 @@
     },
     {
       "repo": "chrischall/skylight-mcp",
-      "test_command": "npm run test:coverage"
-    },
+      "test_command": "npm run test:coverage",
+      "ci_dispatch": "true"},
     {
       "repo": "chrischall/evite-mcp",
       "test_command": "npm run test:coverage"

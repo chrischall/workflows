@@ -130,6 +130,13 @@ render() { # render <template> <dest>
                "$2" && rm -f "$2.bak"
   fi
   sed -i.bak -e '/^[[:space:]]*rereview_on_push:[[:space:]]*$/d' "$2" && rm -f "$2.bak"
+  # Same guarded-range shape as skill-path above, and guarded for the same
+  # reason: an unterminated sed range runs to end of file. Scoped to ci.yml so
+  # the anchors cannot match anything in another template.
+  if [ "$1" = "ci.yml" ] && [ -z "$CI_DISPATCH" ]; then
+    sed -i.bak -e '/^  # A manual gate, for when the automatic one/,/^  workflow_dispatch:$/d' \
+               "$2" && rm -f "$2.bak"
+  fi
 }
 
 # Repos that pin a skill MUST record it here — regenerating without it silently
@@ -141,6 +148,13 @@ render() { # render <template> <dest>
 # which breaks the template-parse check in CI.
 SKILL_PATH="$(cfg skill_path)"
 REREVIEW_ON_PUSH="$(cfg rereview_on_push)"
+# `workflow_dispatch` on ci.yml: a manual way to run CI when GitHub stops
+# creating `pull_request` runs (observed on skylight-mcp, 2026-08-26). Opt-in
+# rather than fleet-wide so the other 59 standard-CI repos keep rendering
+# byte-identical stubs, and recorded HERE rather than hand-edited into the
+# stub — a hand-edit is silently reverted by the next `--execute` (issue #76),
+# which is precisely what was about to happen to skylight-mcp's.
+CI_DISPATCH="$(cfg ci_dispatch)"
 
 STAGE="$WORK/stage"; mkdir -p "$STAGE"
 render pr-auto-review.yml "$STAGE/pr-auto-review.yml"
