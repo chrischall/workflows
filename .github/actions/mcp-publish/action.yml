@@ -244,10 +244,23 @@ runs:
             # the single-package (".") case NAME is the unscoped repo name, so
             # this is a no-op and the asset filename is unchanged.
             SAFE=$(printf '%s' "$NAME" | sed 's#^@##; s#/#-#g')
-            npx @anthropic-ai/mcpb pack
+            # Checked explicitly rather than left to `set -e`: this subshell is
+            # the left operand of `|| rc=1`, and bash disables errexit inside a
+            # tested context. A failing pack therefore did NOT abort here — `mv`
+            # went on to fail with "cannot stat ''" and the unconditional echo
+            # below reported a bundle that was never built, over a green job.
+            # remind-mcp and angi-mcp each shipped releases with no .mcpb that way.
+            if ! npx @anthropic-ai/mcpb pack; then
+              echo "::error title=mcpb pack failed::$dir — manifest invalid or pack errored"
+              exit 1
+            fi
             # pack writes <manifest name>.mcpb into cwd; rename the file it made
             # rather than assuming its name.
             built=$(ls -t ./*.mcpb 2>/dev/null | head -1)
+            if [ -z "$built" ]; then
+              echo "::error title=mcpb pack produced nothing::no .mcpb in $dir after a successful pack"
+              exit 1
+            fi
             mv "$built" "$OUTDIR/${SAFE}-${VERSION}.mcpb"
             echo "Built ${SAFE}-${VERSION}.mcpb"
           ) || rc=1
