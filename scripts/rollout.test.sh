@@ -71,6 +71,21 @@ CANON="$TMP/canon"
 bash "$ROLLOUT" FAKE/x --render "$CANON" >/dev/null || {
   echo "setup failed: --render did not produce fixtures"; exit 1; }
 
+# The opted-in repo's own canonical stubs. --check RENDERS and then diffs, so
+# the ci_dispatch branch of render() is on the drift-detection path too, not
+# just --render: a regression there reports every opted-in repo as drifted, or
+# worse, stops noticing when one silently loses the escape hatch.
+CANON_Y="$TMP/canon-y"
+bash "$ROLLOUT" FAKE/y --render "$CANON_Y" >/dev/null || {
+  echo "setup failed: --render did not produce FAKE/y fixtures"; exit 1; }
+
+fixtures_y() { # fixtures_y <case> -> fresh copy of FAKE/y's canonical stubs
+  local dir="$TMP/casey-$1"
+  rm -rf "$dir"; mkdir -p "$dir"
+  cp "$CANON_Y"/* "$dir"/
+  printf '%s' "$dir"
+}
+
 fixtures() { # fixtures <case> -> fresh copy of the canonical stubs, echoes dir
   local dir="$TMP/case-$1"
   rm -rf "$dir"; mkdir -p "$dir"
@@ -85,7 +100,7 @@ run_check() { # run_check <fixture-dir> -> writes $OUT and $ERR, sets $CODE
   # every assertion here still matched with a broken-pipe line wedged between a
   # DRIFT header and its diff body.
   OUT="$TMP/out.txt"; ERR="$TMP/err.txt"
-  GH_FIXTURES="$1" bash "$ROLLOUT" FAKE/x --check > "$OUT" 2> "$ERR"
+  GH_FIXTURES="$1" bash "$ROLLOUT" "${2:-FAKE/x}" --check > "$OUT" 2> "$ERR"
   CODE=$?
 }
 
@@ -254,6 +269,24 @@ else bad "G: ci_dispatch=true" "ci.yml has no workflow_dispatch:$(printf '\n')$(
 if ruby -ryaml -e 'y=YAML.load_file(ARGV[0]); exit(y[true].key?("workflow_dispatch") ? 0 : 1)' "$G2/ci.yml" 2>/dev/null; then
   ok "G: workflow_dispatch parses as a trigger under on:"
 else bad "G: ci_dispatch=true" "workflow_dispatch is not a key under on:"; fi
+
+# --- H: --check over an opted-in repo, both directions ---------------------
+# CLAUDE.md: any change to what --check compares needs a case here, because its
+# failure mode is a report that quietly says less than it should.
+DIR=$(fixtures_y h1)
+run_check "$DIR" FAKE/y
+assert_has  H1 "OK       FAKE/y"
+assert_code H1 0
+assert_clean_stderr H1
+
+# A repo that lost its dispatch trigger must be REPORTED, not shrugged off —
+# that is the whole point of recording the opt-in in fleet.json rather than
+# leaving it a hand-edit the next --execute deletes (issue #76).
+DIR=$(fixtures_y h2)
+grep -v '^  workflow_dispatch:$' "$DIR/ci.yml" > "$DIR/ci.yml.tmp" && mv "$DIR/ci.yml.tmp" "$DIR/ci.yml"
+run_check "$DIR" FAKE/y
+assert_has  H2 "DRIFT    FAKE/y/ci.yml"
+assert_code H2 1
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
