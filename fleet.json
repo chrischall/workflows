@@ -330,6 +330,10 @@
     },
     {
       "repo": "chrischall/alphaportal-mcp"
+    },
+    {
+      "repo": "chrischall/remind-mcp",
+      "test_command": "npm run test:coverage"
     }
   ]
 }
