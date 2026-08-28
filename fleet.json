@@ -109,7 +109,8 @@
     {
       "repo": "chrischall/skylight-mcp",
       "test_command": "npm run test:coverage",
-      "ci_dispatch": "true"},
+      "ci_dispatch": "true"
+    },
     {
       "repo": "chrischall/evite-mcp",
       "test_command": "npm run test:coverage"
