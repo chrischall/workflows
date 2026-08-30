@@ -82,6 +82,16 @@ runs:
 
         changed=0
         for n in $prs; do
+          # FIRST, before the API call: an already-credited PR must cost
+          # nothing. This sat AFTER the `gh api` below, so the comment claiming
+          # it saved a call was simply false — the call had already run.
+          # Matches "thanks @" ANYWHERE on the line referencing this PR: the
+          # credit is inserted BEFORE the `([#n](` link group, so a check
+          # anchored after the link never matches at all.
+          if grep -E "/(issues|pull)/$n\b" CHANGELOG.md | grep -q "thanks @"; then
+            continue
+          fi
+
           meta=$(gh api "repos/$REPO/pulls/$n" \
             --jq '[.user.login, .user.type, .author_association] | @tsv' 2>/dev/null || true)
           [ -z "$meta" ] && continue
@@ -101,14 +111,6 @@ runs:
 
           case ",$never," in *",$author,"*) continue ;; esac
 
-          # Cheap pre-check so an already-credited PR costs no `gh api` call.
-          # Matches "thanks @" ANYWHERE on the line that references this PR:
-          # the credit is inserted BEFORE the `([#n](` link group, so an
-          # earlier version anchored after the link never matched and this
-          # short-circuit was dead code.
-          if grep -E "/(issues|pull)/$n\b" CHANGELOG.md | grep -q "thanks @"; then
-            continue
-          fi
 
           # The script is the single authority on whether anything changed —
           # it prints "changed" only when it edited a line. Logging off the

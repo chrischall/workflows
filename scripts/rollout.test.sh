@@ -27,6 +27,10 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # Real defaults, one synthetic repo: a connector repo gets the widest stub set
 # (auto-merge, ci, claude, deploy-connector, pr-auto-review, release-please),
 # which is what makes "report EVERY drifted stub" testable at all.
+# FAKE/z exists only to exercise the NEGATIVE render paths: with a non-standard
+# ci mode neither ci.yml nor ci-fork-status.yml may be produced. Without it the
+# "and never without it" half of case I was asserted by the case name and
+# tested by nothing.
 # FAKE/y exists only to exercise the ci_dispatch opt-in: the render path that
 # adds `workflow_dispatch:` to ci.yml is conditional, and both branches have to
 # be pinned — an always-on trigger would silently drift all 60 standard-CI
@@ -34,7 +38,8 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # that opted in is relying on.
 jq '{defaults: .defaults,
      repos: [{repo: "FAKE/x", connector: "true"},
-             {repo: "FAKE/y", ci_dispatch: "true"}]}' \
+             {repo: "FAKE/y", ci_dispatch: "true"},
+             {repo: "FAKE/z", ci: "none"}]}' \
   "$HERE/fleet.json" > "$ROOT/fleet.json"
 ROLLOUT="$ROOT/scripts/rollout.sh"
 
@@ -270,7 +275,27 @@ if ruby -ryaml -e 'y=YAML.load_file(ARGV[0]); exit(y[true].key?("workflow_dispat
   ok "G: workflow_dispatch parses as a trigger under on:"
 else bad "G: ci_dispatch=true" "workflow_dispatch is not a key under on:"; fi
 
+# --- H: --check over an opted-in repo, both directions ---------------------
+# CLAUDE.md: any change to what --check compares needs a case here, because its
+# failure mode is a report that quietly says less than it should.
+DIR=$(fixtures_y h1)
+run_check "$DIR" FAKE/y
+assert_has  H1 "OK       FAKE/y"
+assert_code H1 0
+assert_clean_stderr H1
+
+# A repo that lost its dispatch trigger must be REPORTED, not shrugged off —
+# that is the whole point of recording the opt-in in fleet.json rather than
+# leaving it a hand-edit the next --execute deletes (issue #76).
+DIR=$(fixtures_y h2)
+grep -v '^  workflow_dispatch:$' "$DIR/ci.yml" > "$DIR/ci.yml.tmp" && mv "$DIR/ci.yml.tmp" "$DIR/ci.yml"
+run_check "$DIR" FAKE/y
+assert_has  H2 "DRIFT    FAKE/y/ci.yml"
+assert_code H2 1
+
 # --- I: ci-fork-status renders with standard CI, and never without it ------
+# Sequenced after H so the file keeps its A-H-I lettering; it was first added
+# between G and H, which read as a renumbering rather than an addition.
 # CLAUDE.md: a new stub needs a case here. This one has a sharper failure than
 # most — the workflow triggers on the "CI" workflow BY NAME, so rendering it
 # where ci.yml is absent produces a workflow that can never fire and silently
@@ -300,23 +325,16 @@ if grep -q "head_repository.full_name != github.repository" "$I/ci-fork-status.y
   ok "I: guarded to fork PRs only"
 else bad "I: fork guard" "missing the head_repository != repository condition"; fi
 
-# --- H: --check over an opted-in repo, both directions ---------------------
-# CLAUDE.md: any change to what --check compares needs a case here, because its
-# failure mode is a report that quietly says less than it should.
-DIR=$(fixtures_y h1)
-run_check "$DIR" FAKE/y
-assert_has  H1 "OK       FAKE/y"
-assert_code H1 0
-assert_clean_stderr H1
-
-# A repo that lost its dispatch trigger must be REPORTED, not shrugged off —
-# that is the whole point of recording the opt-in in fleet.json rather than
-# leaving it a hand-edit the next --execute deletes (issue #76).
-DIR=$(fixtures_y h2)
-grep -v '^  workflow_dispatch:$' "$DIR/ci.yml" > "$DIR/ci.yml.tmp" && mv "$DIR/ci.yml.tmp" "$DIR/ci.yml"
-run_check "$DIR" FAKE/y
-assert_has  H2 "DRIFT    FAKE/y/ci.yml"
-assert_code H2 1
+# The "never without it" half needs a repo whose ci mode is NOT standard —
+# there was no such fixture, so that claim was asserted by the case NAME and
+# tested by nothing. FAKE/z has `ci: "none"`.
+IZ="$TMP/i-none"; bash "$ROLLOUT" FAKE/z --render "$IZ" >/dev/null
+if [ -f "$IZ/ci-fork-status.yml" ]; then
+  bad "I: non-standard ci" "ci-fork-status.yml rendered without ci.yml — it triggers on the \"CI\" workflow by NAME, so it could never fire"
+else ok "I: non-standard ci mode renders no ci-fork-status.yml"; fi
+if [ -f "$IZ/ci.yml" ]; then
+  bad "I: non-standard ci" "ci.yml rendered for a repo with ci mode 'none'"
+else ok "I: non-standard ci mode renders no ci.yml either"; fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
