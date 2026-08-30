@@ -270,6 +270,36 @@ if ruby -ryaml -e 'y=YAML.load_file(ARGV[0]); exit(y[true].key?("workflow_dispat
   ok "G: workflow_dispatch parses as a trigger under on:"
 else bad "G: ci_dispatch=true" "workflow_dispatch is not a key under on:"; fi
 
+# --- I: ci-fork-status renders with standard CI, and never without it ------
+# CLAUDE.md: a new stub needs a case here. This one has a sharper failure than
+# most — the workflow triggers on the "CI" workflow BY NAME, so rendering it
+# where ci.yml is absent produces a workflow that can never fire and silently
+# never posts `ci-gated` for a fork.
+I="$TMP/i-std"; bash "$ROLLOUT" FAKE/x --render "$I" >/dev/null
+if [ -f "$I/ci-fork-status.yml" ]; then
+  ok "I: standard CI mode renders ci-fork-status.yml"
+else bad "I: standard CI" "ci-fork-status.yml was not rendered alongside ci.yml"; fi
+
+# It must trigger on the CI workflow's NAME, and only for completed runs.
+if ruby -ryaml -e '
+  y = YAML.load_file(ARGV[0])
+  wr = y[true]["workflow_run"]
+  exit(wr["workflows"] == ["CI"] && wr["types"] == ["completed"] ? 0 : 1)' "$I/ci-fork-status.yml" 2>/dev/null; then
+  ok "I: triggers on workflow_run of \"CI\", completed only"
+else bad "I: trigger shape" "workflow_run does not name the CI workflow on completion"; fi
+
+# The pwn-request guard: it must never check out head-repo content.
+# Match a USES line, not the security comment that warns against it — a bare
+# grep for the string matches that comment and fails on a correct file.
+if grep -qE "^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*actions/checkout" "$I/ci-fork-status.yml"; then
+  bad "I: security" "ci-fork-status.yml checks out code — it runs with a WRITE token on untrusted forks"
+else ok "I: ci-fork-status.yml checks out nothing (pwn-request guard)"; fi
+
+# And it must only act on forks; a same-repo PR posts its own status.
+if grep -q "head_repository.full_name != github.repository" "$I/ci-fork-status.yml"; then
+  ok "I: guarded to fork PRs only"
+else bad "I: fork guard" "missing the head_repository != repository condition"; fi
+
 # --- H: --check over an opted-in repo, both directions ---------------------
 # CLAUDE.md: any change to what --check compares needs a case here, because its
 # failure mode is a report that quietly says less than it should.
