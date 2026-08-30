@@ -101,12 +101,23 @@ runs:
 
           case ",$never," in *",$author,"*) continue ;; esac
 
-          # Idempotent: skip a line that already credits someone.
-          if grep -q "(\[#$n\](.*thanks @" CHANGELOG.md; then continue; fi
+          # Cheap pre-check so an already-credited PR costs no `gh api` call.
+          # Matches "thanks @" ANYWHERE on the line that references this PR:
+          # the credit is inserted BEFORE the `([#n](` link group, so an
+          # earlier version anchored after the link never matched and this
+          # short-circuit was dead code.
+          if grep -E "/(issues|pull)/$n\b" CHANGELOG.md | grep -q "thanks @"; then
+            continue
+          fi
 
-          python3 "$GITHUB_ACTION_PATH/amend_changelog.py" CHANGELOG.md "$n" "$author"
-          changed=1
-          echo "credited @$author for #$n"
+          # The script is the single authority on whether anything changed —
+          # it prints "changed" only when it edited a line. Logging off the
+          # script rather than off reaching this point is what stops the run
+          # claiming a credit it did not make.
+          if [ "$(python3 "$GITHUB_ACTION_PATH/amend_changelog.py" CHANGELOG.md "$n" "$author")" = "changed" ]; then
+            changed=1
+            echo "credited @$author for #$n"
+          fi
         done
 
         if [ "$changed" = "1" ] && ! git diff --quiet CHANGELOG.md; then

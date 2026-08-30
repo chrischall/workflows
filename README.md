@@ -32,17 +32,28 @@ red then only ever means a real failure). Status mode needs the stub to grant
 Status mode also suppresses the duplicate CI run a non-arming label would
 trigger on an already-armed PR (#12) — unsafe to suppress in fail mode, where
 a green skip would overwrite a legitimately red check on the same SHA.
-Fork PRs are the one case status mode cannot gate with a status at all: their
-`GITHUB_TOKEN` is capped read-only whatever the stub requests, so the
-`ci-gated` POST 403s. The gate arms CI for them and posts nothing, so the run
-shows a real pass/fail while the unreported `ci-gated` context keeps the merge
-blocked for a human — never green by accident. Bespoke-CI repos get the same
-rule from `arm-gate`, which publishes `is_fork` for their reporter step to
-guard on (`templates/ci-gradle.yml` shows the shape).
+Fork PRs cannot post their OWN `ci-gated`: their `GITHUB_TOKEN` is capped
+read-only whatever the stub requests, so the POST 403s. The `ci` job therefore
+posts nothing for them and the run shows a real pass/fail. Bespoke-CI repos get
+the same rule from `arm-gate`, which publishes `is_fork` for their reporter step
+to guard on (`templates/ci-gradle.yml` shows the shape).
 
-**Merging a fork PR.** Nothing posts `ci-gated`, so the required context is never
-satisfied and the merge is blocked by design. "Blocked until a maintainer acts"
-means *you post the status*, after reading the run:
+**Merging a fork PR.** `templates/ci-fork-status.yml` closes this: it triggers
+on `workflow_run`, which fires in the BASE repo where the token really does
+have `statuses: write`, and mirrors the completed run's conclusion into
+`ci-gated`. So a fork PR now goes green on its own and no maintainer has to
+hand-post a status.
+
+That was a deliberate weakening of a fail-safe — previously the fork path could
+only ever leave the gate closed. Two human gates remain and it rests on them:
+GitHub holds fork runs at `action_required` until a maintainer approves them
+(so CI never runs on unreviewed external code, and the reporter only mirrors an
+approved run), and `pr-auto-review` SKIPS fork PRs, so `ready-to-merge` is
+never applied to one automatically.
+
+A repo that has not had the stub rolled out yet still has the old behaviour —
+nothing posts `ci-gated` and the merge stays blocked. There, post it yourself
+after reading the run:
 
 ```sh
 gh api repos/<owner>/<repo>/statuses/<head-sha> \
