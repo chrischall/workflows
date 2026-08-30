@@ -1,0 +1,124 @@
+name: Credit external contributors
+description: >
+  Append `(thanks @user)` to CHANGELOG entries whose PR came from outside the
+  repo owner, on the release-please PR branch.
+
+  Runs AFTER release-please in the same job, because release-please force-pushes
+  its branch on every run and regenerates the changelog from commits — so the
+  amendment has to be re-applied each time rather than made once. It is
+  idempotent: an entry already carrying a credit is left alone.
+
+  Why not do this by rewriting the PR title at open time: GitHub squashes a
+  SINGLE-commit PR using the COMMIT subject, not the PR title, so a
+  title-rewriting bot silently fails on exactly the small one-commit PRs
+  external contributors usually send. Amending the changelog reads the merged
+  PR's author directly and is unaffected by how the squash subject was chosen.
+
+  Bots (dependabot, release-please, github-actions) are never credited, and
+  neither is the repo owner — a changelog that thanks the owner on every line
+  says nothing.
+
+inputs:
+  token:
+    description: Token with contents:write on the release-please branch.
+    required: true
+  pr:
+    description: >
+      The release PR number from release-please's `pr` output. Empty means no
+      release PR exists this run, and the action is a no-op.
+    required: false
+    default: ''
+  exclude-logins:
+    description: >
+      Extra comma-separated logins never to credit, beyond the repo owner and
+      the known bots.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Amend changelog with contributor credits
+      if: inputs.pr != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PR_JSON: ${{ inputs.pr }}
+        EXCLUDE: ${{ inputs.exclude-logins }}
+        REPO: ${{ github.repository }}
+        OWNER: ${{ github.repository_owner }}
+      run: |
+        set -euo pipefail
+
+        # release-please's `pr` output is a JSON object, not a number.
+        branch=$(printf '%s' "$PR_JSON" | jq -r '.headBranchName // empty')
+        number=$(printf '%s' "$PR_JSON" | jq -r '.number // empty')
+        if [ -z "$branch" ] || [ -z "$number" ]; then
+          echo "No release PR this run; nothing to credit."
+          exit 0
+        fi
+
+        git config user.name  "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git fetch --quiet origin "$branch"
+        git checkout --quiet -B "$branch" "origin/$branch"
+
+        if [ ! -f CHANGELOG.md ]; then
+          echo "No CHANGELOG.md; nothing to credit."
+          exit 0
+        fi
+
+        never="dependabot[bot],dependabot,github-actions[bot],release-please[bot],$OWNER"
+        [ -n "$EXCLUDE" ] && never="$never,$EXCLUDE"
+
+        # Collect the PR numbers referenced by the changelog's UNRELEASED top
+        # block only — older entries are already published and must not churn.
+        prs=$(awk '
+          /^## / { seen++ }
+          seen == 1 { print }
+        ' CHANGELOG.md | grep -oE '/(issues|pull)/[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
+
+        changed=0
+        for n in $prs; do
+          author=$(gh api "repos/$REPO/pulls/$n" --jq '.user.login' 2>/dev/null || true)
+          [ -z "$author" ] && continue
+          case ",$never," in *",$author,"*) continue ;; esac
+
+          # Idempotent: skip a line that already credits someone.
+          if grep -q "(\[#$n\](.*thanks @" CHANGELOG.md; then continue; fi
+
+          python3 - "$n" "$author" <<'PY'
+import re, sys
+n, author = sys.argv[1], sys.argv[2]
+path = "CHANGELOG.md"
+src = open(path, encoding="utf-8").read()
+lines = src.split("\n")
+seen = 0
+for i, line in enumerate(lines):
+    if line.startswith("## "):
+        seen += 1
+        if seen > 1:
+            break
+    if seen == 1 and re.search(rf"/(issues|pull)/{n}\b", line) and "thanks @" not in line:
+        # Insert before the trailing link group so the credit reads as part of
+        # the description rather than after the commit hash.
+        m = re.search(r"\s*\(\[#", line)
+        if m:
+            lines[i] = line[: m.start()] + f" (thanks @{author})" + line[m.start():]
+        else:
+            lines[i] = line.rstrip() + f" (thanks @{author})"
+        break
+open(path, "w", encoding="utf-8").write("\n".join(lines))
+PY
+          changed=1
+          echo "credited @$author for #$n"
+        done
+
+        if [ "$changed" = "1" ] && ! git diff --quiet CHANGELOG.md; then
+          git add CHANGELOG.md
+          git commit -q -m "chore: credit external contributors in the changelog"
+          git push --quiet origin "HEAD:$branch"
+          echo "Amended $branch."
+        else
+          echo "No external contributors to credit."
+        fi
