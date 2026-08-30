@@ -111,7 +111,12 @@ jobs:
           EVENT: ${{ github.event_name }}
           # On issue_comment the PR number lives on `issue`; on pull_request it
           # is on `pull_request`. Exactly one is set.
-          PR_NUMBER: ${{ needs.context.outputs.number || github.event.issue.number }}
+          # The RAW payload, deliberately — this job BOOTSTRAPS the context that
+          # everything downstream reads, so it cannot read `needs.context`
+          # (itself). A blanket rewrite of `github.event.pull_request.*` to the
+          # context outputs caught this line too; actionlint flagged it as
+          # `property "context" is not defined`.
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           IS_PR_COMMENT: ${{ github.event.issue.pull_request != null }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_ASSOC: ${{ github.event.comment.author_association }}
