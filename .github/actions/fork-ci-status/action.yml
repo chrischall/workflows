@@ -1,0 +1,55 @@
+name: Post ci-gated for a fork run
+description: >
+  Mirror a completed CI run's conclusion into the `ci-gated` commit status.
+
+  Split out of the stub so the mapping from run conclusion to status state
+  lives in one place. It takes only scalars off the event payload and never
+  touches head-repository content — see the security note in
+  templates/ci-fork-status.yml before changing it.
+
+inputs:
+  token:
+    description: Token with statuses:write in the BASE repo.
+    required: true
+  sha:
+    description: Head SHA of the fork PR to post against.
+    required: true
+  conclusion:
+    description: The completed run's conclusion.
+    required: true
+  run-url:
+    description: Link target for the status, so the result is traceable.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ inputs.sha }}
+        CONCLUSION: ${{ inputs.conclusion }}
+        RUN_URL: ${{ inputs.run-url }}
+      run: |
+        set -euo pipefail
+
+        # Map a run conclusion onto a commit-status state. Anything that is not
+        # an unambiguous pass is reported as a FAILURE rather than left unset:
+        # an unset required context blocks the merge, which is correct, but it
+        # is indistinguishable from "CI has not finished" and hides a cancelled
+        # or timed-out run behind a spinner.
+        case "$CONCLUSION" in
+          success)           state=success; desc="CI passed (fork run)" ;;
+          skipped|neutral)   state=success; desc="CI skipped (fork run)" ;;
+          *)                 state=failure; desc="CI $CONCLUSION (fork run)" ;;
+        esac
+
+        gh api "repos/$REPO/statuses/$SHA" \
+          -f state="$state" \
+          -f context="ci-gated" \
+          -f description="$desc" \
+          ${RUN_URL:+-f target_url="$RUN_URL"} \
+          --silent
+        echo "ci-gated=$state on $SHA ($CONCLUSION)"
