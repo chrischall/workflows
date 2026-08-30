@@ -23,9 +23,21 @@ name: Reusable PR auto-review
 #     they ride along on the tracking issue. `fail` blocks (never auto-arms).
 #
 # Why `pull_request` (not `pull_request_target`): Anthropic's OIDC backend
-# rejects `pull_request_target` (anthropics/claude-code-action#713). Fork
-# PRs therefore can't be auto-reviewed; `@claude review this` via claude.yml
-# is the manual fallback.
+# rejects `pull_request_target` (anthropics/claude-code-action#713), and a
+# `pull_request` run from a fork gets NO secrets — so a fork cannot be reviewed
+# on that trigger at all.
+#
+# Forks are reviewed through `issue_comment` instead, which fires in the BASE
+# repo with secrets intact (the same mechanism claude.yml uses). A maintainer
+# comments `/auto-review`; the `context` job checks `author_association` before
+# anything runs. That command IS the human gate — a fork review never starts on
+# its own, and unlike the same-repo path there is no event that triggers it
+# automatically.
+#
+# A fork verdict is INFORMATION ONLY: the arming step never labels a fork, so
+# `ready-to-merge` stays a human action. Combined with the arm-gate deferring
+# un-armed fork CI, that means reviewing a fork neither merges it nor starts its
+# build — both remain deliberate acts.
 #
 # Bot PRs (dependabot etc.) skip review entirely (user.type filter) and go
 # straight to CI + auto-merge. PRs already labeled `ready-to-merge` skip
@@ -68,6 +80,93 @@ on:
         required: true
 
 jobs:
+  # Normalises the PR context so the review job can be reached from two very
+  # different payloads.
+  #
+  # `pull_request` carries the PR inline but withholds secrets on a fork run —
+  # so a fork can never be reviewed there. `issue_comment` fires in the BASE
+  # repo WITH secrets (the mechanism claude.yml already uses to reach forks) but
+  # carries no `pull_request` object at all: every one of the ~23
+  # `github.event.pull_request.*` reads below would be null. Hence this job:
+  # one place that produces the same fields whichever event arrived.
+  context:
+    runs-on: ubuntu-latest
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      title: ${{ steps.pr.outputs.title }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
+      head_ref: ${{ steps.pr.outputs.head_ref }}
+      head_repo: ${{ steps.pr.outputs.head_repo }}
+      is_fork: ${{ steps.pr.outputs.is_fork }}
+      draft: ${{ steps.pr.outputs.draft }}
+      user_type: ${{ steps.pr.outputs.user_type }}
+      labels: ${{ steps.pr.outputs.labels }}
+      eligible: ${{ steps.pr.outputs.eligible }}
+    steps:
+      - id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          # On issue_comment the PR number lives on `issue`; on pull_request it
+          # is on `pull_request`. Exactly one is set.
+          PR_NUMBER: ${{ needs.context.outputs.number || github.event.issue.number }}
+          IS_PR_COMMENT: ${{ github.event.issue.pull_request != null }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_ASSOC: ${{ github.event.comment.author_association }}
+        run: |
+          set -euo pipefail
+
+          # A comment on a plain ISSUE is not a PR review request. Bail before
+          # spending an API call.
+          if [ "$EVENT" = "issue_comment" ] && [ "$IS_PR_COMMENT" != "true" ]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"; echo "not a PR comment"; exit 0
+          fi
+
+          # The fork path is HUMAN-GATED and that gate is here: a maintainer has
+          # to type the command, and `author_association` has to be one the repo
+          # trusts. A fork review never starts on its own.
+          if [ "$EVENT" = "issue_comment" ]; then
+            case "$COMMENT_BODY" in *"/auto-review"*) ;; *)
+              echo "eligible=false" >> "$GITHUB_OUTPUT"; echo "no /auto-review command"; exit 0 ;;
+            esac
+            case "$COMMENT_ASSOC" in OWNER|MEMBER|COLLABORATOR) ;; *)
+              echo "eligible=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::/auto-review ignored — comment author_association is '$COMMENT_ASSOC', not a maintainer of this repo."
+              exit 0 ;;
+            esac
+          fi
+
+          pr=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq \
+            '{number, title, draft, head_sha: .head.sha, base_sha: .base.sha, head_ref: .head.ref, head_repo: .head.repo.full_name, user_type: .user.type, labels: [.labels[].name]}')
+
+          {
+            echo "number=$(printf '%s' "$pr" | jq -r .number)"
+            echo "head_sha=$(printf '%s' "$pr" | jq -r .head_sha)"
+            echo "base_sha=$(printf '%s' "$pr" | jq -r .base_sha)"
+            echo "head_ref=$(printf '%s' "$pr" | jq -r .head_ref)"
+            echo "head_repo=$(printf '%s' "$pr" | jq -r .head_repo)"
+            echo "draft=$(printf '%s' "$pr" | jq -r .draft)"
+            echo "user_type=$(printf '%s' "$pr" | jq -r .user_type)"
+            echo "labels=$(printf '%s' "$pr" | jq -c .labels)"
+            echo "eligible=true"
+          } >> "$GITHUB_OUTPUT"
+
+          # Multi-line safe: a PR title can contain anything.
+          {
+            echo "title<<__EOT__"
+            printf '%s\n' "$pr" | jq -r .title
+            echo "__EOT__"
+          } >> "$GITHUB_OUTPUT"
+
+          head_repo=$(printf '%s' "$pr" | jq -r .head_repo)
+          if [ "$head_repo" = "$REPO" ]; then
+            echo "is_fork=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_fork=true" >> "$GITHUB_OUTPUT"
+          fi
+
   review:
     runs-on: ubuntu-latest
     permissions:
@@ -75,13 +174,19 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write       # Claude App OIDC token exchange
+    needs: context
+    # Same rules as before, now read from `context` so they hold for both
+    # payloads. The one addition is the fork arm: a fork reaches this job ONLY
+    # via a maintainer's `/auto-review` comment, which `context` has already
+    # verified — it can never start on its own.
     if: |
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.user.type == 'User' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      (!startsWith(github.event.pull_request.head.ref, 'release-please--') || contains(github.event.pull_request.labels.*.name, 'release-ready')) &&
-      (!contains(github.event.pull_request.labels.*.name, 'autorelease: pending') || contains(github.event.pull_request.labels.*.name, 'release-ready')) &&
-      (!contains(github.event.pull_request.labels.*.name, 'ready-to-merge') || (inputs.rereview_on_push && github.event.action == 'synchronize')) &&
+      needs.context.outputs.eligible == 'true' &&
+      needs.context.outputs.draft == 'false' &&
+      needs.context.outputs.user_type == 'User' &&
+      (needs.context.outputs.is_fork == 'false' || github.event_name == 'issue_comment') &&
+      (!startsWith(needs.context.outputs.head_ref, 'release-please--') || contains(needs.context.outputs.labels, '"release-ready"')) &&
+      (!contains(needs.context.outputs.labels, '"autorelease: pending"') || contains(needs.context.outputs.labels, '"release-ready"')) &&
+      (!contains(needs.context.outputs.labels, '"ready-to-merge"') || (inputs.rereview_on_push && github.event.action == 'synchronize') || github.event_name == 'issue_comment') &&
       (github.event.action != 'labeled' || github.event.label.name == 'review-with-opus' || github.event.label.name == 'release-ready')
     steps:
       # A push to an ALREADY-ARMED PR must not keep the old verdict: the arming
@@ -89,10 +194,10 @@ jobs:
       # happily ship the new one. De-arm first; the verdict step re-adds the
       # label if this diff also passes.
       - name: De-arm on new commits
-        if: ${{ inputs.rereview_on_push && github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ready-to-merge') }}
+        if: ${{ inputs.rereview_on_push && github.event.action == 'synchronize' && contains(needs.context.outputs.labels, '"ready-to-merge"') }}
         env:
           GH_TOKEN: ${{ secrets.release_pat || secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ needs.context.outputs.number }}
           REPO: ${{ github.repository }}
         run: |
           gh pr edit "$PR" --repo "$REPO" --remove-label ready-to-merge
@@ -101,14 +206,14 @@ jobs:
       - name: Apply auto-review label
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ needs.context.outputs.number }}
           REPO: ${{ github.repository }}
         run: gh pr edit "$PR" --repo "$REPO" --add-label auto-review
 
       - name: Request Copilot reviewer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ needs.context.outputs.number }}
           REPO: ${{ github.repository }}
         run: |
           # 422 if Copilot review isn't enabled for the repo — swallow it.
@@ -144,7 +249,7 @@ jobs:
       - name: Precompute changelog commit ancestry (ground truth)
         id: ancestry
         env:
-          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_BASE_SHA: ${{ needs.context.outputs.base_sha }}
         run: |
           # Diff base: the checkout is refs/pull/N/merge, whose first parent
           # is the current base tip — fresher than the event payload's
@@ -196,10 +301,10 @@ jobs:
         id: model
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ needs.context.outputs.number }}
           REPO: ${{ github.repository }}
-          HAS_OPUS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'review-with-opus') }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HAS_OPUS_LABEL: ${{ contains(needs.context.outputs.labels, '"review-with-opus"') }}
+          HEAD_REF: ${{ needs.context.outputs.head_ref }}
         run: |
           # Four-tier ladder by additions+deletions; `review-with-opus`
           # label forces Opus. Never the [1m] context variant.
@@ -254,11 +359,11 @@ jobs:
             --json-schema '{"type":"object","required":["verdict","summary","important_findings"],"properties":{"verdict":{"enum":["pass","warn","fail"]},"summary":{"type":"string"},"important_findings":{"type":"array","items":{"type":"string"}},"nits":{"type":"array","items":{"type":"string"}}}}'
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git merge-base:*),Bash(git rev-list:*),Bash(git branch --contains:*),Bash(git cat-file:*),Bash(cat:*),Bash(rg:*),Bash(jq:*),Bash(ls:*),Bash(find:*)"
           prompt: |
-            You are reviewing pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+            You are reviewing pull request #${{ needs.context.outputs.number }} in ${{ github.repository }}.
 
             STEPS:
             1. Read CLAUDE.md (and README.md if CLAUDE.md is absent) to learn the project's conventions.
-            2. Read the PR diff: `gh pr diff ${{ github.event.pull_request.number }}` (or read files in the working tree, which is checked out).
+            2. Read the PR diff: `gh pr diff ${{ needs.context.outputs.number }}` (or read files in the working tree, which is checked out).
             3. Review the changes for:
                - Correctness and edge cases
                - Adherence to documented conventions
@@ -342,7 +447,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ needs.context.outputs.number }}
           REPO: ${{ github.repository }}
           OUT: ${{ steps.review.outputs.structured_output }}
           VIOLATIONS: ${{ steps.ancestry.outputs.violations }}
@@ -475,16 +580,16 @@ jobs:
         if: ${{ !cancelled() && (steps.verdict.outputs.verdict == 'warn' || steps.verdict.outputs.verdict == 'fail' || (steps.verdict.outputs.verdict == 'pass' && steps.verdict.outputs.has_findings == 'true')) }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ needs.context.outputs.number }}
           REPO: ${{ github.repository }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_TITLE: ${{ needs.context.outputs.title }}
           VERDICT: ${{ steps.verdict.outputs.verdict }}
           # Post-discard/post-synthesis findings from the verdict step — the
           # raw model output may contain findings the pipeline overruled.
           OUT: ${{ steps.verdict.outputs.filtered_output }}
           # Stamped into the body so a reader can tell whether a re-listed
           # finding was judged against their fix or against an older commit.
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           MARKER="<!-- auto-review-followup:PR-${PR} -->"
@@ -604,7 +709,7 @@ jobs:
         if: ${{ !cancelled() && steps.verdict.outputs.verdict == 'pass' && steps.verdict.outputs.has_findings != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ needs.context.outputs.number }}
           REPO: ${{ github.repository }}
         run: |
           MARKER="<!-- auto-review-followup:PR-${PR} -->"
@@ -647,10 +752,14 @@ jobs:
         # that way would not fire the auto-merge workflow.
         # `warn` arms too (nits don't block — tracked via the follow-up issue);
         # only `fail` keeps the human-in-the-loop gate.
-        if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
+        # NEVER arms a fork. A fork PR can now be reviewed (via a maintainer's
+        # `/auto-review`), but the verdict is information only — `ready-to-merge`
+        # stays a human action, and since the arm-gate defers un-armed fork CI,
+        # not arming also means a fork's build never starts on a verdict alone.
+        if: ${{ !cancelled() && needs.context.outputs.is_fork == 'false' }}
         env:
           GH_TOKEN: ${{ secrets.release_pat }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ needs.context.outputs.number }}
           REPO: ${{ github.repository }}
           # Empty if the verdict step failed before exporting — never arms.
           VERDICT: ${{ steps.verdict.outputs.verdict }}

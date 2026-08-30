@@ -39,13 +39,18 @@ description: >
   `pull_request` runs from a fork, whatever the workflow's `permissions:` block
   asks for, so the ci-gated POST is impossible — it 403s, this step fails, every
   guarded build step is skipped, and the PR goes red without a single test
-  having run. On a fork the gate therefore sets `run=true` and posts nothing,
-  and sets output `is_fork=true`. Your reporter step MUST skip its POST when
-  `is_fork == 'true'` (see templates/ci-gradle.yml) or it will 403 in turn and
-  turn a legitimately green run red. Nothing posts `ci-gated` for a fork, so the
-  required context stays unreported and the merge stays blocked for a human —
-  fail-safe. Fail mode is deliberately untouched: there the un-armed block IS a
-  red check, and arming a fork would flip it green before review.
+  having run. On a fork the gate therefore posts nothing and sets output
+  `is_fork=true`. Your reporter step MUST skip its POST when `is_fork == 'true'`
+  (see templates/ci-gradle.yml) or it will 403 in turn and turn a legitimately
+  green run red.
+
+  An UN-ARMED fork now sets `run=false` — CI is deferred until a maintainer adds
+  `ready-to-merge`, exactly as for a same-repo PR. It used to build
+  automatically, on the reasoning that the unreported `ci-gated` context blocked
+  the merge regardless; `ci-fork-status.yml` now reports that context, and
+  building unreviewed fork code before a human has looked is the thing worth not
+  doing. Fail mode is deliberately untouched: there the un-armed block IS a red
+  check, and arming a fork would flip it green before review.
 
   Use as the FIRST step of any CI job whose check gates the merge, so no build
   runs until the PR is armed. This is the one shared, load-bearing piece of the
@@ -122,16 +127,24 @@ runs:
 
         # Fork PR in status mode: the read-only token makes the ci-gated POST
         # below impossible (403 → this step fails → every guarded build step is
-        # skipped → red, untested). Run the build and post nothing; the
-        # unreported ci-gated context keeps the merge blocked. Status mode only:
-        # in fail mode the un-armed block IS a red check, so arming here would
-        # turn it green before review.
+        # skipped → red, untested), so this branch must never reach the POST.
         #
-        # Deliberately AFTER the armed case: when it ran before, an
-        # already-armed fork PR pre-empted the duplicate-run suppression and
-        # rebuilt on every relabel, where a same-repo PR was skipped (#113).
+        # It no longer RUNS the build either. Previously an unarmed fork PR
+        # built automatically, on the reasoning that the unreported ci-gated
+        # context kept the merge blocked anyway. Two things changed that: forks
+        # now get a ci-gated status posted for them by ci-fork-status.yml, and
+        # running a fork's build before a maintainer has looked spends CI on
+        # unreviewed code. A fork now falls through to the un-armed path below —
+        # `ready-to-merge` is the human signal that starts it, exactly as for a
+        # same-repo PR. It still posts nothing here.
+        #
+        # Deliberately AFTER the armed case: an already-armed fork PR must take
+        # the armed path (and its duplicate-run suppression), or it rebuilds on
+        # every relabel where a same-repo PR is skipped (#113).
         if [ "$MODE" = "status" ] && [ "$IS_FORK" = "true" ]; then
-          run_ci "fork PR ($PR_HEAD_REPO) → run CI, post no ci-gated status (fork tokens are read-only; the required context stays unreported, so the merge stays blocked)"
+          echo "run=false" >> "$GITHUB_OUTPUT"
+          echo "fork PR ($PR_HEAD_REPO) is un-armed → CI deferred until a maintainer adds ready-to-merge; posting no ci-gated status (fork tokens are read-only)"
+          exit 0
         fi
 
         # Un-armed.
