@@ -161,6 +161,11 @@ render pr-auto-review.yml "$STAGE/pr-auto-review.yml"
 render auto-merge.yml "$STAGE/auto-merge.yml"
 render claude.yml "$STAGE/claude.yml"
 [ "$CI_MODE" = "standard" ] && render ci.yml "$STAGE/ci.yml"
+# Fork PRs cannot post their own `ci-gated` (read-only token), so a separate
+# `workflow_run` workflow posts it from the base-repo context. Rendered
+# alongside ci.yml and only in standard CI mode: it triggers on the "CI"
+# workflow by name, so it is meaningless where that stub is not installed.
+[ "$CI_MODE" = "standard" ] && render ci-fork-status.yml "$STAGE/ci-fork-status.yml"
 if [ "$RELEASE_MODE" = "mcp" ]; then
   render release-please.yml "$STAGE/release-please.yml"
   # Deploy jobs are APPENDED to the release stub rather than living in a
