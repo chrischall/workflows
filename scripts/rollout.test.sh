@@ -336,5 +336,31 @@ if [ -f "$IZ/ci.yml" ]; then
   bad "I: non-standard ci" "ci.yml rendered for a repo with ci mode 'none'"
 else ok "I: non-standard ci mode renders no ci.yml either"; fi
 
+# --- J: the PR-creation path's labelling invariants ------------------------
+# Static assertions, not behavioural: the suite never runs --execute (it would
+# push branches and open PRs), so the label step cannot be exercised. These pin
+# the two properties whose failure would be worst.
+#
+# The first is the serious one. rollout.sh opens PRs across the whole fleet in
+# one sweep; if it ever applied an ARMING label, sixty PRs would auto-merge
+# without a human or a review having seen them.
+if grep -nE "add-label[[:space:]]+(ready-to-merge|release-ready)" "$ROLLOUT" >/dev/null; then
+  bad "J: arming" "rollout.sh applies an ARMING label — a fleet sweep would auto-merge every PR it opens"
+else ok "J: rollout.sh never applies an arming label"; fi
+
+# Second: the label is best-effort. The sync is already pushed and the PR
+# already open by then, so a labelling hiccup must not read as a failed
+# rollout — the branch would look unsynced when it is not.
+if grep -A2 'gh pr edit "$PR_URL"' "$ROLLOUT" | grep -q "2>/dev/null\|>/dev/null 2>&1"; then
+  ok "J: the label step is best-effort (failure does not abort the rollout)"
+else bad "J: best-effort" "the label step can abort a rollout that already pushed and opened its PR"; fi
+
+# And it must be guarded on the label existing: a repo with no `ci` label has no
+# such convention to satisfy, and erroring there would fail rollouts that are
+# entirely correct.
+if grep -q 'gh label list --repo "$REPO"' "$ROLLOUT"; then
+  ok "J: label applied only where the repo has one"
+else bad "J: guard" "the label is applied unconditionally"; fi
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
