@@ -29,15 +29,30 @@ permissions:
 # would let the labeled event displace the queued review, leaving the PR
 # with no verdict and no label.
 concurrency:
-  # The PR number comes from `pull_request` OR `issue` — exactly one is set, and
-  # `issue_comment` carries no `pull_request` object. Reading only the former
-  # made every `/auto-review` comment across every PR share ONE group, so a
-  # review on PR 5 cancelled a review still running on PR 9.
+  # Keyed so an `issue_comment` run can never cancel another review.
   #
-  # Evaluated here rather than from the `context` job: `concurrency` is resolved
-  # before any job runs, so it cannot read `needs`.
+  # `issue_comment` fires on EVERY comment — the body filter lives in the
+  # `context` job, which runs after concurrency is resolved. So a comment that
+  # is not `/auto-review` still starts a run and still takes a queue slot. With
+  # `cancel-in-progress: false` GitHub keeps at most ONE pending run per group
+  # and cancels the previously pending one, which produced this:
+  #
+  #   1. `/auto-review` posted        → run queued behind the pull_request review
+  #   2. the reviewer's own "Claude Code is working…" progress comment
+  #                                   → a second issue_comment run
+  #   3. that new run displaced the queued one — the bot CANCELLED the very
+  #      review it was reporting progress on (chrischall/workflows#182)
+  #
+  # Giving each comment its own group removes the collision entirely: a
+  # `/auto-review` is an explicitly requested action, not a duplicate of the
+  # automatic review, and two of them are rare enough that not de-duplicating
+  # them costs nothing. The `pull_request` group is unchanged.
   group: |
     pr-auto-review-${{ github.event.pull_request.number || github.event.issue.number }}${{
+      github.event_name == 'issue_comment'
+        && format('-comment-{0}', github.event.comment.id)
+        || ''
+    }}${{
       github.event.action == 'labeled'
         && format('-labeled-{0}', github.event.label.name)
         || ''
