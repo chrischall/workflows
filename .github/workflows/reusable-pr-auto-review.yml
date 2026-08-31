@@ -527,6 +527,11 @@ jobs:
           REPO: ${{ github.repository }}
           OUT: ${{ steps.review.outputs.structured_output }}
           VIOLATIONS: ${{ steps.ancestry.outputs.violations }}
+          EVENT: ${{ github.event_name }}
+          # Names the workflow that was initially triggered — the CALLER's
+          # stub, not this reusable file — which is the copy the action
+          # compares against the default branch.
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           verdict=""; summary=""; DISCARD_NOTE=""
           if [ -n "$VIOLATIONS" ]; then
@@ -573,6 +578,32 @@ jobs:
             verdict=$(echo "$OUT" | jq -r '.verdict // empty')
             summary=$(echo "$OUT" | jq -r '.summary // empty')
           fi
+          # A PR that EDITS the reviewing workflow cannot be reviewed by the
+          # `pull_request` run: that run uses the PR's copy of the workflow,
+          # and claude-code-action refuses to execute a workflow file that
+          # differs from the one on the default branch. The result is an empty
+          # structured output and no review comment — indistinguishable, from
+          # here, from a review that fell over, so it used to surface as a bare
+          # "no verdict / treat as un-reviewed". That is a dead end for the
+          # author: re-running the same job reproduces it every time.
+          #
+          # The way through already exists — a maintainer's `/auto-review`
+          # comment fires `issue_comment`, which GitHub always runs from the
+          # DEFAULT branch, so the action sees an unmodified workflow. Say so
+          # rather than making each author rediscover it. (Diagnosed the hard
+          # way: this exact refusal stalled 78 idle sweep PRs at once.)
+          SELF_EDIT=""
+          if [ -z "$verdict" ] && [ "$EVENT" != "issue_comment" ]; then
+            # owner/repo/.github/workflows/x.yml@refs/... -> .github/workflows/x.yml
+            SELF="${WORKFLOW_REF%%@*}"; SELF="${SELF#*/}"; SELF="${SELF#*/}"
+            CHANGED=$(gh pr diff "$PR" --repo "$REPO" --name-only 2>/dev/null || true)
+            if [ -n "$SELF" ] && printf '%s\n' "$CHANGED" | grep -qxF "$SELF"; then
+              SELF_EDIT="This PR modifies \`$SELF\` — the very workflow this run executes. \`claude-code-action\` refuses to run a workflow file that differs from the copy on the default branch, so the \`pull_request\` run cannot review this PR no matter how often it is re-run."
+            elif printf '%s\n' "$CHANGED" | grep -q '^\.github/workflows/'; then
+              SELF_EDIT="This PR modifies files under \`.github/workflows/\`, which is the usual cause: \`claude-code-action\` refuses to run a workflow file that differs from the copy on the default branch."
+            fi
+          fi
+
           if [ -z "$verdict" ]; then
             body=$(gh pr view "$PR" --repo "$REPO" --json comments --jq '[.comments[]|select(.author.login=="claude")]|last|.body' 2>/dev/null || echo "")
             vline=$(printf '%s' "$body" | grep -ioE 'verdict[^a-z]{0,6}(pass|warn|fail)' | tail -1 || true)
@@ -616,6 +647,15 @@ jobs:
             NEW_BODY="$MARKER
           $ICON Auto-review verdict: **$verdict**${summary:+ — $summary}${DISCARD_NOTE:+
           $DISCARD_NOTE}"
+          elif [ -n "$SELF_EDIT" ]; then
+            NEW_BODY="$MARKER
+          ⚠️ Auto-review issued **no verdict** — and this is expected here, not a failure of the review.
+
+          $SELF_EDIT
+
+          **To review this PR:** a maintainer comments \`/auto-review\`. That fires \`issue_comment\`, which GitHub always runs from the default branch, so the action sees an unmodified workflow and the review proceeds against this PR's head.
+
+          Until then, treat this PR as un-reviewed."
           else
             NEW_BODY="$MARKER
           ⚠️ Auto-review issued **no verdict** — structured output was empty and no verdict line was found in the review comment. Treat this PR as un-reviewed."
@@ -634,7 +674,14 @@ jobs:
           fi
 
           if [ -z "$verdict" ]; then
-            echo "::error::auto-review completed without emitting a verdict"
+            if [ -n "$SELF_EDIT" ]; then
+              # Still a failure — the PR is genuinely un-reviewed and must not
+              # arm — but name the route out, so the red X is actionable
+              # instead of a re-run loop.
+              echo "::error::auto-review emitted no verdict: this PR edits the workflow that reviews it, so the pull_request run cannot review it. A maintainer should comment /auto-review to re-run from the default branch."
+            else
+              echo "::error::auto-review completed without emitting a verdict"
+            fi
             exit 1
           fi
 
