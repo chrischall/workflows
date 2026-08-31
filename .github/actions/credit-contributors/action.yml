@@ -111,7 +111,6 @@ runs:
 
           case ",$never," in *",$author,"*) continue ;; esac
 
-
           # The script is the single authority on whether anything changed —
           # it prints "changed" only when it edited a line. Logging off the
           # script rather than off reaching this point is what stops the run
