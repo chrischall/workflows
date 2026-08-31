@@ -143,16 +143,29 @@ jobs:
 
           # Fork PR in status mode: a read-only token makes the ci-gated POST
           # below impossible (403 → this job fails → every build step is
-          # skipped → red, untested). Run the build and post nothing instead;
-          # the unreported ci-gated context keeps the merge blocked. See the
-          # header block. Status mode only: in fail mode the un-armed block IS
-          # a red `ci / ci`, and arming here would turn it green.
+          # skipped → red, untested), so this branch must never reach the POST.
           #
-          # Deliberately AFTER the armed case: when it ran before, an
-          # already-armed fork PR pre-empted the duplicate-run suppression and
-          # rebuilt on every relabel, where a same-repo PR was skipped (#113).
+          # It no longer RUNS the build either. An un-armed fork used to build
+          # automatically, on the reasoning that the unreported `ci-gated`
+          # context blocked the merge anyway; `ci-fork-status.yml` now reports
+          # that context, and building unreviewed fork code before a maintainer
+          # has looked is the thing worth not doing. A fork falls through to the
+          # un-armed path below and waits for `ready-to-merge`, exactly as a
+          # same-repo PR does. Status mode only: in fail mode the un-armed block
+          # IS a red `ci / ci`, and arming here would turn it green.
+          #
+          # KEEP IN SYNC with .github/actions/arm-gate/action.yml, which carries
+          # the same decision for bespoke-CI repos. The two diverging is how
+          # most of the fleet would keep the old behaviour while the rest
+          # changed — scripts/gate.test.sh exercises BOTH.
+          #
+          # Deliberately AFTER the armed case: an already-armed fork PR must
+          # take the armed path (and its duplicate-run suppression), or it
+          # rebuilds on every relabel where a same-repo PR is skipped (#113).
           if [ "$MODE" = "status" ] && [ -n "$PR_HEAD_REPO" ] && [ "$PR_HEAD_REPO" != "$REPO" ]; then
-            run_ci "fork PR ($PR_HEAD_REPO) → run CI, post no ci-gated status (fork tokens are read-only; the required context stays unreported, so the merge stays blocked)"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "fork PR ($PR_HEAD_REPO) is un-armed → CI deferred until a maintainer adds ready-to-merge; posting no ci-gated status (fork tokens are read-only)"
+            exit 0
           fi
 
           # Un-armed.

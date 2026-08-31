@@ -124,12 +124,18 @@ gate_case "release-please un-armed → pending"        false pending HEAD_REF=re
 gate_case "push event → run"                         true  none    EVENT_NAME=push PR_HEAD_REPO=""
 
 echo "── Arm gate, fork PRs (status mode) ──"
-# A fork's token is read-only, so the pending POST is impossible. Run the build
-# so `ci / ci` carries a real result, and post nothing: the unreported ci-gated
-# context is what keeps the merge blocked.
-gate_case "fork un-armed → run, post nothing"        true  none    PR_HEAD_REPO=someone/example-mcp
+# A fork's token is read-only, so the pending POST is impossible either way —
+# the gate posts NOTHING for a fork, armed or not.
+#
+# What changed: an un-armed fork no longer RUNS. It used to build
+# automatically, on the reasoning that the unreported `ci-gated` context blocked
+# the merge regardless. `ci-fork-status.yml` now reports that context, so that
+# reasoning is gone — and building unreviewed fork code before a maintainer has
+# looked is the thing worth not doing. A fork now waits for `ready-to-merge`
+# exactly as a same-repo PR does.
+gate_case "fork un-armed → NO run, post nothing"     false none    PR_HEAD_REPO=someone/example-mcp
 gate_case "fork armed → run, post nothing"           true  none    PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge
-gate_case "fork with release-please-shaped ref"      true  none    PR_HEAD_REPO=someone/example-mcp HEAD_REF=release-please--x
+gate_case "fork un-armed, release-please ref → none" false none    PR_HEAD_REPO=someone/example-mcp HEAD_REF=release-please--x
 # #113: the fork short-circuit used to run BEFORE the armed case, pre-empting
 # the duplicate-run suppression, so an already-armed fork PR rebuilt on every
 # relabel where a same-repo PR was skipped. Same expectation as same-repo now.
@@ -156,9 +162,9 @@ gate_case "armed + ready-to-merge label → run"       true  none    LABELS=read
 gate_case "bot PR → always run"                      true  none    USER_TYPE=Bot
 gate_case "release-please un-armed → pending"        false pending HEAD_REF=release-please--branches--main
 gate_case "push event → run"                         true  none    EVENT_NAME=push PR_HEAD_REPO=""
-gate_case "fork un-armed → run, post nothing"        true  none    PR_HEAD_REPO=someone/example
+gate_case "fork un-armed → NO run, post nothing"     false none    PR_HEAD_REPO=someone/example
 gate_case "fork armed → run, post nothing"           true  none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge
-gate_case "fork with release-please-shaped ref"      true  none    PR_HEAD_REPO=someone/example HEAD_REF=release-please--x
+gate_case "fork un-armed, release-please ref → none" false none    PR_HEAD_REPO=someone/example HEAD_REF=release-please--x
 gate_case "fork armed + non-arming label → no dup"   false none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=documentation
 gate_case "fork armed + ready-to-merge label → run"  true  none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=ready-to-merge
 gate_case "fail mode: same-repo un-armed → no run"   false none    MODE=fail
