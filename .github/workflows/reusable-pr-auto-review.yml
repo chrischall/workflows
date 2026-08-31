@@ -180,10 +180,22 @@ jobs:
       issues: write
       id-token: write       # Claude App OIDC token exchange
     needs: context
-    # Same rules as before, now read from `context` so they hold for both
+    # Same rules as before, now read from `context` so they hold for BOTH
     # payloads. The one addition is the fork arm: a fork reaches this job ONLY
     # via a maintainer's `/auto-review` comment, which `context` has already
     # verified — it can never start on its own.
+    #
+    # A RELEASE-NOTES label re-triggers the review, because adding one is the
+    # documented fix for a finding this reviewer itself issues: several repos
+    # require exactly one per PR and `fail` a PR without it. Before that, the
+    # remedy did not re-run the thing that demanded it — the `fail` stood, and
+    # the merge stayed blocked by a finding already fixed.
+    #
+    # Worse than merely stuck: applying the label fires a `labeled` event this
+    # condition (correctly) skips, so a SKIPPED run then sits at the top of the
+    # run list looking like the latest review. Anyone reaching for "re-run the
+    # review" grabs that one, it skips again, and nothing changes
+    # (flightaware-mcp#63).
     if: |
       needs.context.outputs.eligible == 'true' &&
       needs.context.outputs.draft == 'false' &&
@@ -192,7 +204,10 @@ jobs:
       (!startsWith(needs.context.outputs.head_ref, 'release-please--') || contains(needs.context.outputs.labels, '"release-ready"')) &&
       (!contains(needs.context.outputs.labels, '"autorelease: pending"') || contains(needs.context.outputs.labels, '"release-ready"')) &&
       (!contains(needs.context.outputs.labels, '"ready-to-merge"') || (inputs.rereview_on_push && github.event.action == 'synchronize') || github.event_name == 'issue_comment') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'review-with-opus' || github.event.label.name == 'release-ready')
+      (github.event.action != 'labeled'
+        || github.event.label.name == 'review-with-opus'
+        || github.event.label.name == 'release-ready'
+        || contains(fromJSON('["enhancement","bug","dependencies","documentation","ci","test","security","ignore-for-release"]'), github.event.label.name))
     steps:
       # A push to an ALREADY-ARMED PR must not keep the old verdict: the arming
       # label was granted for a diff that no longer exists, and auto-merge will
