@@ -30,6 +30,13 @@ Consequences worth internalizing:
   the old path working, or roll out the rename before deleting.
 - The nullnet-app repos use `NULLNET_RELEASE_PAT`, not `RELEASE_PAT` — check
   `fleet.json`'s per-repo `pat_secret` before assuming a secret name exists.
+- **A comment-only edit to a template costs a full fleet rollout.** `--check`
+  compares rendered bytes, so there is no such thing as a cosmetic template
+  change: edit a comment and every repo rendering that stub drifts on the next
+  sweep. Either roll it out or don't make it — "fix the wording later" is not
+  available. A one-sentence correction to `ci-fork-status.yml`'s security note
+  cost 61 PRs on 2026-08-31, and getting that sentence wrong cost 61 more.
+  Prose here is under the same get-it-right-before-opening rule as code.
 
 When a change is genuinely risky, land it behind a new opt-in input first, flip
 one repo, confirm, then flip the rest via `scripts/rollout.sh`.
@@ -67,6 +74,28 @@ every PR or lets un-armed PRs merge.
 
 A repo not in `fleet.json` is rejected by `rollout.sh` by design. Adding a repo
 to the fleet means adding it here first.
+
+**Pick the target set before a fleet-wide `--only` roll.** `--only <stub>` is
+an error, not a no-op, on a repo whose stub set lacks that file — deliberately,
+so `--only ci` on a custom-CI repo fails loudly instead of silently doing
+nothing. A single-stub roll must therefore select the repos that actually
+render it:
+
+    jq -r '.defaults.ci as $d | .repos[] | select((.ci // $d)=="standard") | .repo' fleet.json
+
+The key is `.ci`, not `.ci_mode`. `.ci_mode` reads `null` for every repo, and
+papering that over with a literal fallback — `(.ci_mode // "standard")` —
+reports the whole fleet as `standard`, which reads like a confirmation rather
+than a bug. It is 61 of 79; the rest are `custom` or `none` and never receive
+`ci.yml` or `ci-fork-status.yml`.
+
+**The drift issue is a daily snapshot, not live state.** The sweep rewrites it
+once a day, so it can be badly stale by the time anyone reads it: half of #181
+had already been fixed by a rollout that landed five hours after the sweep
+wrote it. Re-run `--check` against the repos it names before acting on it. The
+count in the title is the least reliable part, and the body is truncated at
+60 000 chars, so it lists fewer repos than it claims — #181 counted 79 and
+showed 45.
 
 ## Editing the composite actions
 
