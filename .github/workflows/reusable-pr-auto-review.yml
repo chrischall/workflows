@@ -263,14 +263,29 @@ jobs:
         env:
           EVENT_BASE_SHA: ${{ needs.context.outputs.base_sha }}
         run: |
-          # Diff base: the checkout is refs/pull/N/merge, whose first parent
-          # is the current base tip — fresher than the event payload's
-          # base.sha on label-triggered re-reviews. Fall back to the payload
-          # if the ref is ever not a merge commit.
-          if git rev-parse -q --verify 'HEAD^2' >/dev/null 2>&1; then
-            BASE_SHA=$(git rev-parse 'HEAD^1')
-          else
-            BASE_SHA="$EVENT_BASE_SHA"
+          # Diff base comes from the API, via the `context` job — NOT from
+          # HEAD^1/HEAD^2.
+          #
+          # That heuristic read the first parent of `refs/pull/N/merge`, which
+          # only holds while the checkout IS the merge ref. This workflow now
+          # pins `refs/pull/N/head` (so a fork review sees the PR rather than
+          # the base branch), and a head commit can itself be a merge — after
+          # GitHub's "Update branch", for instance — in which case `HEAD^2`
+          # exists and `HEAD^1` is the PREVIOUS head, not the base. The
+          # deterministic CHANGELOG-ancestry check would then run against a
+          # wrong base and could fail a clean PR.
+          #
+          # The heuristic existed only to beat a stale payload `base.sha` on
+          # label-triggered re-reviews. `context` resolves the PR through the
+          # API at run time, so its base_sha is already current and there is
+          # nothing left to beat.
+          BASE_SHA="$EVENT_BASE_SHA"
+
+          # `fetch-depth: 0` normally brings the base commit with it, but a
+          # force-push or a very fresh base can leave it absent. Fetch it
+          # rather than letting the diff below fail open on a bad range.
+          if ! git rev-parse -q --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+            git fetch -q --no-tags origin "$BASE_SHA" 2>/dev/null || true
           fi
 
           # {40,} then length==40: a 40-char slice of a longer hex string
