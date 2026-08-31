@@ -32,6 +32,14 @@ red then only ever means a real failure). Status mode needs the stub to grant
 Status mode also suppresses the duplicate CI run a non-arming label would
 trigger on an already-armed PR (#12) — unsafe to suppress in fail mode, where
 a green skip would overwrite a legitimately red check on the same SHA.
+It further refuses to revert a *terminal* `ci-gated` (success/failure/error) on
+a SHA back to `pending`: the status is last-writer-wins and the arming decision
+reads labels from the event payload, a snapshot taken when GitHub queued the
+delivery, so a late or duplicate delivery would otherwise re-decide a commit
+whose CI already ran. `honeybook-mcp#160` wedged that way — a green status
+reverted to pending four seconds later by a duplicate `synchronize` carrying
+pre-arming labels, leaving a PR armed for auto-merge and blocked on a required
+status with no further event coming to clear it (#188).
 Fork PRs cannot post their OWN `ci-gated`: their `GITHUB_TOKEN` is capped
 read-only whatever the stub requests, so the POST 403s. The `ci` job therefore
 posts nothing for them. Bespoke-CI repos get the same rule from `arm-gate`,
