@@ -34,9 +34,35 @@ trigger on an already-armed PR (#12) — unsafe to suppress in fail mode, where
 a green skip would overwrite a legitimately red check on the same SHA.
 Fork PRs cannot post their OWN `ci-gated`: their `GITHUB_TOKEN` is capped
 read-only whatever the stub requests, so the POST 403s. The `ci` job therefore
-posts nothing for them and the run shows a real pass/fail. Bespoke-CI repos get
-the same rule from `arm-gate`, which publishes `is_fork` for their reporter step
-to guard on (`templates/ci-gradle.yml` shows the shape).
+posts nothing for them. Bespoke-CI repos get the same rule from `arm-gate`,
+which publishes `is_fork` for their reporter step to guard on
+(`templates/ci-gradle.yml` shows the shape).
+
+An UN-ARMED fork does not build at all. It used to — on the reasoning that the
+unreported `ci-gated` context blocked the merge anyway — but `ci-fork-status.yml`
+now reports that context, and running unreviewed fork code before a maintainer
+has looked is the thing worth not doing. A fork waits for `ready-to-merge`
+exactly as a same-repo PR does. The decision lives in TWO places that must stay
+in step: `.github/actions/arm-gate/action.yml` and the inlined copy in
+`.github/workflows/reusable-mcp-ci.yml`; `scripts/gate.test.sh` exercises both.
+
+**Reviewing a fork PR.** Auto-review cannot run on a fork through
+`pull_request`: GitHub withholds secrets from fork runs, so the reviewer has no
+credential, and `pull_request_target` — the usual answer — is rejected by
+Anthropic's OIDC backend. A maintainer therefore asks for it explicitly:
+
+```
+/auto-review
+```
+
+as a PR comment. `issue_comment` fires in the BASE repo with secrets intact, and
+the `context` job checks `author_association` before anything runs — so a fork's
+own author cannot trigger a review of their own PR. That command IS the gate:
+unlike the same-repo path, no event starts a fork review on its own.
+
+A fork verdict is INFORMATION ONLY. The arming step never labels a fork, so
+`ready-to-merge` stays a human action — and because an un-armed fork does not
+build, reviewing one neither merges it nor starts its CI.
 
 **Merging a fork PR.** `templates/ci-fork-status.yml` closes this: it triggers
 on `workflow_run`, which fires in the BASE repo where the token really does
