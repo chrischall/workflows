@@ -92,13 +92,36 @@ runs:
             continue
           fi
 
-          meta=$(gh api "repos/$REPO/pulls/$n" \
-            --jq '[.user.login, .user.type, .author_association] | @tsv' 2>/dev/null || true)
+          # `gh api` prints its ERROR BODY TO STDOUT on a failure, so a 404
+          # yields non-empty output and `[ -z "$meta" ]` never fires. Gate on
+          # the EXIT STATUS instead.
+          #
+          # This is not hypothetical: a changelog entry carrying `closes #136`
+          # puts an ISSUE number in the line, `repos/.../pulls/136` 404s, and
+          # the raw JSON was written into the changelog as the contributor
+          # name — `(thanks @{"message":"Not Found",...})` (skylight-mcp#135).
+          if ! meta=$(gh api "repos/$REPO/pulls/$n" \
+                --jq '[.user.login, .user.type, .author_association] | @tsv' 2>/dev/null); then
+            echo "  #$n: not a pull request (or unreadable) — skipping"
+            continue
+          fi
           [ -z "$meta" ] && continue
           author=$(printf '%s' "$meta" | cut -f1)
           utype=$(printf '%s' "$meta" | cut -f2)
           assoc=$(printf '%s' "$meta" | cut -f3)
           [ -z "$author" ] && continue
+
+          # Belt and braces: whatever happens upstream, only a plausible GitHub
+          # login is ever written into a changelog. A login is alphanumerics and
+          # hyphens, 39 chars max — a JSON blob, a sentence, or anything with a
+          # quote or brace cannot pass, so a future failure mode that produces
+          # garbage still cannot corrupt the file.
+          case "$author" in
+            *[!A-Za-z0-9-]*|"" )
+              echo "::warning::refusing to credit #$n — '$author' is not a valid GitHub login"
+              continue ;;
+          esac
+          [ "${#author}" -gt 39 ] && { echo "::warning::refusing to credit #$n — login too long"; continue; }
 
           # A bot is never a contributor to thank. Checked separately from the
           # association because dependabot reports CONTRIBUTOR.
