@@ -363,7 +363,34 @@ Pipeline source: https://github.com/chrischall/workflows"
 fi
 git push -u origin "$BRANCH"
 pr_body > "$WORK/pr-body.md"
-gh pr create --repo "$REPO" --head "$BRANCH" \
+# Capture the URL: the label step below needs to name the PR, and `gh pr edit`
+# with no argument only resolves a PR from the CURRENT branch — which is the
+# fleet repo's checkout here, not the target repo's.
+PR_URL=$(gh pr create --repo "$REPO" --head "$BRANCH" \
   --title "$TITLE" \
-  --body-file "$WORK/pr-body.md"
+  --body-file "$WORK/pr-body.md")
+echo "$PR_URL"
+
+# Apply the release-notes label, where the repo has one.
+#
+# Several repos' CLAUDE.md require EXACTLY ONE release-notes label per PR, and
+# auto-review fails a PR without it — so every sweep opened a PR that was
+# guaranteed to fail review in those repos (flightaware-mcp#63 is the one that
+# surfaced it). `ci` is the correct label for these: a stub sync ships no
+# user-facing change, and `ci` maps to the hidden changelog section, matching
+# the Conventional-Commit type in $TITLE.
+#
+# Best-effort by design. A repo without a `ci` label is not a failure — it has
+# no such convention to satisfy — and the sync is already pushed and the PR
+# already open, so a labelling hiccup must never look like a failed rollout.
+# NOTE: this is a release-notes label, never an ARMING one; rollout.sh does not
+# arm its own PRs.
+if gh label list --repo "$REPO" --limit 100 --json name --jq '.[].name' 2>/dev/null | grep -qx "ci"; then
+  if gh pr edit "$PR_URL" --repo "$REPO" --add-label ci >/dev/null 2>&1; then
+    echo "Labelled 'ci' (release-notes label; repo requires one)."
+  else
+    echo "NOTE: could not apply the 'ci' label — add it by hand if this repo requires one." >&2
+  fi
+fi
+
 echo "PR opened for $REPO."
