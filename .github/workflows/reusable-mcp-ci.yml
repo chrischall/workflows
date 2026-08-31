@@ -67,6 +67,20 @@ name: Reusable node CI
 # status mode: in fail mode the skip would post a GREEN `ci / ci` run that
 # overwrites a legitimately red one (failed tests) for the same SHA, re-opening
 # the merge-button hole.
+#
+# No-clobber (status mode only): an un-armed gate never reverts a TERMINAL
+# `ci-gated` (success/failure/error) on the same SHA back to `pending`. The
+# status is mutable and keyed only by its context, so the last writer wins, and
+# the arming decision reads labels from the EVENT PAYLOAD — a snapshot taken
+# when GitHub queued the delivery. A late or duplicate delivery therefore
+# carries a stale label set and re-decides an already-decided commit.
+# honeybook-mcp#160 wedged exactly that way: armed CI passed and posted
+# `ci-gated: success`, a duplicate `synchronize` for the SAME sha landed ten
+# seconds later with labels from before `ready-to-merge`, and the un-armed path
+# reverted the green to `pending` — leaving a PR armed for auto-merge, blocked
+# on a required status, with no further event coming and no way out but a new
+# commit. A terminal state means real CI ran for this exact commit; only a real
+# run may change it.
 
 on:
   workflow_call:
@@ -185,6 +199,30 @@ jobs:
             # and job — fail red, the ci job's `needs: gate` guard keeps it
             # skipped, and no ci-gated status is ever posted, so the required
             # context stays unsatisfied: fail-safe either way.
+            # Never revert a TERMINAL ci-gated on this SHA back to pending.
+            # The status is mutable and keyed only by its context, so the last
+            # writer wins — and the payload's label list is a SNAPSHOT taken when
+            # GitHub queued the delivery, which a late or duplicate one carries
+            # long after the labels changed. honeybook-mcp#160: CI ran armed and
+            # posted `ci-gated: success`, then a duplicate `synchronize` for the
+            # SAME sha arrived ten seconds later with a label set from before
+            # `ready-to-merge` was added, took this un-armed path, and reverted
+            # the green to `pending`. That wedged the PR — armed for auto-merge,
+            # blocked on a required status with no further event coming to clear
+            # it, and no way back but a new commit.
+            #
+            # A terminal state means real CI ran for this exact commit, so only a
+            # real run may change it (the reporter step, same SHA). Reading it
+            # needs no grant status mode does not already require. A read failure
+            # falls through and posts: blocking is the fail-safe direction.
+            EXISTING="$(gh api "repos/$REPO/commits/$HEAD_SHA/statuses" \
+              --jq 'map(select(.context=="ci-gated")) | .[0].state // ""' \
+              2>/dev/null)" || EXISTING=""
+            case "$EXISTING" in
+              success|failure|error)
+                echo "ci-gated is already '$EXISTING' on $HEAD_SHA — real CI ran for this commit; leaving it untouched rather than reverting it to pending (stale or duplicate delivery)"
+                exit 0 ;;
+            esac
             gh api "repos/$REPO/statuses/$HEAD_SHA" \
               -f state=pending -f context=ci-gated \
               -f description="$DESC" >/dev/null

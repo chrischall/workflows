@@ -25,6 +25,14 @@ description: >
   suppression is unsafe in fail mode — a green job would overwrite a
   legitimately red `ci` check on the same SHA — so fail mode always re-runs.
 
+  Also in status mode, an un-armed gate never reverts a TERMINAL `ci-gated`
+  (success/failure/error) on the same SHA back to `pending`: the status is
+  mutable and last-writer-wins, and the arming decision reads labels from the
+  event payload — a snapshot GitHub took when it queued the delivery. A late or
+  duplicate delivery carries a stale set and re-decides a commit whose CI
+  already ran (honeybook-mcp#160 wedged that way, a green status reverted to
+  pending with no further event coming to clear it).
+
   The gate passes (run CI) when the PR carries `ready-to-merge` (added by
   auto-review on a pass/warn verdict — including the release review, which
   `release-ready` triggers), is authored by a bot (dependabot — never
@@ -161,6 +169,30 @@ runs:
           # Block via a pending commit status; the job itself stays green.
           # If this POST fails (missing statuses:write grant), the step — and
           # job — fail red, which still blocks: fail-safe.
+          # Never revert a TERMINAL ci-gated on this SHA back to pending.
+          # The status is mutable and keyed only by its context, so the last
+          # writer wins — and the payload's label list is a SNAPSHOT taken when
+          # GitHub queued the delivery, which a late or duplicate one carries
+          # long after the labels changed. honeybook-mcp#160: CI ran armed and
+          # posted `ci-gated: success`, then a duplicate `synchronize` for the
+          # SAME sha arrived ten seconds later with a label set from before
+          # `ready-to-merge` was added, took this un-armed path, and reverted
+          # the green to `pending`. That wedged the PR — armed for auto-merge,
+          # blocked on a required status with no further event coming to clear
+          # it, and no way back but a new commit.
+          #
+          # A terminal state means real CI ran for this exact commit, so only a
+          # real run may change it (the reporter step, same SHA). Reading it
+          # needs no grant status mode does not already require. A read failure
+          # falls through and posts: blocking is the fail-safe direction.
+          EXISTING="$(gh api "repos/$REPO/commits/$HEAD_SHA/statuses" \
+            --jq 'map(select(.context=="ci-gated")) | .[0].state // ""' \
+            2>/dev/null)" || EXISTING=""
+          case "$EXISTING" in
+            success|failure|error)
+              echo "ci-gated is already '$EXISTING' on $HEAD_SHA — real CI ran for this commit; leaving it untouched rather than reverting it to pending (stale or duplicate delivery)"
+              exit 0 ;;
+          esac
           gh api "repos/$REPO/statuses/$HEAD_SHA" \
             -f state=pending -f context=ci-gated \
             -f description="$DESC" >/dev/null

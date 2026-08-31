@@ -58,6 +58,15 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$GH_CALLS"
+# The gate reads the SHA's existing ci-gated status before posting `pending`,
+# so it never reverts a terminal result a real CI run left there. Answer that
+# read from the case's env; every other call just gets recorded.
+case "$*" in
+  *"/commits/"*"/statuses"*)
+    [ "${CI_GATED_READ_FAILS:-}" = "1" ] && exit 1
+    printf '%s\n' "${EXISTING_CI_GATED-}" ;;
+esac
+exit 0
 STUB
 chmod +x "$TMP/bin/gh"
 export PATH="$TMP/bin:$PATH"
@@ -75,7 +84,9 @@ gate_case() {
   local name="$1" want_run="$2" want_post="$3"; shift 3
   local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
   export GITHUB_OUTPUT="$dir/out" GH_CALLS="$dir/gh"; : > "$GITHUB_OUTPUT"; : > "$GH_CALLS"
-  # Baseline: same-repo, un-armed, human PR, status mode.
+  # Baseline: same-repo, un-armed, human PR, status mode, no ci-gated on the
+  # SHA yet. These two are per-case knobs, so clear them or they leak forward.
+  unset EXISTING_CI_GATED CI_GATED_READ_FAILS
   export GH_TOKEN=x MODE=status EVENT_NAME=pull_request EVENT_ACTION=synchronize \
          EVENT_LABEL="" USER_TYPE=User HEAD_REF=feature HEAD_SHA=deadbeef \
          PR_HEAD_REPO="$BASE" LABELS="" REPO="$BASE"
@@ -150,6 +161,31 @@ gate_case "same-repo armed → run"                    true  none    MODE=fail L
 gate_case "fork un-armed → still blocked red"        false none    MODE=fail PR_HEAD_REPO=someone/example-mcp
 gate_case "fork armed → run"                         true  none    MODE=fail PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge
 
+echo "── Arm gate, stale/duplicate delivery must not clobber a terminal ci-gated ──"
+# honeybook-mcp#160. `ci-gated` is a mutable commit status keyed only by its
+# context, so the last writer wins. The event payload's label list is a
+# SNAPSHOT taken when GitHub queued the delivery: CI ran armed and posted
+# `ci-gated: success`, then a duplicate `synchronize` for the SAME sha arrived
+# ten seconds later carrying a label set from before `ready-to-merge` was
+# added, took the un-armed path, and reverted the green to `pending`. The PR
+# wedged — armed for auto-merge, blocked on a required status with no further
+# event coming to clear it. A terminal state means real CI ran for this exact
+# commit, so only a real run (the reporter, same SHA) may change it.
+gate_case "un-armed, ci-gated success → leave it"    false none    EXISTING_CI_GATED=success
+gate_case "un-armed, ci-gated failure → leave it"    false none    EXISTING_CI_GATED=failure
+gate_case "un-armed, ci-gated error → leave it"      false none    EXISTING_CI_GATED=error
+# Not terminal: re-posting pending is idempotent and keeps the block honest.
+gate_case "un-armed, ci-gated pending → re-post"     false pending EXISTING_CI_GATED=pending
+gate_case "un-armed, no ci-gated yet → post pending" false pending EXISTING_CI_GATED=""
+# Fail-safe: if we cannot tell what is there, block.
+gate_case "un-armed, status read fails → post"       false pending CI_GATED_READ_FAILS=1
+# The guard is scoped to the un-armed POST only — an armed PR still runs real
+# CI and its reporter still overwrites the SHA's status, green or red.
+gate_case "armed, ci-gated success → still run CI"   true  none    LABELS=ready-to-merge EXISTING_CI_GATED=success
+gate_case "armed, ci-gated failure → still run CI"   true  none    LABELS=ready-to-merge EXISTING_CI_GATED=failure
+# fail mode posts nothing at all, so it cannot clobber and must not read.
+gate_case "fail mode, ci-gated success → no post"    false none    MODE=fail EXISTING_CI_GATED=success
+
 echo "── arm-gate composite (same rule, bespoke-CI repos) ──"
 # Row-for-row the same matrix as the reusable workflow above. Keep them in
 # lockstep: a row that exists on only one side is exactly how the two drifted
@@ -171,6 +207,16 @@ gate_case "fail mode: same-repo un-armed → no run"   false none    MODE=fail
 gate_case "fail mode: same-repo armed → run"         true  none    MODE=fail LABELS=ready-to-merge
 gate_case "fail mode: fork un-armed stays blocked"   false none    MODE=fail PR_HEAD_REPO=someone/example
 gate_case "fail mode: fork armed → run"              true  none    MODE=fail PR_HEAD_REPO=someone/example LABELS=ready-to-merge
+# Same clobber guard as the reusable workflow above — keep the rows in lockstep.
+gate_case "un-armed, ci-gated success → leave it"    false none    EXISTING_CI_GATED=success
+gate_case "un-armed, ci-gated failure → leave it"    false none    EXISTING_CI_GATED=failure
+gate_case "un-armed, ci-gated error → leave it"      false none    EXISTING_CI_GATED=error
+gate_case "un-armed, ci-gated pending → re-post"     false pending EXISTING_CI_GATED=pending
+gate_case "un-armed, no ci-gated yet → post pending" false pending EXISTING_CI_GATED=""
+gate_case "un-armed, status read fails → post"       false pending CI_GATED_READ_FAILS=1
+gate_case "armed, ci-gated success → still run CI"   true  none    LABELS=ready-to-merge EXISTING_CI_GATED=success
+gate_case "armed, ci-gated failure → still run CI"   true  none    LABELS=ready-to-merge EXISTING_CI_GATED=failure
+gate_case "fail mode, ci-gated success → no post"    false none    MODE=fail EXISTING_CI_GATED=success
 
 # The composite's contract with a consumer's reporter step: `is_fork` must be
 # published on EVERY path, or a reporter guarding on it 403s on a fork.
