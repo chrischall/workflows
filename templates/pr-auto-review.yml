@@ -29,8 +29,15 @@ permissions:
 # would let the labeled event displace the queued review, leaving the PR
 # with no verdict and no label.
 concurrency:
+  # The PR number comes from `pull_request` OR `issue` — exactly one is set, and
+  # `issue_comment` carries no `pull_request` object. Reading only the former
+  # made every `/auto-review` comment across every PR share ONE group, so a
+  # review on PR 5 cancelled a review still running on PR 9.
+  #
+  # Evaluated here rather than from the `context` job: `concurrency` is resolved
+  # before any job runs, so it cannot read `needs`.
   group: |
-    pr-auto-review-${{ github.event.pull_request.number }}${{
+    pr-auto-review-${{ github.event.pull_request.number || github.event.issue.number }}${{
       github.event.action == 'labeled'
         && format('-labeled-{0}', github.event.label.name)
         || ''

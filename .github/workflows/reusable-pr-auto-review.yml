@@ -234,6 +234,13 @@ jobs:
       - name: Checkout PR
         uses: actions/checkout@v7
         with:
+          # EXPLICIT ref, because this workflow now has two triggers. On
+          # `pull_request` the default checkout is already the PR merge ref, but
+          # on `issue_comment` the default is the BASE branch — so a fork review
+          # would have reviewed main and reported confidently on code that is
+          # not in the PR. `refs/pull/N/head` is the PR's head on both triggers,
+          # and it is the same form claude.yml uses to reach fork PRs.
+          ref: refs/pull/${{ needs.context.outputs.number }}/head
           # Full history so the reviewer can resolve commit reachability
           # (e.g. CHANGELOG links "reachable from origin/main"). A shallow
           # depth-1 clone has no main history, producing false "broken link"
