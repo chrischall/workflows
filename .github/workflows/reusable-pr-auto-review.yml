@@ -90,6 +90,40 @@ jobs:
   # `github.event.pull_request.*` reads below would be null. Hence this job:
   # one place that produces the same fields whichever event arrived.
   context:
+    # Gated on PAYLOAD-ONLY conditions so an event that can never be reviewed
+    # starts no runner at all.
+    #
+    # A job cannot read its own outputs from its `if:`, so normalising the two
+    # payloads into one job meant a runner started for EVERY delivered event —
+    # including the ones that immediately skip. `issue_comment` fires on every
+    # comment on every PR, so that is the common case, not the rare one.
+    #
+    # Everything below is readable straight from the webhook payload, which is
+    # why it can live here. The fields that are NOT (draft/labels/head_ref on an
+    # issue_comment) stay in the review job's `if:`, evaluated from this job's
+    # outputs.
+    #
+    # This guard MUST stay a SUBSET of the review job's condition: it may only
+    # reject what that job would also reject. Anything stricter silently drops
+    # a review that should have happened, with no run to point at.
+    if: |
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.draft == false
+        && github.event.pull_request.user.type == 'User'
+        && (!contains(github.event.pull_request.labels.*.name, 'ready-to-merge')
+            || (inputs.rereview_on_push && github.event.action == 'synchronize'))
+        && (github.event.action != 'labeled'
+            || github.event.label.name == 'review-with-opus'
+            || github.event.label.name == 'release-ready'
+            || contains(fromJSON('["enhancement","bug","dependencies","documentation","ci","test","security","ignore-for-release"]'), github.event.label.name))
+        && (!startsWith(github.event.pull_request.head.ref, 'release-please--')
+            || contains(github.event.pull_request.labels.*.name, 'release-ready'))
+        && (!contains(github.event.pull_request.labels.*.name, 'autorelease: pending')
+            || contains(github.event.pull_request.labels.*.name, 'release-ready')))
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && contains(github.event.comment.body, '/auto-review')
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     outputs:
       number: ${{ steps.pr.outputs.number }}
