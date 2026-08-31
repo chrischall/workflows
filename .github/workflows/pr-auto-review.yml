@@ -6,6 +6,16 @@ name: PR auto-review
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize, labeled]
+  # Mirrors templates/pr-auto-review.yml. Fork PRs cannot be reviewed on
+  # `pull_request` (GitHub withholds secrets from fork runs), so a maintainer's
+  # `/auto-review` comment is the fork path — and `issue_comment` fires in the
+  # BASE repo with secrets intact.
+  #
+  # This stub is the DOGFOOD copy, so it must carry the trigger too: the
+  # reusable workflow's `issue_comment` support cannot be exercised anywhere
+  # until some repo's default branch actually listens for the event.
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -19,7 +29,7 @@ permissions:
 # with no verdict and no label.
 concurrency:
   group: |
-    pr-auto-review-${{ github.event.pull_request.number }}${{
+    pr-auto-review-${{ github.event.pull_request.number || github.event.issue.number }}${{
       github.event.action == 'labeled'
         && format('-labeled-{0}', github.event.label.name)
         || ''
