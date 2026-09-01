@@ -55,6 +55,14 @@ jobs:
         # extract the shipped steps, stub gh, and pin both matrices.
         run: bash scripts/followup.test.sh
 
+      - name: contributor-credit unit tests
+        # amend_changelog.py had no tests, and its failure modes are quiet: a
+        # credit that silently does not land is indistinguishable from "no
+        # external contributors this release". Also pins the --all-blocks
+        # split — CHANGELOG.md must never touch published history, a release
+        # PR body must be amended throughout.
+        run: python3 scripts/credit.test.py
+
       - name: verdict + arm-policy unit tests
         # This suite shipped without ever being wired in, so the no-verdict
         # diagnosis it guards was unguarded in CI. It also pins the arming
