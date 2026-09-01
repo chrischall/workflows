@@ -67,10 +67,11 @@ export PATH="$TMP/bin:$PATH"
 ENTRY='* **chores:** inline category_id ([#148](https://github.com/o/r/issues/148)) ([abc](https://github.com/o/r/commit/abc))'
 ENTRY_CREDITED='* **chores:** inline category_id (thanks @Weetermachine) ([#148](https://github.com/o/r/issues/148)) ([abc](https://github.com/o/r/commit/abc))'
 
-# run_case <name> [VAR=VAL ...] — runs the step in a fresh dir, exporting the
-# case's vars. Leaves $WORK populated for the assertions that follow.
-run_case() {
-  local name="$1"; shift
+# setup_case [VAR=VAL ...] — fresh $WORK plus the case's env. Runs NOTHING:
+# the step is invoked exactly once per case, by new_case, after the fixtures
+# exist. Invoking here too would spend a run on an empty dir, which exits
+# early at the CHANGELOG.md check and proves nothing.
+setup_case() {
   WORK="$(mktemp -d "$TMP/case.XXXXXX")"; export WORK
   export GH_CALLS="$WORK/gh"; : > "$GH_CALLS"
   unset BODY_UNREADABLE PR_404 AUTHOR UTYPE ASSOC
@@ -78,8 +79,6 @@ run_case() {
          PR_JSON='{"headBranchName":"release-please--x","number":9}' \
          GITHUB_ACTION_PATH="$HERE/.github/actions/credit-contributors"
   local kv; for kv in "$@"; do export "${kv?}"; done
-  ( cd "$WORK" && bash "$TMP/credit.sh" ) > "$WORK/out" 2>&1
-  LAST_NAME="$name"
 }
 
 wrote_changelog() { grep -q "thanks @" "$WORK/CHANGELOG.md" 2>/dev/null && echo yes || echo no; }
@@ -87,10 +86,11 @@ pushed_body()     { [ -f "$WORK/body-pushed.md" ] && echo yes || echo no; }
 
 check() { local want="$2" got="$3"; [ "$got" = "$want" ] && ok "$1" || bad "$1" "got '$got', wanted '$want'"; }
 
+# new_case <changelog> <body> [VAR=VAL ...] — lay the fixtures down, then run
+# the extracted step once.
 new_case() {
-  # $1 changelog content, $2 body content, then env overrides
   local cl="$1" body="$2"; shift 2
-  run_case "x" "$@"
+  setup_case "$@"
   printf '%s\n' "$cl"   > "$WORK/CHANGELOG.md"
   printf '%s\n' "$body" > "$WORK/body-in.md"
   : > "$WORK/changelog-dirty"
