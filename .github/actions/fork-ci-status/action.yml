@@ -57,21 +57,45 @@ runs:
         # block a same-repo un-armed PR gets from the gate.
         #
         # `workflow_run.pull_requests` is empty for fork PRs, so the PR is
-        # resolved by head SHA.
+        # resolved by head SHA — but NOT via `repos/{repo}/commits/{sha}/pulls`.
+        # A fork's head commit does not live in the base repo, so that endpoint
+        # answers `[]` for exactly the PRs this action exists to serve. It does
+        # not error: the call succeeds, the jq yields "", and the label test
+        # falls through to un-armed. Every armed fork PR was therefore reported
+        # `pending` forever — CI green, gate closed, no way to tell from the
+        # status why (skylight-mcp#148).
+        #
+        # List the base repo's open PRs and match on head SHA instead: a fork
+        # PR IS listed there, and this needs no permission beyond the
+        # `pull-requests: read` already required.
         armed=unknown
-        if labels="$(gh api "repos/$REPO/commits/$SHA/pulls" \
-              --jq '[.[].labels[].name] | join(",")' 2>/dev/null)"; then
-          case ",$labels," in
-            *,ready-to-merge,*) armed=true ;;
-            *)                  armed=false ;;
-          esac
+        if prs="$(gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[]' \
+                    | jq -s --arg sha "$SHA" '[.[] | select(.head.sha == $sha)]')"; then
+          if [ "$(printf '%s' "$prs" | jq 'length')" -eq 0 ]; then
+            # Resolved fine, matched nothing. Distinct from a failed lookup and
+            # from a genuinely un-armed PR: reporting either of those wording
+            # sends a maintainer hunting for the wrong thing (#196).
+            armed=nopr
+          else
+            labels="$(printf '%s' "$prs" | jq -r '[.[].labels[].name] | join(",")')"
+            case ",$labels," in
+              *,ready-to-merge,*) armed=true ;;
+              *)                  armed=false ;;
+            esac
+          fi
         fi
 
         # Anything that is not an unambiguous pass of a run that actually built
         # is reported rather than left unset: an unset required context blocks
         # the merge, which is correct, but it is indistinguishable from "CI has
         # not finished" and hides a cancelled or timed-out run behind a spinner.
-        if [ "$armed" = "unknown" ]; then
+        if [ "$armed" = "nopr" ]; then
+          # No open PR carries this SHA — a closed/merged PR, or a run for a
+          # ref that is not a PR head any more. Nothing to gate; block, and say
+          # which of the three causes it was.
+          state=pending
+          desc="CI status undetermined — no open PR found for this commit"
+        elif [ "$armed" = "unknown" ]; then
           # The lookup itself failed, which is not the same as finding no label
           # — and is almost always a consumer stub that predates the
           # `pull-requests: read` grant. Both cases block, so the description is
