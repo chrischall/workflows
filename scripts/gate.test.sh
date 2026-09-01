@@ -24,6 +24,7 @@ set -uo pipefail   # deliberately no -e: assertions need to observe failures
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 WF="$HERE/.github/workflows/reusable-mcp-ci.yml"
 ACT="$HERE/.github/actions/arm-gate/action.yml"
+FORK="$HERE/.github/actions/fork-ci-status/action.yml"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -48,7 +49,14 @@ ruby -ryaml -e '
   step = act["runs"]["steps"].find { |s| s["run"] }
   abort("could not find a run step in arm-gate") unless step
   File.write(ARGV[4], step["run"])
-' "$WF" "$TMP/gate.sh" "$TMP/report.sh" "$ACT" "$TMP/armgate.sh" \
+
+  # The fork reporter posts the SAME required context from a different repo
+  # context, so it is the third place that can satisfy or block a merge.
+  fork = YAML.load_file(ARGV[5])
+  fstep = fork["runs"]["steps"].find { |s| s["run"] }
+  abort("could not find a run step in fork-ci-status") unless fstep
+  File.write(ARGV[6], fstep["run"])
+' "$WF" "$TMP/gate.sh" "$TMP/report.sh" "$ACT" "$TMP/armgate.sh" "$FORK" "$TMP/fork.sh" \
   || { echo "FAIL: could not extract steps from $WF / $ACT"; exit 1; }
 
 # --- fake gh ---------------------------------------------------------------
@@ -62,6 +70,12 @@ echo "$*" >> "$GH_CALLS"
 # so it never reverts a terminal result a real CI run left there. Answer that
 # read from the case's env; every other call just gets recorded.
 case "$*" in
+  # The fork reporter re-derives the gate's arming decision from the PR's
+  # labels, because the run conclusion alone cannot tell "CI passed" from
+  # "CI was deferred and skipped".
+  *"/commits/"*"/pulls"*)
+    [ "${PR_LOOKUP_FAILS:-}" = "1" ] && exit 1
+    printf '%s\n' "${PR_LABELS-}" ;;
   *"/commits/"*"/statuses"*)
     [ "${CI_GATED_READ_FAILS:-}" = "1" ] && exit 1
     printf '%s\n' "${EXISTING_CI_GATED-}" ;;
@@ -248,6 +262,69 @@ report_case "gate job errored → failure, not success" failure GATE_RESULT=fail
 report_case "fork passed → post nothing"             none    PR_HEAD_REPO=someone/example-mcp
 report_case "fork failed → post nothing"             none    PR_HEAD_REPO=someone/example-mcp JOB_STATUS=failure
 report_case "fork + gate errored → post nothing"     none    PR_HEAD_REPO=someone/example-mcp GATE_RESULT=failure
+
+echo "── fork-ci-status reporter (posts ci-gated from the BASE repo) ──"
+# skylight-mcp#148. This reporter used to mirror the workflow_run CONCLUSION
+# straight into `ci-gated`, which is not the same question. An un-armed fork PR
+# DEFERS CI: the `ci` job is skipped (reusable shape) or its build steps are
+# guarded off (bespoke single-job shape), and either way the run still concludes
+# `success`. So the reporter posted `ci-gated: success` — a green required
+# check — for a commit where nothing was built and no test ran. A maintainer
+# then saw an all-green fork PR one click from merge; the PR that exposed this
+# would have failed CI on a coverage threshold.
+#
+# The fix re-derives the gate's own arming rule from the PR's labels, read in
+# the BASE repo where the token can actually see them. Un-decidable blocks.
+fork_case() {
+  local name="$1" want_post="$2"; shift 2
+  local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
+  export GH_CALLS="$dir/gh"; : > "$GH_CALLS"
+  unset EXISTING_CI_GATED CI_GATED_READ_FAILS PR_LOOKUP_FAILS
+  # Baseline: un-armed fork whose run went green because CI never ran.
+  export GH_TOKEN=x REPO="$BASE" SHA=deadbeef CONCLUSION=success RUN_URL="" PR_LABELS=""
+  local kv; for kv in "$@"; do export "${kv?}"; done
+
+  bash "$TMP/fork.sh" >"$dir/log" 2>&1
+  local got_post; got_post="$(posted_state "$GH_CALLS")"
+  if [ "$got_post" = "$want_post" ]; then
+    ok "fork-status: $name (post=$got_post)"
+  else
+    bad "fork-status: $name" "got post=$got_post; wanted $want_post
+     $(sed 's/^/     /' "$dir/log")"
+  fi
+}
+
+# The bug, stated as a test: a green run on an un-armed fork must not go green.
+fork_case "un-armed, run success → pending not success" pending
+fork_case "un-armed, run failure → pending"             pending CONCLUSION=failure
+fork_case "un-armed, other labels only → pending"       pending PR_LABELS=documentation,bug
+
+# Armed: CI really ran, so mirror it. This is the only path that may go green.
+fork_case "armed, run success → success"                success PR_LABELS=ready-to-merge
+fork_case "armed + other labels → success"              success PR_LABELS=bug,ready-to-merge,documentation
+fork_case "armed, run failure → failure"                failure PR_LABELS=ready-to-merge CONCLUSION=failure
+fork_case "armed, run cancelled → failure"              failure PR_LABELS=ready-to-merge CONCLUSION=cancelled
+fork_case "armed, run timed_out → failure"              failure PR_LABELS=ready-to-merge CONCLUSION=timed_out
+# A skipped/neutral RUN built nothing either — the second instance of the same
+# bug, which mapped both to success.
+fork_case "armed, run skipped → pending not success"    pending PR_LABELS=ready-to-merge CONCLUSION=skipped
+fork_case "armed, run neutral → pending not success"    pending PR_LABELS=ready-to-merge CONCLUSION=neutral
+
+# Fail-safe: an undecidable arming state must block, never satisfy. Same
+# direction the gate takes when its own status read fails.
+fork_case "PR lookup fails → pending"                   pending PR_LOOKUP_FAILS=1 PR_LABELS=ready-to-merge
+fork_case "no PR for the sha → pending"                 pending PR_LABELS=""
+
+# No-clobber, same rule as the gate (honeybook-mcp#160): a TERMINAL ci-gated
+# means real CI ran for this exact commit, so a later un-armed or deferred
+# delivery must not revert it to pending and wedge the PR.
+fork_case "un-armed, ci-gated success → leave it"       none    EXISTING_CI_GATED=success
+fork_case "un-armed, ci-gated failure → leave it"       none    EXISTING_CI_GATED=failure
+fork_case "un-armed, ci-gated error → leave it"         none    EXISTING_CI_GATED=error
+fork_case "un-armed, ci-gated pending → re-post"        pending EXISTING_CI_GATED=pending
+# A real armed result still overwrites whatever is there, green or red.
+fork_case "armed success over stale pending → success"  success PR_LABELS=ready-to-merge EXISTING_CI_GATED=pending
+fork_case "armed failure over success → failure"        failure PR_LABELS=ready-to-merge CONCLUSION=failure EXISTING_CI_GATED=success
 
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"

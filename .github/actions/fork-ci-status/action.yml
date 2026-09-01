@@ -1,11 +1,17 @@
 name: Post ci-gated for a fork run
 description: >
-  Mirror a completed CI run's conclusion into the `ci-gated` commit status.
+  Report a completed CI run into the `ci-gated` commit status for a fork PR.
 
-  Split out of the stub so the mapping from run conclusion to status state
-  lives in one place. It takes only scalars off the event payload and never
-  touches head-repository content — see the security note in
-  templates/ci-fork-status.yml before changing it.
+  Reports a PASS only when CI actually ran, which is not the same as the run
+  concluding `success` — see the note on the script below. Split out of the
+  stub so that decision lives in one place. It takes only scalars off the
+  event payload and never touches head-repository content — see the security
+  note in templates/ci-fork-status.yml before changing it.
+
+  Requires `pull-requests: read` in addition to `statuses: write`: the arming
+  decision is read from the PR's labels. Without it the lookup fails and every
+  fork PR is reported as blocked (the fail-safe direction), so roll the stub's
+  permissions out with this.
 
 inputs:
   token:
@@ -35,16 +41,68 @@ runs:
       run: |
         set -euo pipefail
 
-        # Map a run conclusion onto a commit-status state. Anything that is not
-        # an unambiguous pass is reported as a FAILURE rather than left unset:
-        # an unset required context blocks the merge, which is correct, but it
-        # is indistinguishable from "CI has not finished" and hides a cancelled
-        # or timed-out run behind a spinner.
-        case "$CONCLUSION" in
-          success)           state=success; desc="CI passed (fork run)" ;;
-          skipped|neutral)   state=success; desc="CI skipped (fork run)" ;;
-          *)                 state=failure; desc="CI $CONCLUSION (fork run)" ;;
-        esac
+        # A green run does NOT mean CI ran. An un-armed fork PR defers CI: the
+        # `ci` job is skipped (reusable-workflow shape) or its build steps are
+        # guarded off (bespoke single-job shape), and the run still concludes
+        # `success` either way. Mirroring that conclusion straight into
+        # `ci-gated` therefore posted a GREEN required check for a commit where
+        # nothing was built and no test ran — a fork PR showing all-green, one
+        # click from merge, having never been compiled. skylight-mcp#148 was
+        # exactly that, and would have failed CI on a coverage threshold.
+        #
+        # So re-derive the gate's own arming decision instead, from the same
+        # input the gate reads — the PR's labels — which this workflow CAN read
+        # because it runs in the base repo. Only an armed run's conclusion is
+        # worth mirroring; an un-armed one is reported as `pending`, the same
+        # block a same-repo un-armed PR gets from the gate.
+        #
+        # `workflow_run.pull_requests` is empty for fork PRs, so the PR is
+        # resolved by head SHA.
+        armed=unknown
+        if labels="$(gh api "repos/$REPO/commits/$SHA/pulls" \
+              --jq '[.[].labels[].name] | join(",")' 2>/dev/null)"; then
+          case ",$labels," in
+            *,ready-to-merge,*) armed=true ;;
+            *)                  armed=false ;;
+          esac
+        fi
+
+        # Anything that is not an unambiguous pass of a run that actually built
+        # is reported rather than left unset: an unset required context blocks
+        # the merge, which is correct, but it is indistinguishable from "CI has
+        # not finished" and hides a cancelled or timed-out run behind a spinner.
+        if [ "$armed" != "true" ]; then
+          # Covers a failed or missing lookup too: an undecidable arming state
+          # must block, never satisfy. Same direction the gate takes when its
+          # own status read fails.
+          state=pending
+          desc="CI deferred until a maintainer arms this fork PR (ready-to-merge)"
+        else
+          case "$CONCLUSION" in
+            success)         state=success; desc="CI passed (fork run)" ;;
+            # The run itself was skipped — nothing built, so nothing to vouch
+            # for. This mapped to `success` too, and was the same hole.
+            skipped|neutral) state=pending; desc="CI did not run (fork run)" ;;
+            *)               state=failure; desc="CI $CONCLUSION (fork run)" ;;
+          esac
+        fi
+
+        # Never revert a TERMINAL ci-gated back to pending. Same rule, and the
+        # same reason, as the gate's own guard (honeybook-mcp#160): the status
+        # is mutable and keyed only by its context, so the last writer wins, and
+        # a late or duplicate delivery — or a label removed after a green run —
+        # would otherwise wedge a PR that real CI has already judged. A terminal
+        # state means CI ran for this exact commit; only a real run may move it.
+        if [ "$state" = "pending" ]; then
+          existing="$(gh api "repos/$REPO/commits/$SHA/statuses" \
+            --jq 'map(select(.context=="ci-gated")) | .[0].state // ""' \
+            2>/dev/null)" || existing=""
+          case "$existing" in
+            success|failure|error)
+              echo "ci-gated is already '$existing' on $SHA — real CI ran for this commit; leaving it untouched (armed=$armed, run=$CONCLUSION)"
+              exit 0 ;;
+          esac
+        fi
 
         gh api "repos/$REPO/statuses/$SHA" \
           -f state="$state" \
@@ -52,4 +110,4 @@ runs:
           -f description="$desc" \
           ${RUN_URL:+-f target_url="$RUN_URL"} \
           --silent
-        echo "ci-gated=$state on $SHA ($CONCLUSION)"
+        echo "ci-gated=$state on $SHA (armed=$armed, run=$CONCLUSION)"
