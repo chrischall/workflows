@@ -1,7 +1,13 @@
 name: Credit external contributors
 description: >
-  Append `(thanks @user)` to CHANGELOG entries whose PR came from outside the
-  repo owner, on the release-please PR branch.
+  Append `(thanks @user)` to entries whose PR came from outside the repo owner
+  — in BOTH the CHANGELOG.md on the release-please PR branch and the release
+  PR's own description.
+
+  The body matters as much as the file: release-please writes the PR
+  description from its own notes and never re-reads the branch, so amending
+  only the file left the credit invisible everywhere a person actually looks —
+  the release PR, and the GitHub Release notes cut from it.
 
   Runs AFTER release-please in the same job, because release-please force-pushes
   its branch on every run and regenerates the changelog from commits — so the
@@ -71,6 +77,26 @@ runs:
           exit 0
         fi
 
+        # The release PR's description carries the same entries as the
+        # changelog's top block, but release-please regenerates it from its own
+        # notes — it never re-reads the branch, so a credit committed to the
+        # file does not reach it. Amend a copy alongside, and push it back.
+        # Tolerated, not fatal: a body this cannot read must not cost the
+        # changelog its credits. An unreadable body stays byte-identical to
+        # `body_before`, so the push below is skipped rather than blanking the
+        # description with an empty file.
+        body_file="$(mktemp)"
+        if ! gh pr view "$number" --repo "$REPO" --json body --jq '.body' > "$body_file" 2>/dev/null; then
+          echo "::warning::could not read PR #$number's body — crediting the changelog only"
+          : > "$body_file"
+        fi
+        body_before="$(cat "$body_file")"
+
+        # True when $2 references PR $1 without already crediting it.
+        needs_credit() {
+          grep -E "/(issues|pull)/$1\b" "$2" 2>/dev/null | grep -qv "thanks @"
+        }
+
         never="$EXCLUDE"
 
         # Collect the PR numbers referenced by the changelog's UNRELEASED top
@@ -88,7 +114,12 @@ runs:
           # Matches "thanks @" ANYWHERE on the line referencing this PR: the
           # credit is inserted BEFORE the `([#n](` link group, so a check
           # anchored after the link never matches at all.
-          if grep -E "/(issues|pull)/$n\b" CHANGELOG.md | grep -q "thanks @"; then
+          #
+          # Both targets have to be checked: the changelog is committed on the
+          # branch and survives, while the body is rewritten from scratch by
+          # every release-please run. Skipping on the changelog alone left an
+          # already-credited entry's BODY uncredited forever.
+          if ! needs_credit "$n" CHANGELOG.md && ! needs_credit "$n" "$body_file"; then
             continue
           fi
 
@@ -138,10 +169,16 @@ runs:
           # it prints "changed" only when it edited a line. Logging off the
           # script rather than off reaching this point is what stops the run
           # claiming a credit it did not make.
+          amended=""
           if [ "$(python3 "$GITHUB_ACTION_PATH/amend_changelog.py" CHANGELOG.md "$n" "$author")" = "changed" ]; then
-            changed=1
-            echo "credited @$author for #$n"
+            changed=1; amended="CHANGELOG.md"
           fi
+          # `--all-blocks`: every `## ` section of a release PR body belongs to
+          # the release being proposed, unlike the changelog's published tail.
+          if [ "$(python3 "$GITHUB_ACTION_PATH/amend_changelog.py" "$body_file" "$n" "$author" --all-blocks)" = "changed" ]; then
+            amended="${amended:+$amended + }PR body"
+          fi
+          [ -n "$amended" ] && echo "credited @$author for #$n ($amended)"
         done
 
         if [ "$changed" = "1" ] && ! git diff --quiet CHANGELOG.md; then
@@ -150,5 +187,15 @@ runs:
           git push --quiet origin "HEAD:$branch"
           echo "Amended $branch."
         else
-          echo "No external contributors to credit."
+          echo "No changelog credits to add."
+        fi
+
+        # Pushed separately from the commit: the body can need a credit the
+        # committed changelog already carries (release-please rewrote the body
+        # over it), and that case must still reach the description.
+        if [ "$(cat "$body_file")" != "$body_before" ]; then
+          gh pr edit "$number" --repo "$REPO" --body-file "$body_file"
+          echo "Amended the release PR description (#$number)."
+        else
+          echo "No PR-body credits to add."
         fi
