@@ -369,16 +369,31 @@ fork_case "un-armed, ci-gated pending → re-post"        pending EXISTING_CI_GA
 fork_case "armed success over stale pending → success"  success PR_LABELS=ready-to-merge EXISTING_CI_GATED=pending
 fork_case "armed failure over success → failure"        failure PR_LABELS=ready-to-merge CONCLUSION=failure EXISTING_CI_GATED=success
 
-# #196: both causes post `pending`, so the description is the ONLY thing that
-# tells them apart. Reported identically, a maintainer staring at an
+# #196: THREE causes now post `pending`, so the description is the ONLY thing
+# that tells them apart. Reported identically, a maintainer staring at an
 # already-armed fork PR would go hunting for a `ready-to-merge` label that is
 # sitting right there, when the real cause is a stub that predates the
 # `pull-requests: read` grant — the exact rollout gap the fix's own sequencing
-# note warned about.
-fork_desc_case "lookup failed names the permission"     "pull-requests: read" PR_LOOKUP_FAILS=1 PR_LABELS=ready-to-merge
-fork_desc_case "lookup failed does not say un-armed"    "!arms this fork PR"  PR_LOOKUP_FAILS=1 PR_LABELS=ready-to-merge
-fork_desc_case "genuinely un-armed says ready-to-merge" "ready-to-merge"      PR_LABELS=""
+# note warned about. #199 added the third (resolved fine, matched no open PR),
+# and collapsing it into "un-armed" is what made that bug take an hour to see.
+#
+# Each cause is pinned twice: once on the phrase it must carry, and once on the
+# phrases belonging to the other two. A one-sided assertion silently stops
+# discriminating the moment a description is reworded — which is exactly what
+# happened to the un-armed row when #198 changed its wording from "a maintainer
+# arms this fork PR" to "comment /auto-review to arm this fork PR", leaving
+# `!arms this fork PR` matching nothing and passing vacuously.
+fork_desc_case "lookup failed names the permission"      "pull-requests: read"  PR_LOOKUP_FAILS=1 PR_LABELS=ready-to-merge
+fork_desc_case "lookup failed does not say un-armed"     "!arm this fork PR"    PR_LOOKUP_FAILS=1 PR_LABELS=ready-to-merge
+fork_desc_case "lookup failed does not say no open PR"   "!no open PR"          PR_LOOKUP_FAILS=1 PR_LABELS=ready-to-merge
+
+fork_desc_case "genuinely un-armed says ready-to-merge"  "ready-to-merge"       PR_LABELS=""
 fork_desc_case "genuinely un-armed blames no permission" "!pull-requests: read" PR_LABELS=""
+fork_desc_case "genuinely un-armed does not say no open PR" "!no open PR"       PR_LABELS=""
+
+fork_desc_case "no open PR names that cause"             "no open PR"           PR_ABSENT=1 PR_LABELS=ready-to-merge
+fork_desc_case "no open PR does not say un-armed"        "!arm this fork PR"    PR_ABSENT=1 PR_LABELS=ready-to-merge
+fork_desc_case "no open PR blames no permission"         "!pull-requests: read" PR_ABSENT=1 PR_LABELS=ready-to-merge
 
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
