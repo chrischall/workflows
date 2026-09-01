@@ -86,7 +86,7 @@ runs:
           # arming state blocks rather than satisfies, same direction the gate
           # takes when its own status read fails.
           state=pending
-          desc="CI deferred until a maintainer arms this fork PR (ready-to-merge)"
+          desc="CI deferred — comment /auto-review to arm this fork PR (ready-to-merge)"
         else
           case "$CONCLUSION" in
             success)         state=success; desc="CI passed (fork run)" ;;

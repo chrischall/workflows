@@ -53,8 +53,10 @@ name: Reusable node CI
 # green. Two human gates remain and are what the change rests on: GitHub holds
 # fork runs at `action_required` until a maintainer approves them (so CI never
 # runs on unreviewed external code, and the reporter only ever mirrors an
-# approved run), and `pr-auto-review` SKIPS fork PRs, so `ready-to-merge` is
-# never applied to one automatically. This job still posts nothing for forks —
+# approved run), and a fork is armed only by a maintainer typing `/auto-review`
+# — `pr-auto-review` never reviews a fork on its own, and it checks
+# `author_association` before it runs. Auto-merge excludes forks regardless, so
+# arming one buys it CI, never a merge. This job still posts nothing for forks —
 # do not "fix" that by granting it permissions it cannot receive. Status mode
 # only — in fail mode an un-armed PR is blocked by a RED `ci / ci`, so arming a
 # fork there would flip that block green before review. (GitHub separately
@@ -178,7 +180,7 @@ jobs:
           # rebuilds on every relabel where a same-repo PR is skipped (#113).
           if [ "$MODE" = "status" ] && [ -n "$PR_HEAD_REPO" ] && [ "$PR_HEAD_REPO" != "$REPO" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "fork PR ($PR_HEAD_REPO) is un-armed → CI deferred until a maintainer adds ready-to-merge; posting no ci-gated status (fork tokens are read-only)"
+            echo "fork PR ($PR_HEAD_REPO) is un-armed → CI deferred until a maintainer arms it (comment /auto-review, or add ready-to-merge); posting no ci-gated status (fork tokens are read-only)"
             exit 0
           fi
 

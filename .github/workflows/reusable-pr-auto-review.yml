@@ -34,10 +34,12 @@ name: Reusable PR auto-review
 # its own, and unlike the same-repo path there is no event that triggers it
 # automatically.
 #
-# A fork verdict is INFORMATION ONLY: the arming step never labels a fork, so
-# `ready-to-merge` stays a human action. Combined with the arm-gate deferring
-# un-armed fork CI, that means reviewing a fork neither merges it nor starts its
-# build — both remain deliberate acts.
+# A fork verdict ARMS, on `pass`/`warn`, exactly as a same-repo one does. The
+# human gate did not move: the command itself is it, and a fork can reach the
+# review job no other way. What arming buys a fork is CI — the arm-gate stops
+# deferring and the real build runs, then ci-fork-status posts the true
+# `ci-gated`. It does not buy a merge: `reusable-auto-merge.yml` excludes forks
+# by head repo, so a fork PR still waits for a human to press merge.
 #
 # Bot PRs (dependabot etc.) skip review entirely (user.type filter) and go
 # straight to CI + auto-merge. PRs already labeled `ready-to-merge` skip
@@ -875,11 +877,20 @@ jobs:
         # that way would not fire the auto-merge workflow.
         # `warn` arms too (nits don't block — tracked via the follow-up issue);
         # only `fail` keeps the human-in-the-loop gate.
-        # NEVER arms a fork. A fork PR can now be reviewed (via a maintainer's
-        # `/auto-review`), but the verdict is information only — `ready-to-merge`
-        # stays a human action, and since the arm-gate defers un-armed fork CI,
-        # not arming also means a fork's build never starts on a verdict alone.
-        if: ${{ !cancelled() && needs.context.outputs.is_fork == 'false' }}
+        # Arms a fork too, but ONLY down the `/auto-review` path — the sole
+        # route a fork has to this job, and one `context` has already gated on
+        # `author_association` (OWNER/MEMBER/COLLABORATOR). So a fork is armed
+        # only when a maintainer deliberately typed the command; no event arms
+        # one on its own. Written as an explicit `issue_comment` arm rather
+        # than by deleting the fork test, so the intent survives a reader who
+        # does not know that a fork cannot reach here any other way.
+        #
+        # What arming a fork actually does: the CI arm-gate takes the armed
+        # path and runs the real build, and ci-fork-status mirrors the true
+        # conclusion into `ci-gated`. It does NOT start a merge —
+        # `reusable-auto-merge.yml` excludes forks by head repo, so no fork
+        # ever auto-merges. Arming a fork buys it CI, not a merge.
+        if: ${{ !cancelled() && (needs.context.outputs.is_fork == 'false' || github.event_name == 'issue_comment') }}
         env:
           GH_TOKEN: ${{ secrets.release_pat }}
           PR: ${{ needs.context.outputs.number }}
