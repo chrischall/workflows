@@ -294,6 +294,30 @@ fork_case() {
   fi
 }
 
+# fork_desc_case <name> <want-substring> [ENV=val ...]
+# Same fixture as fork_case, but asserts what the status SAYS. A leading "!"
+# on the substring inverts the assertion. The state alone cannot catch #196:
+# two different causes both post `pending`, and only the description tells a
+# maintainer which one they are looking at.
+fork_desc_case() {
+  local name="$1" want="$2"; shift 2
+  local negate=""; case "$want" in "!"*) negate=1; want="${want#!}" ;; esac
+  local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
+  export GH_CALLS="$dir/gh"; : > "$GH_CALLS"
+  unset EXISTING_CI_GATED CI_GATED_READ_FAILS PR_LOOKUP_FAILS
+  export GH_TOKEN=x REPO="$BASE" SHA=deadbeef CONCLUSION=success RUN_URL="" PR_LABELS=""
+  local kv; for kv in "$@"; do export "${kv?}"; done
+
+  bash "$TMP/fork.sh" >"$dir/log" 2>&1
+  local hit=""; grep -qF -- "$want" "$GH_CALLS" && hit=1
+  if { [ -n "$negate" ] && [ -z "$hit" ]; } || { [ -z "$negate" ] && [ -n "$hit" ]; }; then
+    ok "fork-status desc: $name"
+  else
+    bad "fork-status desc: $name" "wanted ${negate:+NOT }to find [$want] in the posted status
+     $(sed 's/^/     /' "$GH_CALLS")"
+  fi
+}
+
 # The bug, stated as a test: a green run on an un-armed fork must not go green.
 fork_case "un-armed, run success → pending not success" pending
 fork_case "un-armed, run failure → pending"             pending CONCLUSION=failure
@@ -325,6 +349,17 @@ fork_case "un-armed, ci-gated pending → re-post"        pending EXISTING_CI_GA
 # A real armed result still overwrites whatever is there, green or red.
 fork_case "armed success over stale pending → success"  success PR_LABELS=ready-to-merge EXISTING_CI_GATED=pending
 fork_case "armed failure over success → failure"        failure PR_LABELS=ready-to-merge CONCLUSION=failure EXISTING_CI_GATED=success
+
+# #196: both causes post `pending`, so the description is the ONLY thing that
+# tells them apart. Reported identically, a maintainer staring at an
+# already-armed fork PR would go hunting for a `ready-to-merge` label that is
+# sitting right there, when the real cause is a stub that predates the
+# `pull-requests: read` grant — the exact rollout gap the fix's own sequencing
+# note warned about.
+fork_desc_case "lookup failed names the permission"     "pull-requests: read" PR_LOOKUP_FAILS=1 PR_LABELS=ready-to-merge
+fork_desc_case "lookup failed does not say un-armed"    "!arms this fork PR"  PR_LOOKUP_FAILS=1 PR_LABELS=ready-to-merge
+fork_desc_case "genuinely un-armed says ready-to-merge" "ready-to-merge"      PR_LABELS=""
+fork_desc_case "genuinely un-armed blames no permission" "!pull-requests: read" PR_LABELS=""
 
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"

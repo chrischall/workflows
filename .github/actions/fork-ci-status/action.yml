@@ -71,10 +71,20 @@ runs:
         # is reported rather than left unset: an unset required context blocks
         # the merge, which is correct, but it is indistinguishable from "CI has
         # not finished" and hides a cancelled or timed-out run behind a spinner.
-        if [ "$armed" != "true" ]; then
-          # Covers a failed or missing lookup too: an undecidable arming state
-          # must block, never satisfy. Same direction the gate takes when its
-          # own status read fails.
+        if [ "$armed" = "unknown" ]; then
+          # The lookup itself failed, which is not the same as finding no label
+          # — and is almost always a consumer stub that predates the
+          # `pull-requests: read` grant. Both cases block, so the description is
+          # the only thing that tells them apart: reported as "not armed", a
+          # maintainer looking at an ALREADY-ARMED fork PR would go hunting for
+          # a label that is sitting right there. Name the permission instead
+          # (#196). Status descriptions are capped at 140 chars; this is ~75.
+          state=pending
+          desc="CI status undetermined — fork PR lookup failed (needs pull-requests: read)"
+        elif [ "$armed" != "true" ]; then
+          # Genuinely un-armed: no `ready-to-merge` on the PR. An undecidable
+          # arming state blocks rather than satisfies, same direction the gate
+          # takes when its own status read fails.
           state=pending
           desc="CI deferred until a maintainer arms this fork PR (ready-to-merge)"
         else
