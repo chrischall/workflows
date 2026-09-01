@@ -29,7 +29,12 @@ description: >
 
 inputs:
   token:
-    description: Token with contents:write on the release-please branch.
+    description: >
+      Token with contents:write on the release-please branch (to commit the
+      amended CHANGELOG.md) AND pull-requests:write on the repo (to push the
+      amended description back with `gh pr edit`). The release-please template
+      passes its PAT, which carries both; a GITHUB_TOKEN scoped to contents
+      alone will commit the changelog and then fail to update the PR body.
     required: true
   pr:
     description: >

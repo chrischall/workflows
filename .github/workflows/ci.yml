@@ -63,6 +63,13 @@ jobs:
         # PR body must be amended throughout.
         run: python3 scripts/credit.test.py
 
+      - name: contributor-credit action tests
+        # The embedded bash around amend_changelog.py — who counts as
+        # external, which of the two targets still needs crediting, whether
+        # the amended body is pushed back. credit.test.py cannot reach any of
+        # it, and every failure mode is a contributor quietly not thanked.
+        run: bash scripts/credit-action.test.sh
+
       - name: verdict + arm-policy unit tests
         # This suite shipped without ever being wired in, so the no-verdict
         # diagnosis it guards was unguarded in CI. It also pins the arming
