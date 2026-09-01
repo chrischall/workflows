@@ -73,9 +73,22 @@ case "$*" in
   # The fork reporter re-derives the gate's arming decision from the PR's
   # labels, because the run conclusion alone cannot tell "CI passed" from
   # "CI was deferred and skipped".
+  #
+  # MODELS REAL GITHUB, deliberately: `commits/{sha}/pulls` answers `[]` for a
+  # fork PR, because the fork's head commit is not in the base repo. The stub
+  # used to answer it with the labels, which is why 84 green tests sat on top
+  # of a reporter that could never see an armed fork (skylight-mcp#148). Any
+  # future lookup that reaches for this endpoint gets reality back.
   *"/commits/"*"/pulls"*)
+    printf '[]\n' ;;
+  # The working lookup: a fork PR IS listed among the base repo's open PRs.
+  *"/pulls?state=open"*)
     [ "${PR_LOOKUP_FAILS:-}" = "1" ] && exit 1
-    printf '%s\n' "${PR_LABELS-}" ;;
+    if [ "${PR_ABSENT:-}" = "1" ]; then exit 0; fi
+    LABELS="${PR_LABELS-}" HEAD_SHA="${SHA}" jq -nc '
+      { head: { sha: env.HEAD_SHA },
+        labels: (env.LABELS | if . == "" then [] else split(",") end
+                 | map({name: .})) }' ;;
   *"/commits/"*"/statuses"*)
     [ "${CI_GATED_READ_FAILS:-}" = "1" ] && exit 1
     printf '%s\n' "${EXISTING_CI_GATED-}" ;;
@@ -89,8 +102,13 @@ BASE=chrischall/example-mcp
 
 # posted_state — the `state=` of the ci-gated POST, or "none".
 posted_state() {
-  grep -q 'statuses/' "$1" || { echo none; return; }
-  grep -oE 'state=[a-z]+' "$1" | head -1 | cut -d= -f2
+  # Read the state off the POST line only. Scanning the whole call log made
+  # this read `state=` out of any other recorded URL — the open-PR lookup
+  # (`pulls?state=open`) landed first and every fork case reported "open".
+  local line
+  line="$(grep 'statuses/' "$1" | head -1)"
+  [ -n "$line" ] || { echo none; return; }
+  printf '%s' "$line" | grep -oE 'state=[a-z]+' | head -1 | cut -d= -f2
 }
 
 # gate_case <name> <want_run> <want_post> [ENV=val ...]
@@ -279,7 +297,7 @@ fork_case() {
   local name="$1" want_post="$2"; shift 2
   local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
   export GH_CALLS="$dir/gh"; : > "$GH_CALLS"
-  unset EXISTING_CI_GATED CI_GATED_READ_FAILS PR_LOOKUP_FAILS
+  unset EXISTING_CI_GATED CI_GATED_READ_FAILS PR_LOOKUP_FAILS PR_ABSENT
   # Baseline: un-armed fork whose run went green because CI never ran.
   export GH_TOKEN=x REPO="$BASE" SHA=deadbeef CONCLUSION=success RUN_URL="" PR_LABELS=""
   local kv; for kv in "$@"; do export "${kv?}"; done
@@ -304,7 +322,7 @@ fork_desc_case() {
   local negate=""; case "$want" in "!"*) negate=1; want="${want#!}" ;; esac
   local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
   export GH_CALLS="$dir/gh"; : > "$GH_CALLS"
-  unset EXISTING_CI_GATED CI_GATED_READ_FAILS PR_LOOKUP_FAILS
+  unset EXISTING_CI_GATED CI_GATED_READ_FAILS PR_LOOKUP_FAILS PR_ABSENT
   export GH_TOKEN=x REPO="$BASE" SHA=deadbeef CONCLUSION=success RUN_URL="" PR_LABELS=""
   local kv; for kv in "$@"; do export "${kv?}"; done
 
@@ -337,7 +355,8 @@ fork_case "armed, run neutral → pending not success"    pending PR_LABELS=read
 # Fail-safe: an undecidable arming state must block, never satisfy. Same
 # direction the gate takes when its own status read fails.
 fork_case "PR lookup fails → pending"                   pending PR_LOOKUP_FAILS=1 PR_LABELS=ready-to-merge
-fork_case "no PR for the sha → pending"                 pending PR_LABELS=""
+fork_case "no PR for the sha → pending"                 pending PR_ABSENT=1 PR_LABELS=ready-to-merge
+fork_case "PR found with no labels at all → pending"    pending PR_LABELS=""
 
 # No-clobber, same rule as the gate (honeybook-mcp#160): a TERMINAL ci-gated
 # means real CI ran for this exact commit, so a later un-armed or deferred
