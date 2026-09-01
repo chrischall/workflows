@@ -68,9 +68,12 @@ the `context` job checks `author_association` before anything runs — so a fork
 own author cannot trigger a review of their own PR. That command IS the gate:
 unlike the same-repo path, no event starts a fork review on its own.
 
-A fork verdict is INFORMATION ONLY. The arming step never labels a fork, so
-`ready-to-merge` stays a human action — and because an un-armed fork does not
-build, reviewing one neither merges it nor starts its CI.
+A fork verdict ARMS on `pass`/`warn`, exactly as a same-repo one does — the
+command is the human gate, and a fork reaches the review no other way. Arming
+is what starts a fork's CI: the arm-gate stops deferring, the real build runs,
+and `ci-fork-status` posts the true `ci-gated`. It does not start a merge —
+auto-merge excludes forks by head repo, so a fork PR still waits for a human to
+press merge.
 
 **Merging a fork PR.** `templates/ci-fork-status.yml` closes this: it triggers
 on `workflow_run`, which fires in the BASE repo where the token really does
@@ -82,8 +85,10 @@ That was a deliberate weakening of a fail-safe — previously the fork path coul
 only ever leave the gate closed. Two human gates remain and it rests on them:
 GitHub holds fork runs at `action_required` until a maintainer approves them
 (so CI never runs on unreviewed external code, and the reporter only mirrors an
-approved run), and `pr-auto-review` SKIPS fork PRs, so `ready-to-merge` is
-never applied to one automatically.
+approved run), and a fork is armed only when a maintainer types `/auto-review`
+on it — never by an event, and only from an author_association the repo trusts.
+Auto-merge excludes forks regardless, so what arming a fork buys is CI, not a
+merge.
 
 A repo that has not had the stub rolled out yet still has the old behaviour —
 nothing posts `ci-gated` and the merge stays blocked. There, post it yourself

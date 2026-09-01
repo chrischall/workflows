@@ -144,14 +144,15 @@ runs:
         # running a fork's build before a maintainer has looked spends CI on
         # unreviewed code. A fork now falls through to the un-armed path below —
         # `ready-to-merge` is the human signal that starts it, exactly as for a
-        # same-repo PR. It still posts nothing here.
+        # same-repo PR, and a maintainer's `/auto-review` is what applies it.
+        # It still posts nothing here.
         #
         # Deliberately AFTER the armed case: an already-armed fork PR must take
         # the armed path (and its duplicate-run suppression), or it rebuilds on
         # every relabel where a same-repo PR is skipped (#113).
         if [ "$MODE" = "status" ] && [ "$IS_FORK" = "true" ]; then
           echo "run=false" >> "$GITHUB_OUTPUT"
-          echo "fork PR ($PR_HEAD_REPO) is un-armed → CI deferred until a maintainer adds ready-to-merge; posting no ci-gated status (fork tokens are read-only)"
+          echo "fork PR ($PR_HEAD_REPO) is un-armed → CI deferred until a maintainer arms it (comment /auto-review, or add ready-to-merge); posting no ci-gated status (fork tokens are read-only)"
           exit 0
         fi
 

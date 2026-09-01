@@ -55,6 +55,14 @@ jobs:
         # extract the shipped steps, stub gh, and pin both matrices.
         run: bash scripts/followup.test.sh
 
+      - name: verdict + arm-policy unit tests
+        # This suite shipped without ever being wired in, so the no-verdict
+        # diagnosis it guards was unguarded in CI. It also pins the arming
+        # step's `if:` — an expression actionlint checks for syntax but not
+        # for policy, and the only thing deciding whether a maintainer's
+        # `/auto-review` starts a fork PR's CI.
+        run: bash scripts/verdict.test.sh
+
       - name: rollout.sh unit tests
         # --check is what the daily drift sweep runs, and its failure mode is
         # silent under-reporting rather than a crash — nothing downstream would

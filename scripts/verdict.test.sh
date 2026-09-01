@@ -92,6 +92,31 @@ run_case "a real verdict still renders normally" \
   'Auto-review verdict' \
   OUT='{"verdict":"pass","summary":"looks good","important_findings":[],"nits":[]}'
 
+# The arming step's fork policy is an `if:` expression, not bash, so the
+# extract-and-run technique above cannot reach it — and it is the one line
+# standing between a maintainer's `/auto-review` and a fork PR's CI. Pin it
+# structurally instead: both arms must be named, so deleting either (or
+# "simplifying" the fork arm away on the reasoning that a fork can only ever
+# arrive by issue_comment) fails here rather than in 79 repos.
+echo "── The arm step's fork policy ──"
+arm_if="$(ruby -ryaml -e '
+  wf = YAML.load_file(ARGV[0])
+  step = wf["jobs"].values.flat_map { |j| j["steps"] || [] }
+           .find { |s| s["name"] == "Arm auto-merge on pass or warn" }
+  abort("could not find `Arm auto-merge on pass or warn` step") unless step
+  print step["if"].to_s
+' "$WF")" || arm_if=""
+
+arm_case() {
+  local name="$1" want="$2"
+  if printf '%s' "$arm_if" | grep -qF "$want"; then ok "$name"
+  else bad "$name" "arm step if: did not contain: $want"; fi
+}
+
+arm_case "same-repo PRs still arm" "is_fork == 'false'"
+arm_case "a fork arms down the /auto-review path" "github.event_name == 'issue_comment'"
+arm_case "a failed verdict step still cannot arm" '!cancelled()'
+
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
