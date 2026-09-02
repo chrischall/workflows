@@ -40,11 +40,13 @@ ruby -ryaml -e '
   step = rev["jobs"]["review"]["steps"].find { |s| s["name"] == "Open or update follow-up issue" }
   abort("could not find `Open or update follow-up issue` step") unless step
   File.write(ARGV[1], step["run"])
+  File.write(ARGV[1] + ".shell", step["shell"].to_s)
 
   sw = YAML.load_file(ARGV[2])
   sstep = sw["jobs"].values.first["steps"].find { |s| s["name"] =~ /Sweep/ }
   abort("could not find the sweep step") unless sstep
   File.write(ARGV[3], sstep["run"])
+  File.write(ARGV[3] + ".shell", sstep["shell"].to_s)
 ' "$REVIEW_WF" "$TMP/followup.sh" "$SWEEP_WF" "$TMP/sweep.sh" \
   || { echo "FAIL: could not extract steps from $REVIEW_WF / $SWEEP_WF"; exit 1; }
 
@@ -89,7 +91,7 @@ followup_case() {
            FIX_EXISTING="$dir/existing" FIX_OLD_BODY="$dir/oldbody" CAPTURED="$dir/captured"
     export GH_TOKEN=x PR=42 REPO="$REPO" PR_TITLE="a change" VERDICT=warn \
            HEAD_SHA=abcdef1234567890abcdef1234567890abcdef12 OUT="$out"
-    bash -eo pipefail "$TMP/followup.sh"
+    bash -e "$TMP/followup.sh"
   ) >"$dir/log" 2>&1
   if "$assert_fn" "$dir/captured"; then
     ok "followup: $name"
@@ -204,7 +206,7 @@ JSON
     export GITHUB_REPOSITORY=chrischall/workflows GITHUB_STEP_SUMMARY="$dir/summary" \
            RELEASE_PAT=tok NULLNET_RELEASE_PAT=tok2
     local kv; for kv in "$@"; do export "${kv?}"; done
-    bash -eo pipefail "$TMP/sweep.sh"
+    bash -e "$TMP/sweep.sh"
   ) >"$dir/log" 2>&1
   local got_c got_l
   got_c=$(grep -c 'issue comment' "$dir/gh" || true)
@@ -243,5 +245,22 @@ if grep -nE 'bash +"\$(TMP|WORK)/' "$0" >/dev/null; then
   bad "extracted steps run under an aborting shell" \
       "$(grep -nE 'bash +"\$(TMP|WORK)/' "$0" | head -3) — add -e (or -eo pipefail for a composite step)"
 else ok "extracted steps run under an aborting shell, as GitHub does"; fi
+
+# ...and that `-e` is still the RIGHT flag set. `-o pipefail` is not a free
+# extra safety margin: production does not set it for a `run:` block with no
+# `shell:`, so a failing non-final pipeline command aborts here and sails on
+# there — the same blind spot as a plain `bash`, pointed the other way. If a
+# step ever declares `shell: bash`, GitHub adds pipefail and so must the runner.
+for shellfile in "$TMP"/*.sh.shell; do
+  [ -e "$shellfile" ] || continue
+  declared="$(cat "$shellfile")"
+  stepname="$(basename "$shellfile" .sh.shell)"
+  if [ -z "$declared" ]; then
+    ok "$stepname: no shell: override, so -e alone matches production"
+  else
+    bad "$stepname: shell mismatch" \
+        "the step now declares \`shell: $declared\`, which GitHub runs with -o pipefail — add it to the runner"
+  fi
+done
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

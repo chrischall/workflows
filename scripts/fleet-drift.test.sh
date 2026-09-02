@@ -36,6 +36,7 @@ ruby -ryaml -e '
   step = wf["jobs"]["check"]["steps"].find { |s| s["name"] =~ /Check every fleet repo/ }
   abort("could not find the sweep step") unless step
   File.write(ARGV[1], step["run"])
+  File.write(ARGV[1] + ".shell", step["shell"].to_s)
 ' "$WF" "$TMP/sweep.sh" || { echo "FAIL: could not extract the sweep step from $WF"; exit 1; }
 
 # --- fake fleet root -------------------------------------------------------
@@ -102,7 +103,7 @@ sweep() {
   local kv; for kv in "$@"; do export "${kv?}"; done
 
   # -eo pipefail: what Actions actually runs a `run:` step with.
-  ( cd "$ROOT" && bash -eo pipefail "$TMP/sweep.sh" ) >"$dir/log" 2>&1
+  ( cd "$ROOT" && bash -e "$TMP/sweep.sh" ) >"$dir/log" 2>&1
   local got_exit=$?
   local got_action=none
   grep -q 'issue create' "$GH_CALLS" && got_action=create
@@ -181,5 +182,22 @@ if grep -nE 'bash +"\$(TMP|WORK)/' "$0" >/dev/null; then
   bad "extracted steps run under an aborting shell" \
       "$(grep -nE 'bash +"\$(TMP|WORK)/' "$0" | head -3) — add -e (or -eo pipefail for a composite step)"
 else ok "extracted steps run under an aborting shell, as GitHub does"; fi
+
+# ...and that `-e` is still the RIGHT flag set. `-o pipefail` is not a free
+# extra safety margin: production does not set it for a `run:` block with no
+# `shell:`, so a failing non-final pipeline command aborts here and sails on
+# there — the same blind spot as a plain `bash`, pointed the other way. If a
+# step ever declares `shell: bash`, GitHub adds pipefail and so must the runner.
+for shellfile in "$TMP"/*.sh.shell; do
+  [ -e "$shellfile" ] || continue
+  declared="$(cat "$shellfile")"
+  stepname="$(basename "$shellfile" .sh.shell)"
+  if [ -z "$declared" ]; then
+    ok "$stepname: no shell: override, so -e alone matches production"
+  else
+    bad "$stepname: shell mismatch" \
+        "the step now declares \`shell: $declared\`, which GitHub runs with -o pipefail — add it to the runner"
+  fi
+done
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
