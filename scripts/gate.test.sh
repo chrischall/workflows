@@ -18,6 +18,13 @@
 # the ci-gated POST 403'd, the gate job failed, every build step was skipped by
 # `needs: gate`, and the PR went red without a single test having run.
 #
+# Every extracted step runs under the flags GitHub actually gives it: a
+# workflow `run:` block gets `bash -e {0}`, and a composite action step with
+# `shell: bash` gets `bash --noprofile --norc -e -o pipefail {0}`. Under a
+# plain `bash` an unguarded non-zero merely continues, where production aborts
+# the step — so a step that silently skips its remaining work on a transient
+# error tests green (chrischall/workflows#213).
+#
 # Usage: bash scripts/gate.test.sh
 set -uo pipefail   # deliberately no -e: assertions need to observe failures
 
@@ -124,7 +131,7 @@ gate_case() {
          PR_HEAD_REPO="$BASE" LABELS="" REPO="$BASE"
   local kv; for kv in "$@"; do export "${kv?}"; done
 
-  bash "$GATE_SCRIPT" >"$dir/log" 2>&1
+  bash $GATE_SHELL_FLAGS "$GATE_SCRIPT" >"$dir/log" 2>&1
   local got_run; got_run="$(grep -oE 'run=(true|false)' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)"
   [ -z "$got_run" ] && got_run='(none)'
   local got_post; got_post="$(posted_state "$GH_CALLS")"
@@ -146,7 +153,7 @@ report_case() {
          PR_HEAD_REPO="$BASE" REPO="$BASE"
   local kv; for kv in "$@"; do export "${kv?}"; done
 
-  bash "$TMP/report.sh" >"$dir/log" 2>&1
+  bash -e "$TMP/report.sh" >"$dir/log" 2>&1
   local got_post; got_post="$(posted_state "$GH_CALLS")"
   if [ "$got_post" = "$want_post" ]; then
     ok "report: $name (post=$got_post)"
@@ -156,7 +163,7 @@ report_case() {
   fi
 }
 
-GATE_SCRIPT="$TMP/gate.sh"
+GATE_SCRIPT="$TMP/gate.sh"; GATE_SHELL_FLAGS="-e"
 echo "── Arm gate (reusable-mcp-ci.yml), status mode ──"
 gate_case "same-repo un-armed → blocked by pending"  false pending
 gate_case "same-repo armed → run, gate posts nothing" true none    LABELS=ready-to-merge
@@ -222,7 +229,7 @@ echo "── arm-gate composite (same rule, bespoke-CI repos) ──"
 # Row-for-row the same matrix as the reusable workflow above. Keep them in
 # lockstep: a row that exists on only one side is exactly how the two drifted
 # apart before, and a divergence here is invisible until it wedges a repo.
-GATE_SCRIPT="$TMP/armgate.sh"
+GATE_SCRIPT="$TMP/armgate.sh"; GATE_SHELL_FLAGS="-eo pipefail"
 gate_case "same-repo un-armed → blocked by pending"  false pending
 gate_case "same-repo armed → run"                    true  none    LABELS=ready-to-merge
 gate_case "armed + non-arming label → no duplicate"  false none    LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=documentation
@@ -260,7 +267,7 @@ armgate_is_fork() {
          EVENT_LABEL="" USER_TYPE=User HEAD_REF=feature HEAD_SHA=deadbeef \
          PR_HEAD_REPO="$BASE" LABELS="" REPO="$BASE"
   local kv; for kv in "$@"; do export "${kv?}"; done
-  bash "$TMP/armgate.sh" >"$dir/log" 2>&1
+  bash -eo pipefail "$TMP/armgate.sh" >"$dir/log" 2>&1
   local got; got="$(grep -oE 'is_fork=(true|false)' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)"
   [ -z "$got" ] && got='(unset)'
   if [ "$got" = "$want" ]; then ok "arm-gate is_fork: $name (=$got)"
@@ -302,7 +309,7 @@ fork_case() {
   export GH_TOKEN=x REPO="$BASE" SHA=deadbeef CONCLUSION=success RUN_URL="" PR_LABELS=""
   local kv; for kv in "$@"; do export "${kv?}"; done
 
-  bash "$TMP/fork.sh" >"$dir/log" 2>&1
+  bash -eo pipefail "$TMP/fork.sh" >"$dir/log" 2>&1
   local got_post; got_post="$(posted_state "$GH_CALLS")"
   if [ "$got_post" = "$want_post" ]; then
     ok "fork-status: $name (post=$got_post)"
@@ -326,7 +333,7 @@ fork_desc_case() {
   export GH_TOKEN=x REPO="$BASE" SHA=deadbeef CONCLUSION=success RUN_URL="" PR_LABELS=""
   local kv; for kv in "$@"; do export "${kv?}"; done
 
-  bash "$TMP/fork.sh" >"$dir/log" 2>&1
+  bash -eo pipefail "$TMP/fork.sh" >"$dir/log" 2>&1
   local hit=""; grep -qF -- "$want" "$GH_CALLS" && hit=1
   if { [ -n "$negate" ] && [ -z "$hit" ]; } || { [ -z "$negate" ] && [ -n "$hit" ]; }; then
     ok "fork-status desc: $name"
@@ -396,5 +403,15 @@ fork_desc_case "no open PR does not say un-armed"        "!arm this fork PR"    
 fork_desc_case "no open PR blames no permission"         "!pull-requests: read" PR_ABSENT=1 PR_LABELS=ready-to-merge
 
 echo
+# The harness must run each extracted step under the flags GitHub gives it —
+# `bash -e` for a workflow `run:` block, `bash -eo pipefail` for a composite
+# action's `shell: bash`. Under a plain `bash` an unguarded non-zero continues
+# here and ABORTS in production, so every "the step still does its second job"
+# assertion above silently tests nothing. That is exactly how #213 shipped a
+# de-arm that skipped `--disable-auto` whenever the label call failed.
+if grep -nE 'bash +"\$(TMP|WORK)/' "$0" >/dev/null; then
+  bad "extracted steps run under an aborting shell" \
+      "$(grep -nE 'bash +"\$(TMP|WORK)/' "$0" | head -3) — add -e (or -eo pipefail for a composite step)"
+else ok "extracted steps run under an aborting shell, as GitHub does"; fi
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
