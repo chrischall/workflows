@@ -22,6 +22,22 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 The pipeline contract: non-release PR → auto-review emits a mandatory
 `pass|warn|fail` verdict → `pass` or `warn` adds `ready-to-merge` → label arms
 native auto-merge and fires deferred CI (the required check) → merge on green.
+
+One commit gets **one verdict at a time**. Opening a PR with `--label` fires
+`opened` and `labeled` back-to-back into separate concurrency groups (shared
+ones let the second cancel the first, #182), so two LLM reviews of the same
+diff used to race — and they can disagree. The younger run now stands down
+while an older run of the same workflow is reviewing the same head SHA; run ids
+give both runs the same total order, so exactly one proceeds and neither waits
+on the other. A re-review triggered by a label *after* the first verdict lands
+is not a duplicate and still runs, as does `/auto-review` at any time.
+
+A `fail` does not merely decline to arm — it **de-arms**, removing
+`ready-to-merge` *and* calling `gh pr merge --disable-auto`. Both are needed:
+the label is only the trigger, and once auto-merge is enabled GitHub merges on
+green whatever happens to the label afterwards. This is what stops a PR another
+run armed a minute earlier from merging on a red review
+(`chrischall/fetchproxy#274`).
 Deferred CI blocks un-armed PRs in one of two gate modes: legacy `fail` (the
 required `ci / ci` job fails red until armed) or `status` (a yellow
 `ci-gated: pending` commit status blocks instead and the `ci / ci` job is

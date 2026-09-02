@@ -20,7 +20,11 @@ name: Reusable PR auto-review
 #     `followup-orphan-sweep.yml` in chrischall/workflows, not here.
 #  5. On `pass` OR `warn`, adds `ready-to-merge` via the caller's PAT
 #     (GITHUB_TOKEN would not fire the auto-merge workflow): nits never block —
-#     they ride along on the tracking issue. `fail` blocks (never auto-arms).
+#     they ride along on the tracking issue. `fail` DE-ARMS — it removes the
+#     label and disables auto-merge, rather than merely declining to add one,
+#     because a concurrent run may have armed the PR already.
+#  6. Reviews one head SHA once at a time: a run stands down while an older run
+#     of this workflow is reviewing the same commit.
 #
 # Why `pull_request` (not `pull_request_target`): Anthropic's OIDC backend
 # rejects `pull_request_target` (anthropics/claude-code-action#713), and a
@@ -138,7 +142,10 @@ jobs:
       draft: ${{ steps.pr.outputs.draft }}
       user_type: ${{ steps.pr.outputs.user_type }}
       labels: ${{ steps.pr.outputs.labels }}
-      eligible: ${{ steps.pr.outputs.eligible }}
+      # `solo` owns this, not `pr`: it passes `pr`'s answer through unchanged
+      # and can only ever narrow it. Reading `pr`'s directly here would leave
+      # the duplicate-review guard computed and ignored.
+      eligible: ${{ steps.solo.outputs.eligible }}
     steps:
       - id: pr
         env:
@@ -207,6 +214,129 @@ jobs:
           else
             echo "is_fork=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # Opening a PR with `--label` fires `opened` and `labeled` back-to-back,
+      # and the stub puts them in SEPARATE concurrency groups deliberately — a
+      # shared group lets the labeled event displace the queued review and the
+      # PR ends up with no verdict at all (#182). The cost is two LLM reviews
+      # of the same diff, running concurrently, able to disagree.
+      #
+      # On chrischall/fetchproxy#274 they did, and the disagreement shipped:
+      #
+      #   run …348591 (opened)  model 79s   verdict 18:19:44  ARMED 18:19:46
+      #   run …362171 (labeled) model 140s  verdict 18:20:50  (merged 18:20:45)
+      #
+      # Consulting the recorded verdict before arming (#209) does not reach
+      # that: at 18:19:44 the only comment on record was the arming run's own
+      # `pass`. Nor is the ordering unlucky — a `fail` review is systematically
+      # the SLOWER one, because it has findings to write, so the losing
+      # ordering is the common one.
+      #
+      # The fix is for the second review never to start. Run ids are a total
+      # order both runs can see, so the younger run stands down and the elder
+      # never waits on anyone: no pair can deadlock, and no commit can end up
+      # with zero reviews because both deferred.
+      #
+      # One deliberate consequence: adding `review-with-opus` (or any
+      # whitelisted label) while the first review is STILL RUNNING no longer
+      # re-reviews — the elder run is already covering that commit, with
+      # whichever model it picked. Adding it after the verdict lands works
+      # exactly as before, and `/auto-review` re-reviews at any time. Trading
+      # that for a deterministic one-verdict-per-commit rule is the point;
+      # today's alternative is two verdicts and a coin toss over which arms.
+      - id: solo
+        name: Stand down if another run is already reviewing this commit
+        env:
+          # The PAT, not github.token: listing workflow runs needs
+          # `actions: read`, and the caller stubs grant contents /
+          # pull-requests / issues / id-token only. Adding a scope to 80 stubs
+          # to make one read work is a fleet rollout; the PAT is already here
+          # and already `required: true`.
+          GH_TOKEN: ${{ secrets.release_pat }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RUN_ID: ${{ github.run_id }}
+          SHA: ${{ steps.pr.outputs.head_sha }}
+          ELIGIBLE: ${{ steps.pr.outputs.eligible }}
+        run: |
+          # `pr` already decided this event reviews nothing. Pass that through
+          # untouched — this step may narrow eligibility, never widen it.
+          if [ "${ELIGIBLE:-}" != "true" ]; then
+            echo "eligible=${ELIGIBLE:-false}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # `/auto-review` is a maintainer asking by hand. It is never a
+          # duplicate of anything, it is the only route a fork has to a
+          # review, and standing one down would make the command look broken.
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Every failure below falls through to reviewing. One redundant
+          # review costs tokens; a review that silently never happens leaves a
+          # PR un-armed and stuck, with a skipped run as the only evidence.
+          WF_ID=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq '.workflow_id' 2>/dev/null || true)
+          case "$WF_ID" in
+            ''|*[!0-9]*)
+              echo "::notice::could not resolve this run's workflow id — reviewing rather than risk no review at all."
+              echo "eligible=true" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+          esac
+
+          # Runs of THIS workflow on THIS commit that started before this one.
+          # A `pull_request` run's head_sha is the PR head, so the `opened` and
+          # `labeled` twins of one push share it — and a later push does not,
+          # which is what keeps `synchronize` re-reviews out of this.
+          CANDIDATES=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&event=pull_request&per_page=100" \
+            --jq ".workflow_runs[] | select(.workflow_id == $WF_ID) | select(.id < $RUN_ID) | .id" \
+            2>/dev/null | sort -n || true)
+
+          for id in $CANDIDATES; do
+            tries=0
+            while : ; do
+              STATUS=$(gh api "repos/$REPO/actions/runs/$id" --jq '.status' 2>/dev/null || true)
+
+              # Already finished: NOT concurrent, so this run is the deliberate
+              # re-review a whitelisted label triggers — adding `release-notes`
+              # is the documented fix for a finding this reviewer itself
+              # issues. Suppressing it strands the PR on a `fail` that nothing
+              # can clear (flightaware-mcp#63's shape).
+              if [ "$STATUS" = "completed" ]; then break; fi
+
+              JOB=$(gh api "repos/$REPO/actions/runs/$id/jobs" \
+                --jq '[.jobs[] | select(.name | endswith("review")) | "\(.status):\(.conclusion // "")"] | first // ""' \
+                2>/dev/null || true)
+              case "$JOB" in
+                # It reached the review job and skipped it: a release-please PR
+                # before `release-ready`, a draft, a bot. Reviewing nothing, so
+                # deferring to it would leave this commit with no verdict.
+                *:skipped)
+                  break ;;
+                # No review job yet — its `context` is still running. The only
+                # genuinely unknown state, and the only one worth waiting on:
+                # the two runs are born ~8s apart, so this is exactly the
+                # window a single-shot check would misread as "no reviewer".
+                '')
+                  : ;;
+                # Queued, running, or finished having actually reviewed.
+                *)
+                  echo "Run $id is already reviewing $SHA — standing down so this commit gets exactly one verdict."
+                  echo "eligible=false" >> "$GITHUB_OUTPUT"
+                  exit 0 ;;
+              esac
+
+              tries=$((tries + 1))
+              if [ "$tries" -ge 12 ]; then
+                echo "::notice::run $id neither finished nor created a review job within 60s — reviewing."
+                break
+              fi
+              sleep 5
+            done
+          done
+
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
 
   review:
     runs-on: ubuntu-latest
@@ -871,7 +1001,7 @@ jobs:
           gh issue comment "$NUM" --repo "$REPO" --body \
             "Re-review of #${PR} came back clean with no findings, so this is linked to close when that PR merges. If anything here was deliberately deferred rather than fixed, reopen and note which item." >/dev/null || true
 
-      - name: Arm auto-merge on pass or warn
+      - name: Arm or de-arm auto-merge from the verdict
         # `ready-to-merge` MUST be added with the PAT: GitHub suppresses
         # workflow runs for GITHUB_TOKEN-triggered events, so a label added
         # that way would not fire the auto-merge workflow.
@@ -898,36 +1028,77 @@ jobs:
           # Empty if the verdict step failed before exporting — never arms.
           VERDICT: ${{ steps.verdict.outputs.verdict }}
         run: |
+          # Undo an arming another run already did. Declining to arm is a no-op
+          # against a PR that is ALREADY armed, which is the state a losing
+          # `fail` run finds: on chrischall/fetchproxy#274 the winning `pass`
+          # armed at 18:19:46 and the `fail` reached this step at 18:20:54.
+          #
+          # Both halves are required and neither implies the other. The label
+          # is only the TRIGGER: reusable-auto-merge.yml calls
+          # `gh pr merge --auto --squash` the moment it lands, and GitHub then
+          # merges on green regardless of what happens to the label afterwards.
+          # Removing the label alone looks like a fix and stops nothing.
+          dearm() {
+            echo "Verdict=${VERDICT:-unknown} — $1. De-arming #$PR."
+            STATE="$(gh pr view "$PR" --repo "$REPO" \
+              --json state,labels,autoMergeRequest 2>/dev/null || true)"
+
+            # The read is an optimisation — it only avoids two no-op API calls.
+            # Losing it must not cost the de-arm itself, so an unreadable state
+            # attempts both actions blind. Undoing an arming that was never
+            # there is harmless; skipping one that was there merges a red PR.
+            if [ -z "$STATE" ]; then
+              echo "::warning::could not read #$PR's state — de-arming blind."
+              gh pr edit "$PR" --repo "$REPO" --remove-label ready-to-merge || true
+              gh pr merge "$PR" --repo "$REPO" --disable-auto || true
+              return 0
+            fi
+
+            if [ "$(printf '%s' "$STATE" | jq -r '.state // empty' 2>/dev/null)" = "MERGED" ]; then
+              echo "::warning::#$PR already MERGED over a **fail** verdict — too late to de-arm." \
+                   "The findings are on the auto-review follow-up issue; fix forward on a NEW branch cut from main (these repos squash-merge)."
+              return 0
+            fi
+
+            if printf '%s' "$STATE" | jq -e '.labels[]? | select(.name == "ready-to-merge")' >/dev/null 2>&1; then
+              gh pr edit "$PR" --repo "$REPO" --remove-label ready-to-merge \
+                || echo "::warning::could not remove ready-to-merge from #$PR"
+            fi
+
+            if printf '%s' "$STATE" | jq -e '.autoMergeRequest != null' >/dev/null 2>&1; then
+              gh pr merge "$PR" --repo "$REPO" --disable-auto \
+                || echo "::warning::could not disable auto-merge on #$PR"
+            fi
+          }
+
+          # A definite red. Nothing else de-arms: "no verdict" means
+          # un-reviewed, not failed, and de-arming on it would turn every
+          # flaky structured-output run into a silent merge block.
+          if [ "$VERDICT" = "fail" ]; then
+            dearm "this review failed"
+            exit 0
+          fi
+
           if [ "$VERDICT" != "pass" ] && [ "$VERDICT" != "warn" ]; then
             echo "Verdict=${VERDICT:-unknown} — not arming (human-in-the-loop preserved)."
             exit 0
           fi
 
-          # This run's own verdict is not the whole story. A `labeled` event
-          # re-reviews (the label whitelist in `context` is deliberate), so
-          # labelling a PR seconds after opening it runs TWO reviews of the same
-          # diff, concurrently, in separate concurrency groups. They are LLM
-          # reviews and can disagree — on chrischall/fetchproxy#274 they did:
+          # This run's own verdict is not the whole story. `context` now stands
+          # a duplicate review down before it starts, so concurrent verdicts
+          # should no longer exist — but that guard fails SAFE toward reviewing
+          # (an Actions API hiccup lets both runs through), so the shared fact
+          # is still consulted here. Belt and braces, cheap: one API read.
           #
-          #   run …348591 (opened)  Verdict=pass — added ready-to-merge  18:19:46Z
-          #   run …362171 (labeled) Verdict=fail — not arming            18:20:54Z
-          #
-          # The PR merged at 18:20:45Z, nine seconds before the failing run
-          # reached this step. Each run's decision was individually correct and
-          # neither could see the other, so a red review shipped.
-          #
-          # The recorded verdict comment is the SHARED fact, so consult it
-          # before arming. This is a narrowing, not a guarantee: two runs can
-          # still interleave between this read and the label. It closes the
-          # observed ordering — a fail already on record can no longer be armed
-          # over — and it fails SAFE, since a read that comes back empty (no
-          # verdict posted yet, or the API refused) arms exactly as before.
+          # The recorded verdict comment is that shared fact. This closes the
+          # ordering where the `fail` is already on record; the `dearm` above
+          # closes the one where it arrives later, which is the ordering
+          # fetchproxy#274 actually took.
           RECORDED="$(gh pr view "$PR" --repo "$REPO" --json comments \
             --jq '[.comments[] | select(.body | contains("<!-- auto-review-verdict -->"))] | last | .body // ""' \
             2>/dev/null || true)"
           if printf '%s' "$RECORDED" | grep -qF 'verdict: **fail**'; then
-            echo "Verdict=$VERDICT here, but a **fail** verdict is already recorded on #$PR" \
-                 "— not arming. A concurrent review disagreed; the red one wins."
+            dearm "a **fail** verdict is already recorded on #$PR by a concurrent review; the red one wins"
             exit 0
           fi
 

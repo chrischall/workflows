@@ -102,8 +102,8 @@ echo "── The arm step's fork policy ──"
 arm_if="$(ruby -ryaml -e '
   wf = YAML.load_file(ARGV[0])
   step = wf["jobs"].values.flat_map { |j| j["steps"] || [] }
-           .find { |s| s["name"] == "Arm auto-merge on pass or warn" }
-  abort("could not find `Arm auto-merge on pass or warn` step") unless step
+           .find { |s| s["name"] == "Arm or de-arm auto-merge from the verdict" }
+  abort("could not find `Arm or de-arm auto-merge from the verdict` step") unless step
   print step["if"].to_s
 ' "$WF")" || arm_if=""
 
