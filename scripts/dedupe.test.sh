@@ -28,6 +28,11 @@
 # Usage: bash scripts/dedupe.test.sh
 set -uo pipefail   # no -e: assertions need to observe failures
 
+# The extracted step runs under `bash -e`, the shell GitHub gives a `run:`
+# block (`shell: /usr/bin/bash -e {0}`). Under a plain `bash` an unguarded
+# non-zero completes the step here and aborts it in production, which is how a
+# step that skips its remaining work on a transient error tests green (#213).
+
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 WF="$HERE/.github/workflows/reusable-pr-auto-review.yml"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -117,7 +122,7 @@ run_case() {
   export GH_TOKEN=pat REPO=chrischall/fetchproxy EVENT=pull_request \
          RUN_ID=200 SHA=deadbee ELIGIBLE=true
   "$setup" "$dir"
-  bash "$TMP/solo.sh" >"$dir/log" 2>&1
+  bash -e "$TMP/solo.sh" >"$dir/log" 2>&1
   local got; got="$(grep -o 'eligible=[a-z]*' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)"
   if [ "$got" = "$expect" ]; then ok "$name"
   else bad "$name" "expected eligible=$expect, got eligible=${got:-<none>} — log: $(tr '\n' ' ' < "$dir/log")"; fi

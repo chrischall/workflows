@@ -37,7 +37,10 @@ A `fail` does not merely decline to arm — it **de-arms**, removing
 the label is only the trigger, and once auto-merge is enabled GitHub merges on
 green whatever happens to the label afterwards. This is what stops a PR another
 run armed a minute earlier from merging on a red review
-(`chrischall/fetchproxy#274`).
+(`chrischall/fetchproxy#274`). The same two-part de-arm applies wherever the
+pipeline withdraws an arming, including `rereview_on_push`'s de-arm on a new
+commit.
+
 Deferred CI blocks un-armed PRs in one of two gate modes: legacy `fail` (the
 required `ci / ci` job fails red until armed) or `status` (a yellow
 `ci-gated: pending` commit status blocks instead and the `ci / ci` job is
