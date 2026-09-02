@@ -78,6 +78,25 @@ jobs:
         # `/auto-review` starts a fork PR's CI.
         run: bash scripts/verdict.test.sh
 
+      - name: arm / de-arm policy unit tests
+        # #209 shipped scripts/arm.test.sh and never wired it in, so the guard
+        # it added ran in CI exactly zero times — the same failure its
+        # neighbour above documents. The step it covers is the last thing
+        # between a red review and a merged PR, in both directions: it must
+        # not arm over a recorded fail, and it must actively DE-ARM when its
+        # own verdict is fail, because a concurrent run may have armed the PR
+        # a minute earlier (fetchproxy#274).
+        run: bash scripts/arm.test.sh
+
+      - name: duplicate-review stand-down unit tests
+        # The other half of #274: two reviews of one diff, racing. This pins
+        # the ordering rule (younger run stands down) and — more easily got
+        # wrong — every case that must NOT stand down: a label-triggered
+        # re-review, a release-please run whose review job skipped, and any
+        # Actions API failure, all of which would otherwise leave a PR with no
+        # verdict and no way to arm.
+        run: bash scripts/dedupe.test.sh
+
       - name: rollout.sh unit tests
         # --check is what the daily drift sweep runs, and its failure mode is
         # silent under-reporting rather than a crash — nothing downstream would
