@@ -5,17 +5,17 @@ Shared CI/CD for the fleet. `README.md` documents the pipeline contract
 action) — read it first and don't restate it here.
 
 This file covers what the README doesn't: the blast radius, and how to change
-things without breaking 78 repos.
+things without breaking every repo in the fleet at once.
 
 ## Every consumer pins `@main`. There is no staged rollout.
 
-`fleet.json` lists **78 repos**, and every one references
-`chrischall/workflows/...@main`. Nothing pins a tag or SHA. That count has gone
-stale twice — read it with `jq '.repos|length' fleet.json` rather than trusting
-the number written here.
+Every repo in `fleet.json` references `chrischall/workflows/...@main`. Nothing
+pins a tag or SHA. For how many that is, run `jq '.repos|length' fleet.json` —
+the number is deliberately not written here, because it was written here three
+times and was wrong by the third (78 while the file listed 80).
 
 So a merge to `main` here is a fleet-wide deploy that takes effect on the next
-workflow run in all 78 repos, with no canary and no rollback window. Treat any
+workflow run in every one of them, with no canary and no rollback window. Treat any
 change to `.github/workflows/reusable-*.yml` or `.github/actions/*` as a
 production change to every repo simultaneously.
 
@@ -105,7 +105,8 @@ render it:
 The key is `.ci`, not `.ci_mode`. `.ci_mode` reads `null` for every repo, and
 papering that over with a literal fallback — `(.ci_mode // "standard")` —
 reports the whole fleet as `standard`, which reads like a confirmation rather
-than a bug. It is 61 of 79; the rest are `custom` or `none` and never receive
+than a bug. It is most of the fleet but not all of it; the query above is the
+count, and it moves. The rest are `custom` or `none`, and never receive
 `ci.yml` or `ci-fork-status.yml`.
 
 **The drift issue is a daily snapshot, not live state.** The sweep rewrites it
