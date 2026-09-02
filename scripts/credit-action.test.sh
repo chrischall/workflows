@@ -94,7 +94,7 @@ new_case() {
   printf '%s\n' "$cl"   > "$WORK/CHANGELOG.md"
   printf '%s\n' "$body" > "$WORK/body-in.md"
   : > "$WORK/changelog-dirty"
-  ( cd "$WORK" && bash "$TMP/credit.sh" ) > "$WORK/out" 2>&1
+  ( cd "$WORK" && bash -eo pipefail "$TMP/credit.sh" ) > "$WORK/out" 2>&1
 }
 
 changelog_with() { printf '# Changelog\n\n## [1.0.0](x) (2026-09-01)\n\n%s' "$1"; }
@@ -148,5 +148,15 @@ check "an unreadable body still credits the changelog" yes "$(wrote_changelog)"
 check "and never pushes a blank description"           no  "$(pushed_body)"
 
 echo
+# The harness must run each extracted step under the flags GitHub gives it —
+# `bash -e` for a workflow `run:` block, `bash -eo pipefail` for a composite
+# action's `shell: bash`. Under a plain `bash` an unguarded non-zero continues
+# here and ABORTS in production, so every "the step still does its second job"
+# assertion above silently tests nothing. That is exactly how #213 shipped a
+# de-arm that skipped `--disable-auto` whenever the label call failed.
+if grep -nE 'bash +"\$(TMP|WORK)/' "$0" >/dev/null; then
+  bad "extracted steps run under an aborting shell" \
+      "$(grep -nE 'bash +"\$(TMP|WORK)/' "$0" | head -3) — add -e (or -eo pipefail for a composite step)"
+else ok "extracted steps run under an aborting shell, as GitHub does"; fi
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

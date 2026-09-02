@@ -60,7 +60,7 @@ run_case() {
          WORKFLOW_REF="chrischall/example-mcp/.github/workflows/pr-auto-review.yml@refs/pull/53/merge" \
          CHANGED_FILES="src/index.ts"
   local kv; for kv in "$@"; do export "${kv?}"; done
-  bash "$TMP/verdict.sh" >"$dir/log" 2>&1
+  bash -e "$TMP/verdict.sh" >"$dir/log" 2>&1
   local body; body="$(cat "$POSTED")"
   if [ -z "$want" ]; then
     if printf '%s' "$body" | grep -qF '/auto-review'; then
@@ -118,5 +118,15 @@ arm_case "a fork arms down the /auto-review path" "github.event_name == 'issue_c
 arm_case "a failed verdict step still cannot arm" '!cancelled()'
 
 echo
+# The harness must run each extracted step under the flags GitHub gives it —
+# `bash -e` for a workflow `run:` block, `bash -eo pipefail` for a composite
+# action's `shell: bash`. Under a plain `bash` an unguarded non-zero continues
+# here and ABORTS in production, so every "the step still does its second job"
+# assertion above silently tests nothing. That is exactly how #213 shipped a
+# de-arm that skipped `--disable-auto` whenever the label call failed.
+if grep -nE 'bash +"\$(TMP|WORK)/' "$0" >/dev/null; then
+  bad "extracted steps run under an aborting shell" \
+      "$(grep -nE 'bash +"\$(TMP|WORK)/' "$0" | head -3) — add -e (or -eo pipefail for a composite step)"
+else ok "extracted steps run under an aborting shell, as GitHub does"; fi
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
