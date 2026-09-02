@@ -387,7 +387,16 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           gh pr edit "$PR" --repo "$REPO" --remove-label ready-to-merge
-          echo "New commits pushed to an armed PR — removed ready-to-merge pending re-review."
+          # Removing the label is only half of it, and the missing half is the
+          # half that merges: reusable-auto-merge.yml called
+          # `gh pr merge --auto --squash` when the label landed, and GitHub
+          # honours that until it is explicitly disabled — label or no label.
+          # Without this the step de-arms in name only and the pushed diff
+          # merges on the standing verdict anyway, which is the exact failure
+          # `rereview_on_push` exists to prevent.
+          gh pr merge "$PR" --repo "$REPO" --disable-auto \
+            || echo "::warning::could not disable auto-merge on #$PR"
+          echo "New commits pushed to an armed PR — de-armed pending re-review."
 
       - name: Apply auto-review label
         env:
@@ -1084,16 +1093,19 @@ jobs:
             exit 0
           fi
 
-          # This run's own verdict is not the whole story. `context` now stands
-          # a duplicate review down before it starts, so concurrent verdicts
-          # should no longer exist — but that guard fails SAFE toward reviewing
-          # (an Actions API hiccup lets both runs through), so the shared fact
-          # is still consulted here. Belt and braces, cheap: one API read.
+          # A last look at the recorded verdict before arming. Read what this
+          # actually buys, because it is less than #209 claimed for it: there
+          # is only ONE marker comment per PR and `Post verdict to PR` UPSERTS
+          # it, so this run overwrote any concurrent `fail` with its own
+          # verdict seconds ago. The read can only catch a fail posted in the
+          # gap between that upsert and this line.
           #
-          # The recorded verdict comment is that shared fact. This closes the
-          # ordering where the `fail` is already on record; the `dearm` above
-          # closes the one where it arrives later, which is the ordering
-          # fetchproxy#274 actually took.
+          # It is kept because it is one API call and it fails safe, not
+          # because it is the guard. The guards are `context` standing a
+          # duplicate review down before it starts, and — when that fails open
+          # on an API error — the `dearm` above, which is the only thing that
+          # can act after the other run has already armed. That is the
+          # ordering fetchproxy#274 actually took.
           RECORDED="$(gh pr view "$PR" --repo "$REPO" --json comments \
             --jq '[.comments[] | select(.body | contains("<!-- auto-review-verdict -->"))] | last | .body // ""' \
             2>/dev/null || true)"

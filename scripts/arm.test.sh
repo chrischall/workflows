@@ -169,5 +169,26 @@ unlabeled no; unarmed no; reached "De-arming #274"
 if grep -q "::warning::" "$LOG"; then ok "$CASE: warns that the PR merged over a fail"
 else bad "$CASE: warns that the PR merged over a fail" "no ::warning:: in: $(tr '\n' ' ' < "$LOG")"; fi
 
+echo "── De-arm on new commits (rereview_on_push) ──"
+# The same two-part obligation, in the other de-arm. This step exists so a
+# force-push cannot merge new code on a standing verdict — but removing the
+# label alone leaves auto-merge ENABLED, so GitHub still merges the new diff
+# the moment CI goes green. Live on chrischall/opencode-copilot-plugin.
+ruby -ryaml -e '
+  wf = YAML.load_file(ARGV[0])
+  step = wf["jobs"].values.flat_map { |j| j["steps"] || [] }
+           .find { |s| s["name"] == "De-arm on new commits" }
+  abort("could not find `De-arm on new commits` step") unless step
+  File.write(ARGV[1], step["run"])
+' "$WF" "$TMP/pushdearm.sh" || { echo "FAIL: could not extract De-arm on new commits"; exit 1; }
+
+pushdearm_dir="$(mktemp -d "$TMP/case.XXXXXX")"
+export CALLS="$pushdearm_dir/calls"; : > "$CALLS"
+export GH_TOKEN=x PR=274 REPO=chrischall/fetchproxy PR_STATE="$ARMED_PR"
+bash "$TMP/pushdearm.sh" >"$pushdearm_dir/log" 2>&1
+CASE="de-arm on push"; LOG="$pushdearm_dir/log"
+unlabeled yes
+unarmed yes
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
