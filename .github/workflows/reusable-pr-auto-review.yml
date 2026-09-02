@@ -386,14 +386,18 @@ jobs:
           PR: ${{ needs.context.outputs.number }}
           REPO: ${{ github.repository }}
         run: |
-          gh pr edit "$PR" --repo "$REPO" --remove-label ready-to-merge
-          # Removing the label is only half of it, and the missing half is the
-          # half that merges: reusable-auto-merge.yml called
+          # Two independent obligations, and NEITHER may abort the other.
+          # These run under `bash -e`, so an unguarded non-zero ends the step
+          # where it stands: a transient hiccup on the label would skip the
+          # disable entirely and leave auto-merge live on a PR the pipeline
+          # believes it de-armed — the very state this step exists to prevent.
+          gh pr edit "$PR" --repo "$REPO" --remove-label ready-to-merge \
+            || echo "::warning::could not remove ready-to-merge from #$PR"
+          # The half that actually merges: reusable-auto-merge.yml called
           # `gh pr merge --auto --squash` when the label landed, and GitHub
           # honours that until it is explicitly disabled — label or no label.
           # Without this the step de-arms in name only and the pushed diff
-          # merges on the standing verdict anyway, which is the exact failure
-          # `rereview_on_push` exists to prevent.
+          # merges on the standing verdict anyway.
           gh pr merge "$PR" --repo "$REPO" --disable-auto \
             || echo "::warning::could not disable auto-merge on #$PR"
           echo "New commits pushed to an armed PR — de-armed pending re-review."

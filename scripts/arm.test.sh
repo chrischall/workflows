@@ -27,6 +27,12 @@
 # Usage: bash scripts/arm.test.sh
 set -uo pipefail   # no -e: assertions need to observe failures
 
+# Every extracted step is run under `bash -e`, because that is the shell
+# GitHub gives a `run:` block (`shell: /usr/bin/bash -e {0}`). Running them
+# under a plain `bash` hid an entire failure class: an unguarded non-zero
+# aborts the step mid-way in production and completes it here, so a step that
+# skips its second obligation on a transient error tests green.
+
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 WF="$HERE/.github/workflows/reusable-pr-auto-review.yml"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -57,7 +63,8 @@ case "$*" in
   "pr view"*)                 [ "$PR_STATE" = "__UNREADABLE__" ] && exit 1
                               printf '%s' "$PR_STATE"; exit 0 ;;
   "pr edit"*--add-label*)     exit 0 ;;
-  "pr edit"*--remove-label*)  exit 0 ;;
+  "pr edit"*--remove-label*)  [ "${LABEL_EDIT_FAILS:-}" = 1 ] && exit 1
+                              exit 0 ;;
   "pr merge"*--disable-auto*) exit 0 ;;
 esac
 exit 0
@@ -84,7 +91,7 @@ run_case() {
   export CALLS="$dir/calls"; : > "$CALLS"
   export GH_TOKEN=x PR=274 REPO=chrischall/fetchproxy VERDICT="$verdict" \
          RECORDED_VERDICT="$recorded" PR_STATE="$state"
-  bash "$TMP/arm.sh" >"$dir/log" 2>&1
+  bash -e "$TMP/arm.sh" >"$dir/log" 2>&1
   CASE="$name"; LOG="$dir/log"
 }
 
@@ -182,12 +189,26 @@ ruby -ryaml -e '
   File.write(ARGV[1], step["run"])
 ' "$WF" "$TMP/pushdearm.sh" || { echo "FAIL: could not extract De-arm on new commits"; exit 1; }
 
-pushdearm_dir="$(mktemp -d "$TMP/case.XXXXXX")"
-export CALLS="$pushdearm_dir/calls"; : > "$CALLS"
-export GH_TOKEN=x PR=274 REPO=chrischall/fetchproxy PR_STATE="$ARMED_PR"
-bash "$TMP/pushdearm.sh" >"$pushdearm_dir/log" 2>&1
-CASE="de-arm on push"; LOG="$pushdearm_dir/log"
+push_dearm_case() { # push_dearm_case <name> [LABEL_EDIT_FAILS=1]
+  local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
+  export CALLS="$dir/calls"; : > "$CALLS"
+  export GH_TOKEN=x PR=274 REPO=chrischall/fetchproxy PR_STATE="$ARMED_PR" \
+         LABEL_EDIT_FAILS="${2:-}"
+  bash -e "$TMP/pushdearm.sh" >"$dir/log" 2>&1
+  CASE="$1"; LOG="$dir/log"
+  unset LABEL_EDIT_FAILS
+}
+
+push_dearm_case "de-arm on push"
 unlabeled yes
+unarmed yes
+
+# The two calls are independent obligations, and the FIRST one failing must not
+# take the second with it. `bash -e` aborts the step on an unguarded non-zero,
+# so a transient gh hiccup on the label would skip `--disable-auto` entirely —
+# leaving auto-merge live on a PR the pipeline believes it de-armed, which is
+# the bug this step exists to prevent.
+push_dearm_case "de-arm on push when the label edit fails" 1
 unarmed yes
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
