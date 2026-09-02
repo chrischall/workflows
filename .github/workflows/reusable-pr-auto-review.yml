@@ -898,9 +898,38 @@ jobs:
           # Empty if the verdict step failed before exporting — never arms.
           VERDICT: ${{ steps.verdict.outputs.verdict }}
         run: |
-          if [ "$VERDICT" = "pass" ] || [ "$VERDICT" = "warn" ]; then
-            gh pr edit "$PR" --repo "$REPO" --add-label ready-to-merge
-            echo "Verdict=$VERDICT — added ready-to-merge to arm auto-merge."
-          else
+          if [ "$VERDICT" != "pass" ] && [ "$VERDICT" != "warn" ]; then
             echo "Verdict=${VERDICT:-unknown} — not arming (human-in-the-loop preserved)."
+            exit 0
           fi
+
+          # This run's own verdict is not the whole story. A `labeled` event
+          # re-reviews (the label whitelist in `context` is deliberate), so
+          # labelling a PR seconds after opening it runs TWO reviews of the same
+          # diff, concurrently, in separate concurrency groups. They are LLM
+          # reviews and can disagree — on chrischall/fetchproxy#274 they did:
+          #
+          #   run …348591 (opened)  Verdict=pass — added ready-to-merge  18:19:46Z
+          #   run …362171 (labeled) Verdict=fail — not arming            18:20:54Z
+          #
+          # The PR merged at 18:20:45Z, nine seconds before the failing run
+          # reached this step. Each run's decision was individually correct and
+          # neither could see the other, so a red review shipped.
+          #
+          # The recorded verdict comment is the SHARED fact, so consult it
+          # before arming. This is a narrowing, not a guarantee: two runs can
+          # still interleave between this read and the label. It closes the
+          # observed ordering — a fail already on record can no longer be armed
+          # over — and it fails SAFE, since a read that comes back empty (no
+          # verdict posted yet, or the API refused) arms exactly as before.
+          RECORDED="$(gh pr view "$PR" --repo "$REPO" --json comments \
+            --jq '[.comments[] | select(.body | contains("<!-- auto-review-verdict -->"))] | last | .body // ""' \
+            2>/dev/null || true)"
+          if printf '%s' "$RECORDED" | grep -qF 'verdict: **fail**'; then
+            echo "Verdict=$VERDICT here, but a **fail** verdict is already recorded on #$PR" \
+                 "— not arming. A concurrent review disagreed; the red one wins."
+            exit 0
+          fi
+
+          gh pr edit "$PR" --repo "$REPO" --add-label ready-to-merge
+          echo "Verdict=$VERDICT — added ready-to-merge to arm auto-merge."
