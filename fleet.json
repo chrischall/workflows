@@ -103,6 +103,9 @@
       "repo": "chrischall/musicbrainz-mcp"
     },
     {
+      "repo": "chrischall/myatriumhealth-mcp"
+    },
+    {
       "repo": "chrischall/app-store-connect-mcp",
       "conventions_hint": "The version appears in several files and must stay in sync; JWT/auth handling and stdio logging rules are in CLAUDE.md."
     },
