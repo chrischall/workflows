@@ -326,6 +326,57 @@ runs:
         echo "present=$present" >> "$GITHUB_OUTPUT"
         [ "$present" = "true" ] || echo "No server.json in any package — skipping MCP Registry publish."
 
+    # npm ACCEPTS a publish and indexes it asynchronously. `+ pkg@version` in
+    # the log and a signed provenance statement both mean accepted, NOT
+    # queryable — npm says so itself ("Your package is being processed and may
+    # take a few minutes to become available"). The MCP Registry refuses to
+    # register a version it cannot see on npm:
+    #
+    #   registry validation failed for package 0 (<pkg>): NPM package '<pkg>'
+    #   exists, but version '<v>' was not found (status: 404)
+    #
+    # so publishing to the registry in the next breath is a race the registry
+    # loses. gogcli-mcp 2.28.0 lost it: eight packages indexed fast enough, and
+    # gogcli-mcp-classroom did not, 40 seconds after a publish that had already
+    # succeeded. Wait for what we just published to actually be readable before
+    # asking anyone else to read it.
+    #
+    # Deliberately queries the registry over HTTP rather than `npm view`: npm
+    # answers from its own cache, which is the very staleness being waited out.
+    - name: Wait for npm to index published versions
+      if: inputs.publish-npm == 'true' && inputs.publish-registry == 'true' && steps.registry-check.outputs.present == 'true'
+      shell: bash
+      run: |
+        # One shared budget for the whole wait, not per package: what matters is
+        # that the registry step starts soon after npm is ready, and packages
+        # index in parallel on npm's side anyway. Overridable because 10 minutes
+        # is a guess at npm's tail latency, not a measured constant.
+        BUDGET="${NPM_INDEX_TIMEOUT_SECONDS:-600}"
+        INTERVAL="${NPM_INDEX_POLL_SECONDS:-15}"
+        deadline=$(( SECONDS + BUDGET ))
+
+        # Only the packages the registry step will actually submit need to be
+        # readable; a package with no server.json is never validated.
+        while IFS= read -r dir; do
+          [ -n "$dir" ] || continue
+          [ -f "$dir/server.json" ] || continue
+          PKG=$(node -p "require('$PWD/$dir/package.json').name")
+          # A scoped name's slash must be percent-encoded in the registry path.
+          URL="https://registry.npmjs.org/${PKG//\//%2f}"
+          until curl -fsS "$URL" 2>/dev/null \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.exit(JSON.parse(s).versions?.[process.argv[1]]?0:1)}catch{process.exit(1)}})' "$VERSION"; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              # Deliberately not fatal. The registry step is the single authority
+              # on registry success, and failing here would replace its precise
+              # error with a vaguer one for no gain.
+              echo "::warning title=npm indexing timed out::${PKG}@${VERSION} was not readable on npm before the ${BUDGET}s budget ran out; the MCP Registry publish may 404"
+              break
+            fi
+            echo "Waiting for ${PKG}@${VERSION} to appear on npm…"
+            sleep "$INTERVAL"
+          done
+        done < "$PUBLISH_DIRS_FILE"
+
     - name: Install mcp-publisher
       if: inputs.publish-registry == 'true' && steps.registry-check.outputs.present == 'true'
       uses: chrischall/workflows/.github/actions/install-mcp-publisher@main
@@ -335,25 +386,52 @@ runs:
       shell: bash
       run: mcp-publisher login github-oidc
 
+    # Idempotent, like the npm step above and for the same reason: a release
+    # that fails partway is recovered by re-running this workflow, so every
+    # step in it has to tolerate the work it already did.
     - name: Publish to MCP Registry
       if: inputs.publish-registry == 'true' && steps.registry-check.outputs.present == 'true'
       shell: bash
       run: |
         # Publish each package that ships a server.json (mcp-publisher reads it
         # from the cwd). Login happened once in the previous step.
+        #
+        # `cannot publish duplicate version` is SUCCESS, not failure: it means
+        # the registry already holds exactly what this run set out to publish.
+        # Treating it as an error made the documented recovery unreachable —
+        # gogcli-mcp v2.28.0 lost one package to an npm indexing race, and the
+        # re-run that fixed it then failed on the five that had already
+        # succeeded, so the run went red with the registry fully correct and
+        # the release still missing every artifact.
         rc=0
         while IFS= read -r dir; do
           [ -n "$dir" ] || continue
           [ -f "$dir/server.json" ] || continue
           echo "Publishing $dir/server.json to the MCP Registry…"
-          ( cd "$dir" && mcp-publisher publish ) || rc=1
+          # `|| prc=$?` rather than a bare assignment: under `bash -e` — the
+          # shell GitHub gives a run block — an assignment whose command
+          # substitution fails aborts the step, stranding every package after
+          # the first failure. Caught by scripts/mcp-registry-publish.test.sh.
+          prc=0
+          out=$( cd "$dir" && mcp-publisher publish 2>&1 ) || prc=$?
+          printf '%s\n' "$out"
+          if [ "$prc" -ne 0 ]; then
+            if grep -q 'cannot publish duplicate version' <<<"$out"; then
+              echo "Registry already has this version — treating as published."
+            else
+              rc=1
+            fi
+          fi
         done < "$PUBLISH_DIRS_FILE"
         exit "$rc"
 
     # `secrets.*` is not addressable in composite steps; token arrives as an
     # input and the emptiness check happens in the run block.
+    # `!cancelled()` rather than the default `success()`: ClawHub has no
+    # dependency on npm or the MCP Registry, so a failure over there must not
+    # silently skip it. See the attach step below for what that cost.
     - name: Publish skill to ClawHub
-      if: inputs.publish-clawhub == 'true'
+      if: ${{ !cancelled() && inputs.publish-clawhub == 'true' }}
       continue-on-error: true
       shell: bash
       env:
@@ -399,7 +477,17 @@ runs:
         exit $FAILED
 
     # release-please already created the GitHub Release; attach artifacts.
+    #
+    # `!cancelled()` is load-bearing. These artifacts are built locally in this
+    # job and depend on nothing upstream, but with the default `success()` any
+    # earlier failure skips this step and the release ships with ZERO assets —
+    # no .mcpb, no .skill — for a reason entirely unrelated to them. gogcli-mcp
+    # v2.28.0 shipped exactly that: one transient MCP Registry 404 on one of
+    # nine packages, and the whole release lost its artifacts and its ClawHub
+    # publish. The job still fails on the earlier step, so the failure stays
+    # visible; what changes is that a partial failure stops taking hostages.
     - name: Attach artifacts to release
+      if: ${{ !cancelled() }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}

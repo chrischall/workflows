@@ -169,6 +169,19 @@ every repo at once, which is a separate decision from having the input.
 npm trusted publishing and mcp-publisher validate the OIDC token's workflow
 identity, which must remain the consuming repo's own `release-please.yml`.
 
+Its publish steps are **idempotent and independently gated**, because the
+recovery for a half-finished release is re-running the workflow. npm skips a
+version it already has; the MCP Registry treats `cannot publish duplicate
+version` as published; and ClawHub publishing and release-artifact attachment
+run under `!cancelled()` so an upstream publish failure cannot skip them. One
+step in the middle also *waits*: npm indexes a publish asynchronously, so a
+version can be accepted and still 404 for the MCP Registry seconds later, and
+the registry refuses to register what it cannot see. `scripts/npm-index.test.sh`
+and `scripts/mcp-registry-publish.test.sh` pin all of it. The failure these
+prevent is quiet and expensive — gogcli-mcp v2.28.0 published nine packages to
+npm correctly, then shipped a release with **zero** artifacts because one
+package indexed slowly and the resulting red step skipped everything after it.
+
 `arm-gate` is the deferred-merge gate as a composite action so bespoke CI jobs
 (Gradle/KMP, Swift) — which carry repo-specific build steps and so can't call a
 reusable workflow — still get the one load-bearing rule centrally: an un-armed
