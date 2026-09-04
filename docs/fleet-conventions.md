@@ -25,9 +25,27 @@ from the Actions UI: the npm step is idempotent, MCP Registry publish is
 idempotent in practice, and `gh release upload --clobber` overwrites.
 
 **A repo may ship several skills; they all publish.** `mcp-publish`
-auto-discovers a root `SKILL.md`, else every `skills/*/SKILL.md`, packaging each
-as its own `<slug>-<version>.skill` and publishing each to ClawHub under its own
-slug. A single skill keeps the repo-level name, so those artifacts are unchanged.
+auto-discovers three layouts, in strict order: a root `SKILL.md`, else every
+`skills/*/SKILL.md`, else every `packages/*/SKILL.md` (a workspace monorepo's
+per-package skills). It packages each as its own `<slug>-<version>.skill` and
+publishes each to ClawHub under its own slug. A single skill keeps the
+repo-level name, so those artifacts are unchanged.
+
+The order is what keeps it safe to extend: a later layout is consulted only
+when every earlier one finds nothing, so adding one can never move a slug a
+repo already publishes under — and moving a slug orphans a live ClawHub
+listing (see **Unpinning moves the slug** below). It follows that a repo which
+resolves ANY skill today is unaffected by a new layout; only repos publishing
+nothing can change. `packages/*/` was added for exactly that case: gogcli-mcp
+shipped nine per-package skills and published one, because the layout matched
+no glob and the count silently came out right for the wrong reason.
+
+Both directory globs are single-level, so `packages/*/SKILL.md` cannot reach
+`packages/<pkg>/node_modules/<dep>/SKILL.md`. Publishing a dependency's skill
+under our slug would be worse than publishing none.
+
+`scripts/skill-resolve.test.sh` pins all of the above, including the six cases
+that assert the pre-existing layouts still resolve exactly as they did.
 
 `skill-path` is now only for deliberately publishing ONE skill out of several —
 it is no longer required to avoid a failure. The repos that pinned it under the
