@@ -314,6 +314,74 @@ modes, split by boundary:
 
 On drift, fall back to the raw response — never an empty projection.
 
+## Response shape
+
+**Read tools answer in the CHEAP shape by default.** `view: 'compact' | 'full'
+| 'raw'`, defaulting to `compact`, built with `viewParam`/`resolveView` from
+`@chrischall/mcp-utils`.
+
+The default is the whole point. Five repos had grown a projection before this
+was written and four made it opt-in — `compact: false` in the schema, with the
+tool's own description asking the model to please pass `compact=true`
+(`alltrails`, `untappd`). An efficiency that has to be requested is one that
+usually is not, and the caller paying for it is the one least able to know it
+was available. `booli`, `onthecheap` and `honeybook` had it right.
+
+**`view`, not `detail`/`mode`/`format`/`compact`.** `detail` is already an
+upstream passthrough in `alltrails` (`basic|medium|offline` goes into the URL);
+`mode` and `format` are taken in `musescore`, `flightaware`, `honeybook`;
+`summary` appears 13 times as a payload FIELD; a `compact` boolean cannot
+express three rungs, nor say whether `false` meant "everything you understand"
+or "everything you received".
+
+**Register only the rungs the tool honours.** `viewParam(['compact','full'])`
+builds a schema that rejects and does not mention `raw`. A value that silently
+aliases to another is a lie in the schema, and `raw` is meaningless where a
+record is ASSEMBLED from several endpoints rather than passed through from one
+(`ofw`'s messages combine a list item, a detail GET and derived fields). A tool
+whose output is already narrower than the projection takes no `view` at all.
+
+**`raw` means "no projection". It never means "no normalisation."** A repo that
+rewrites values on the way out — timestamps into one zone, ids into a stable
+shape — keeps doing so on every rung. Otherwise the rung a caller reaches for
+when something already looks wrong is the rung that reintroduces the
+inconsistency.
+
+**What compact drops** is what the response already says elsewhere, what is
+near-constant across every record, and what another field answers. Decide from
+the DATA, not from taste: `ofw` kept `replied` (varies on 442 of 1,335 rows)
+and dropped `canReply` (true on 1,330). **Check what only the fat blob
+carries** before deleting it — `ofw`'s `fromUser` is the empty string on every
+row, so the sender's name existed nowhere but the echo, and compact had to
+promote it.
+
+**An optional field is ABSENT, never a default.** "We did not see a count" and
+"there are none" are different facts and the second reads as verified. Use
+`pruneUndefined`.
+
+**A projection that trips returns the payload WHOLE** — `projectOrRaw` from
+`@chrischall/mcp-utils`, warning to stderr, per array rather than per record.
+Same rule as the parse fallback above, for the same reason: a half-filled
+record is indistinguishable from "there was nothing there". `undefined` from a
+projector counts as a failure.
+
+**Project LAST**, after any count, `complete` flag or note is computed from the
+records themselves. A projection must never be able to change what a response
+claims about its own contents.
+
+**No formatting whitespace on `compact` or `full`** — `minifiedResult` /
+`viewResult`, not `JSON.stringify(data, null, 2)`. Measured at 23% of a 135 KB
+`ofw` message page, about 8,000 tokens a call, read by nothing. `raw` stays
+indented: that rung exists to be read by a person.
+
+**Whitespace INSIDE a value is content and is never touched.** `JSON.stringify`
+gets this right for free; a text-level minifier (a regex over the serialised
+text, a collapse of `\s+`) corrupts every message body with a blank line in it.
+Pin it with a round-trip test.
+
+`ofw-mcp` is the reference implementation: 126.3 KB -> 39.8 KB on a real
+50-message page, -68%.
+
 ## Rate limits
 
 **One chokepoint, or the invariant is unenforceable.** MusicBrainz allows 1
