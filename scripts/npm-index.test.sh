@@ -147,5 +147,28 @@ grep -q '@scope/pkg' "$TMP/call.log" \
   && bad "a scoped name is never sent unencoded" "$(cat "$TMP/call.log")" \
   || ok "a scoped name is never sent unencoded"
 
+# 6. Every poll must be individually bounded. The deadline in the step is only
+#    evaluated BETWEEN polls, so an unbounded curl turns the whole wait into an
+#    unbounded one: the job runs to the Actions timeout and is CANCELLED, which
+#    ALSO skips the `!cancelled()` artifact attach. A hang here costs the
+#    release exactly the assets that guard exists to protect, so the timeout
+#    flags are load-bearing rather than hygiene.
+reset
+run_step
+grep -q -- '--max-time' "$TMP/call.log" \
+  && ok "each poll caps its total time" \
+  || bad "each poll caps its total time" "$(cat "$TMP/call.log")"
+grep -q -- '--connect-timeout' "$TMP/call.log" \
+  && ok "each poll caps its connect time" \
+  || bad "each poll caps its connect time" "$(cat "$TMP/call.log")"
+
+# 7. The abbreviated packument is a third of the full one's size and still
+#    carries `versions`, so there is less response to stall on mid-transfer.
+reset
+run_step
+grep -q 'application/vnd.npm.install-v1+json' "$TMP/call.log" \
+  && ok "polls request the abbreviated packument" \
+  || bad "polls request the abbreviated packument" "$(cat "$TMP/call.log")"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

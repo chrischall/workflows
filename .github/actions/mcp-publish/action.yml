@@ -363,7 +363,18 @@ runs:
           PKG=$(node -p "require('$PWD/$dir/package.json').name")
           # A scoped name's slash must be percent-encoded in the registry path.
           URL="https://registry.npmjs.org/${PKG//\//%2f}"
-          until curl -fsS "$URL" 2>/dev/null \
+          # Timeouts are load-bearing, not hygiene: the deadline below is only
+          # evaluated BETWEEN polls, so a stalled connection blocks inside curl
+          # and the bounded wait stops being bounded. curl's default is to wait
+          # forever, and the job would burn to the Actions timeout and be
+          # CANCELLED — which also skips the `!cancelled()` artifact attach, so
+          # a hang here costs the release the very assets that guard exists to
+          # protect. Matches reusable-fly-deploy.yml, which bounds its poll too.
+          #
+          # The abbreviated packument is a third of the size of the full one and
+          # still carries `versions`, so there is less response to stall on.
+          until curl -fsS --connect-timeout 10 --max-time 60 \
+            -H 'Accept: application/vnd.npm.install-v1+json' "$URL" 2>/dev/null \
             | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.exit(JSON.parse(s).versions?.[process.argv[1]]?0:1)}catch{process.exit(1)}})' "$VERSION"; do
             if [ "$SECONDS" -ge "$deadline" ]; then
               # Deliberately not fatal. The registry step is the single authority
