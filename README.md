@@ -247,6 +247,28 @@ there sees a diff and no reason for it),
 `--check` across the whole fleet daily and maintains one marker-tagged drift
 issue, so a hand-edited stub or unrolled template change surfaces the day it
 happens instead of during the next sweep.
+
+**Registering a repo does not back-fill the templates it missed.** A
+`fleet.json` entry enrols a repo in every rollout from that day FORWARD; every
+template that landed before it stays absent, because nothing replays past
+rollouts. So a newly registered repo needs a `scripts/rollout.sh <repo>
+--execute` sweep as well as its entry — the entry alone is half the job, and
+the half that is missing is silent.
+
+`myatriumhealth-mcp` is the worked example (#221). It was registered on
+2026-09-03; `ci-fork-status.yml` had landed on 2026-08-30 and been rolled out
+four days earlier, so the repo never received it. The registration PR's own
+message — "without this entry the repo silently misses every fleet-wide
+rollout" — was true and still left the gap, because it describes the future
+tense only. The cost was concrete rather than cosmetic: `ci-gated` is a
+REQUIRED status check there, and a fork PR cannot post it (GitHub caps
+`GITHUB_TOKEN` to read-only for `pull_request` runs from a fork), so every
+external contribution to that repo was unmergeable without a maintainer
+hand-posting a status. Nobody noticed because nobody had opened one.
+
+The daily drift sweep is what caught it, one day later, which is the sweep
+working as designed — but it is a net, not a step. Roll the stubs out when you
+register.
 Design: `docs/superpowers/specs/2026-06-12-fleet-reusable-workflows-design.md`.
 
 `docs/fleet-conventions.md` is the canonical home for the technical conventions
