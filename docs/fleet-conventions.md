@@ -352,6 +352,37 @@ upstream passthrough in `alltrails` (`basic|medium|offline` goes into the URL);
 express three rungs, nor say whether `false` meant "everything you understand"
 or "everything you received".
 
+**Two parameters survive beside `view` on purpose.** A sweep for uniformity
+will flag them as divergence; they are not.
+
+`alltrails` keeps `detail: basic|medium|offline` *alongside* `view` on the same
+tools. It is not a competing vocabulary — it is a different axis. `detail` goes
+into the AllTrails URL and decides what the API SENDS us; `view` decides what
+we forward on. They compose: `alltrails_get_trail(detail:"offline",
+view:"full")` is the only way to see route geometry, because `detail` has to
+fetch it before `view` can pass it through. Renaming either one would collapse
+two independent questions into one parameter.
+
+`honeybook_get_workspace_file` takes `section:
+summary|pricing|agreement|payments|all|raw` and no `view`. `section` is
+strictly MORE capable here: it selects WHICH part of a proposal-class record to
+expand — line items, contract HTML, payment schedule — rather than only how
+much of the whole to keep, and its `all`/`raw` values already cover the
+`full`/`raw` rungs. Bolting a `view` beside it would give the caller two
+overlapping dials with no rule for which wins.
+
+That exception is ONE tool, not the repo. `honeybook`'s `get_project` and
+`get_flow` carried the same `section` name over a plain `summary|raw` pair —
+which is `view` in different words, not a larger question — so they were
+migrated to `compact|raw` rather than grandfathered. A shared spelling is not
+by itself evidence that two parameters mean the same thing, in either
+direction: check what each one actually selects.
+
+The test for a legitimate exception is not "it is older" or "it works". It is
+that the parameter answers a question `view` cannot ask (`alltrails`) or asks a
+strictly larger one (`honeybook`). A boolean, a synonym, or an opt-in default
+is none of those and gets migrated.
+
 **Register only the rungs the tool honours.** `viewParam(['compact','full'])`
 builds a schema that rejects and does not mention `raw`. A value that silently
 aliases to another is a lie in the schema, and `raw` is meaningless where a
