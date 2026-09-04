@@ -97,6 +97,21 @@ jobs:
         # verdict and no way to arm.
         run: bash scripts/dedupe.test.sh
 
+      - name: npm-indexing wait unit tests
+        # The publish pipeline's only defence against npm's asynchronous
+        # indexing, which cost gogcli-mcp v2.28.0 a package on the MCP
+        # Registry. Its failure modes are all quiet — hanging forever, failing
+        # a release npm was merely slow to serve, or waiting on packages the
+        # registry never sees — so they are what these assert.
+        run: bash scripts/npm-index.test.sh
+
+      - name: MCP Registry publish unit tests
+        # Idempotency is what makes "re-run the failed workflow" a real
+        # recovery. Without it a partially-successful release can never go
+        # green again, and the artifact attachment behind it never runs. Also
+        # pins that duplicates must not mask a genuine failure.
+        run: bash scripts/mcp-registry-publish.test.sh
+
       - name: rollout.sh unit tests
         # --check is what the daily drift sweep runs, and its failure mode is
         # silent under-reporting rather than a crash — nothing downstream would
