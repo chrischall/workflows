@@ -97,6 +97,14 @@ jobs:
         # verdict and no way to arm.
         run: bash scripts/dedupe.test.sh
 
+      - name: skill-resolver unit tests
+        # Decides what becomes a .skill, reaches the release, and lands on
+        # ClawHub. Its failure mode is silent under-counting — the release goes
+        # green with skills simply absent, which is how gogcli-mcp published 1
+        # of its 9 for months. Also pins the precedence between layouts, since
+        # a changed slug orphans a live ClawHub listing.
+        run: bash scripts/skill-resolve.test.sh
+
       - name: npm-indexing wait unit tests
         # The publish pipeline's only defence against npm's asynchronous
         # indexing, which cost gogcli-mcp v2.28.0 a package on the MCP

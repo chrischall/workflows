@@ -108,7 +108,27 @@ runs:
           add "SKILL.md" "$MCP_PUBLISH_NAME"
         else
           shopt -s nullglob
+          # Two layouts, tried in order. A plugin-shaped repo keeps its skills
+          # under skills/<name>/; a workspace monorepo ships one per package,
+          # and that second layout used to resolve to NOTHING — the glob missed
+          # it, the count came out 0, and the release went green with every
+          # skill absent. gogcli-mcp published 1 of its 9 that way.
+          #
+          # Order matters more than the addition does: packages/*/ is only
+          # consulted when skills/*/ finds nothing, and neither is consulted
+          # when a root SKILL.md exists. A repo that resolves skills today
+          # resolves exactly the same ones after this, because changing a slug
+          # orphans its ClawHub listing and renames its release artifact.
+          #
+          # Both globs are single-level on purpose: packages/*/SKILL.md cannot
+          # reach packages/<pkg>/node_modules/<dep>/SKILL.md, so a dependency's
+          # own skill is never published under our slug.
+          PREFIX=skills/
           CANDIDATES=(skills/*/SKILL.md)
+          if [ "${#CANDIDATES[@]}" -eq 0 ]; then
+            PREFIX=packages/
+            CANDIDATES=(packages/*/SKILL.md)
+          fi
           if [ "${#CANDIDATES[@]}" -eq 1 ]; then
             # Single skill keeps the repo-level slug and artifact name, byte for
             # byte, so existing releases and ClawHub listings are undisturbed.
@@ -118,7 +138,7 @@ runs:
             # they would collide on one ClawHub slug and one artifact filename.
             for c in "${CANDIDATES[@]}"; do
               d="${c%/SKILL.md}"
-              add "$c" "${d#skills/}"
+              add "$c" "${d#"$PREFIX"}"
             done
           fi
         fi
