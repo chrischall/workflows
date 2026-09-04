@@ -387,6 +387,28 @@ projector counts as a failure.
 records themselves. A projection must never be able to change what a response
 claims about its own contents.
 
+**`full` is not necessarily a superset of `compact`.** The names imply it and
+the common case obeys it, but a compact rung that DERIVES a field breaks it:
+`alltrails_get_trail_photos` signs its image `url` inside the compact
+projection, so `full` — AllTrails' whole photo records — does not contain that
+field at all. Say so in the tool's `view` note where it happens. A caller who
+reads `full` as "compact plus more" and switches rungs to get one extra field
+can silently lose another.
+
+**A `view` note must describe what THAT tool's rung does.** Copy-pasted notes
+are worse than generic ones: four untappd-mcp tools carried a note promising
+check-in fields (`venue`, `rating_score`) on beer-list tools that never return
+them, telling the caller to expect something that was never going to be there.
+
+**`view` is OURS and must never reach the upstream API.** Two repos shipped a
+handler that forwarded its whole args object into the query string, sending
+`view=compact` to the live service on every call — `{ ...args }` in one,
+`{ query: args }` in another. If a handler takes `async (args)` and that object
+reaches a request or query builder, destructure `{ view, ...args }` first, and
+pin it with a test asserting no rung name appears on the wire. Grep for the
+spread forms specifically: a scan looking only for `args` as a bare call
+argument misses both.
+
 **No formatting whitespace on `compact` or `full`** — `minifiedResult` /
 `viewResult`, not `JSON.stringify(data, null, 2)`. Measured at 23% of a 135 KB
 `ofw` message page, about 8,000 tokens a call, read by nothing. `raw` stays
