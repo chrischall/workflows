@@ -46,6 +46,8 @@ jq '{defaults: .defaults,
              {repo: "FAKE/z", ci: "none", package_name: "fake-z"},
              {repo: "FAKE/g", dependabot: "gradle", ci: "none", release: "none",
               package_name: "fake-g"},
+             {repo: "FAKE/a", dependabot: "actions", ci: "none", release: "none",
+              package_name: "fake-a"},
              {repo: "FAKE/n", dependabot: "none", release_config: "none",
               release_notes: "none"}]}' \
   "$HERE/fleet.json" > "$ROOT/fleet.json"
@@ -521,15 +523,42 @@ assert_code  P 0
 # copied into every consumer repo, so a wrong command there is cheap to fix
 # now and costs a second full fleet rollout once it has shipped to 81 repos.
 # ci-gradle.yml is a starter template nothing renders, so it is exempt.
+# Resolving is necessary but not sufficient: a header reading `--only claude`
+# inside dependabot-npm.yml resolves perfectly and regenerates the WRONG file.
+# So each template DECLARES its destination ("# Renders to: <path>") and this
+# asserts the recommended name produces exactly that path — the two halves of
+# the header have to agree with rollout.sh, and with each other.
+#
+# Content cannot be the fingerprint here: the three dependabot variants render
+# to the same destination and share a byte-identical header, so a header match
+# would pass whichever one happened to render.
+#
+# ci-gradle.yml is a starter template nothing renders, so it is exempt.
 while IFS= read -r t; do
+  tname=$(basename "$t")
   name=$(grep -oE -- '--only [a-z0-9-]+' "$t" | head -1 | awk '{print $2}')
+  want=$(sed -n 's/^# Renders to: //p' "$t" | head -1)
   [ -n "$name" ] || continue
-  # FAKE/x gets the widest stub set; FAKE/g covers the gradle-only templates.
-  if bash "$ROLLOUT" FAKE/x --render "$TMP/only-q" --only "$name" >/dev/null 2>&1 ||
-     bash "$ROLLOUT" FAKE/g --render "$TMP/only-q" --only "$name" >/dev/null 2>&1; then
-    ok "Q: $(basename "$t") recommends --only $name, which resolves"
+  if [ -z "$want" ]; then
+    bad "Q: $tname" "recommends \`--only $name\` but declares no '# Renders to:' line, so nothing can check the two agree"
+    continue
+  fi
+  # Render with a repo whose fleet.json config selects THIS template.
+  case "$tname" in
+    dependabot-gradle.yml)  repo=FAKE/g ;;
+    dependabot-actions.yml) repo=FAKE/a ;;
+    *)                      repo=FAKE/x ;;
+  esac
+  rm -rf "$TMP/only-q"
+  if ! bash "$ROLLOUT" "$repo" --render "$TMP/only-q" --only "$name" >/dev/null 2>&1; then
+    bad "Q: $tname" "its header recommends \`--only $name\`, which exits 1 — and that comment renders into every consumer repo"
+    continue
+  fi
+  got=$(cd "$TMP/only-q" && find . -type f | sed 's|^\./||')
+  if [ "$got" = "$want" ]; then
+    ok "Q: $tname — --only $name renders $want"
   else
-    bad "Q: $(basename "$t")" "its header recommends \`--only $name\`, which exits 1 — and that comment renders into every consumer repo"
+    bad "Q: $tname" "declares it renders $want, but \`--only $name\` produced $(printf '%s' "$got" | tr '\n' ' ') — the header would send an operator at the wrong file"
   fi
 done < <(grep -lE -- '--only [a-z0-9-]+' "$HERE"/templates/*.yml "$HERE"/templates/*.json 2>/dev/null | grep -v ci-gradle)
 

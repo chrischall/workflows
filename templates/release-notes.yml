@@ -1,5 +1,5 @@
 # Thin config — the fleet-wide shape lives in chrischall/workflows.
-# Renders to .github/release.yml.
+# Renders to: .github/release.yml
 # Regenerate with: scripts/rollout.sh <owner/repo> --execute --only release
 # (--only names the DESTINATION basename, `.github/release.yml` -> `release`,
 #  not this template's filename.)

@@ -1,4 +1,5 @@
 # Thin config — the fleet-wide shape lives in chrischall/workflows.
+# Renders to: .github/dependabot.yml
 # Regenerate with: scripts/rollout.sh <owner/repo> --execute --only dependabot
 #
 # Majors are deliberately absent from the gradle group: a Gradle/AGP/Kotlin
