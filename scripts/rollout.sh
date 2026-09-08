@@ -47,11 +47,29 @@ while [ $# -gt 0 ]; do
     # that across three PRs makes a half-synced repo a normal intermediate
     # state rather than an anomaly.
     --only)   ONLY="${2:?--only needs one or more stub names, e.g. ci or dependabot,release}"; shift ;;
+              # normalised below, once the whole arg list is parsed
     --reason) REASON="${2:?--reason needs text}"; shift ;;
     *) echo "::error::unknown argument: $1"; exit 1 ;;
   esac
   shift
 done
+# Normalise --only into a sorted, deduplicated list of bare stub NAMES.
+#
+# `%.*` rather than `%.yml`: stub extensions vary now (release-please-config
+# .json), so stripping only .yml made `--only release-please-config.json` an
+# error while `--only ci.yml` worked.
+#
+# Dedupe matters because the list feeds the PR body and commit message:
+# `--only dependabot,dependabot` is one file, and listing it twice tells a
+# reviewer the sync touched something it did not.
+ONLY_NAMES=""
+if [ -n "$ONLY" ]; then
+  ONLY_NAMES=$(printf '%s' "$ONLY" | tr ',' '\n' \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/\.[^.]*$//' \
+    | grep -v '^$' | sort -u)
+  [ -n "$ONLY_NAMES" ] || { echo "::error::--only was given no usable stub names"; exit 1; }
+fi
+
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 FLEET="$HERE/fleet.json"
 # Overridable because the default is a FIXED name: re-running against a repo
@@ -63,12 +81,12 @@ FLEET="$HERE/fleet.json"
 if [ -n "${ROLLOUT_BRANCH:-}" ]; then
   BRANCH="$ROLLOUT_BRANCH"
 elif [ -n "$ONLY" ]; then
-  # One stub keeps its own branch name; a combined sync gets a stable shared
-  # one rather than a name that grows with the list.
-  case "$ONLY" in
-    *,*) BRANCH="ci/sync-repo-config" ;;
-    *)   BRANCH="ci/sync-${ONLY%.*}" ;;
-  esac
+  # Derived from the stubs actually requested. It was hardcoded to
+  # "repo-config" for any list, which is right for the three config stubs this
+  # was built for and a lie for every other combination: `--only ci,claude`
+  # opened a branch and title announcing a repo-config sync. A name built from
+  # the list is longer and always true.
+  BRANCH="ci/sync-$(printf '%s' "$ONLY_NAMES" | tr '\n' '-' | sed 's/-$//')"
 else
   BRANCH="ci/reusable-workflows"
 fi
@@ -330,9 +348,7 @@ if [ -n "$ONLY" ]; then
   # report EVERY unresolved one. Stopping at the first would hide the rest of
   # a bad list behind one name, and the operator would fix them one run at a
   # time.
-  IFS=',' read -ra wanted <<< "$ONLY"
-  for w in "${wanted[@]}"; do
-    w="${w# }"; w="${w% }"; w="${w%.*}"
+  while IFS= read -r w; do
     [ -n "$w" ] || continue
     hit=""
     while IFS= read -r f; do
@@ -340,7 +356,7 @@ if [ -n "$ONLY" ]; then
       [ "${base%.*}" = "$w" ] && hit="$f"
     done < <(cd "$STAGE" && find . -type f | sed 's|^\./||')
     if [ -n "$hit" ]; then KEEP="$KEEP$hit"$'\n'; else MISSING="$MISSING $w"; fi
-  done
+  done < <(printf '%s\n' "$ONLY_NAMES")
   if [ -n "$MISSING" ]; then
     echo "::error::--only:$MISSING not in this repo's stub set ($(cd "$STAGE" && find . -type f | sed 's|^\./||' | sort | tr '\n' ' '))"
     exit 1
@@ -349,7 +365,9 @@ if [ -n "$ONLY" ]; then
     printf '%s\n' "$KEEP" | grep -qxF -- "$f" || rm -f "$STAGE/$f"
   done < <(cd "$STAGE" && find . -type f | sed 's|^\./||')
   find "$STAGE" -type d -empty -delete
-  ONLY_PATH=$(printf '%s' "$KEEP" | grep -v '^$' | sort | tr '\n' ' ')
+  # sort -u: two spellings of one stub resolve to the same path, and a doubled
+  # entry in the PR body claims the sync touched a file twice.
+  ONLY_PATH=$(printf '%s' "$KEEP" | grep -v '^$' | sort -u | tr '\n' ' ')
   ONLY_PATH="${ONLY_PATH% }"
 fi
 
@@ -369,7 +387,7 @@ pr_body() {
     if [ "$n" = 1 ]; then
       echo "Single-stub sync: regenerates \`$ONLY_PATH\` from fleet.json and the current template. Other files are untouched."
     else
-      echo "Repo-config sync: regenerates these from fleet.json and the current templates. Other files are untouched."
+      echo "Multi-stub sync: regenerates these from fleet.json and the current templates. Other files are untouched."
       echo ""
       for f in $ONLY_PATH; do echo "- \`$f\`"; done
     fi
@@ -523,10 +541,15 @@ fi
 if [ -n "$ONLY" ]; then
   # The PR title is also the SQUASH SUBJECT on a single-commit PR, so the
   # commit below uses $TITLE verbatim rather than a second wording.
-  case "$ONLY" in
-    *,*) TITLE="ci: sync repo-config stubs from chrischall/workflows" ;;
-    *)   TITLE="ci: sync the ${ONLY%.*} stub from chrischall/workflows" ;;
-  esac
+  n=$(printf '%s\n' "$ONLY_NAMES" | grep -c .)
+  if [ "$n" = 1 ]; then
+    TITLE="ci: sync the $ONLY_NAMES stub from chrischall/workflows"
+  else
+    # "a, b and c" — built from the stubs actually requested. A hardcoded
+    # category was accurate only for the combination it was written for.
+    list=$(printf '%s' "$ONLY_NAMES" | paste -sd, - | sed 's/,/, /g; s/, \([^,]*\)$/ and \1/')
+    TITLE="ci: sync the $list stubs from chrischall/workflows"
+  fi
 else
   TITLE="ci: convert to chrischall/workflows reusable pipeline"
 fi

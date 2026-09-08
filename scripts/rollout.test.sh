@@ -779,13 +779,18 @@ fi
 # title, so the two must not diverge — a mismatch there once shipped a major
 # nobody chose. `ci:` is the correct type: a stub sync ships no user-facing
 # change and maps to the hidden changelog section.
-if grep -q 'TITLE="ci: sync repo-config stubs from chrischall/workflows"' "$ROLLOUT"; then
-  ok "Z: a combined sync has its own ci: title"
-else bad "Z: title" "combined --only does not set a distinct title"; fi
+# The title and branch must be DERIVED from the stubs requested. They were
+# hardcoded to "repo-config" for any list — right for the three config stubs
+# this was built for, and a lie for every other combination: `--only ci,claude`
+# opened a branch and title announcing a repo-config sync, which is the kind of
+# wrong label a reviewer trusts.
+if grep -q 'ci: sync repo-config stubs' "$ROLLOUT"; then
+  bad "Z: title" "the combined title is hardcoded to 'repo-config' regardless of which stubs were listed"
+else ok "Z: the combined title is not a hardcoded category"; fi
 
 if grep -q 'BRANCH="ci/sync-repo-config"' "$ROLLOUT"; then
-  ok "Z: a combined sync gets a stable branch name"
-else bad "Z: branch" "combined --only has no stable branch name (a name built from the list grows with it)"; fi
+  bad "Z: branch" "the combined branch is hardcoded to 'repo-config' regardless of which stubs were listed"
+else ok "Z: the combined branch is not a hardcoded category"; fi
 
 # The commit body must name what it regenerated. It once hardcoded
 # templates/$ONLY.yml, naming templates that do not exist.
@@ -801,6 +806,44 @@ for f in .github/dependabot.yml .github/release.yml release-please-config.json; 
 done
 if [ "$n" = 3 ]; then ok "Z: the PR body lists every file the sync regenerates"
 else bad "Z: pr body" "listed $n of 3 files:$(printf '\n')$(printf '%s' "$BODY" | sed 's/^/       /')"; fi
+
+
+# --- AA: the PR body names the stubs actually requested --------------------
+# --pr-body prints exactly what --execute would post, and needs no network, so
+# the naming is testable end-to-end. `--only ci,claude` must not describe
+# itself as a repo-config sync.
+BODY=$(bash "$ROLLOUT" FAKE/x --pr-body --only ci,claude 2>/dev/null)
+if printf '%s' "$BODY" | grep -qi 'repo-config'; then
+  bad "AA: mislabel" "a ci,claude sync describes itself as repo-config:$(printf '\n')$(printf '%s' "$BODY" | sed 's/^/       /')"
+else ok "AA: a non-config combination is not labelled repo-config"; fi
+for f in .github/workflows/ci.yml .github/workflows/claude.yml; do
+  if printf '%s' "$BODY" | grep -qF -- "$f"; then ok "AA: body lists $f"
+  else bad "AA: body" "does not list $f"; fi
+done
+
+# --- BB: a repeated name is one file, not two ------------------------------
+# ONLY_PATH feeds the PR body and the commit message. Listing a file twice
+# tells a reviewer the sync touched something it did not.
+BODY=$(bash "$ROLLOUT" FAKE/x --pr-body --only dependabot,dependabot 2>/dev/null)
+n=$(printf '%s' "$BODY" | grep -cF -- '.github/dependabot.yml')
+if [ "$n" = 1 ]; then ok "BB: a repeated --only name is listed once"
+else bad "BB: dedupe" "listed .github/dependabot.yml $n times"; fi
+
+# Two spellings of one stub are one request, so it must not read as a list.
+if printf '%s' "$BODY" | grep -qi 'Multi-stub sync'; then
+  bad "BB: singular" "dependabot,dependabot was treated as a multi-stub sync"
+else ok "BB: two spellings of one stub read as a single-stub sync"; fi
+
+# --- CC: extension-stripping still works for every stub's own extension ----
+# The rationale comment moved with the code; keep the behaviour pinned. Only
+# `.yml` used to be stripped, so `--only release-please-config.json` errored
+# while `--only ci.yml` worked.
+for spelling in ci ci.yml release-please-config release-please-config.json; do
+  rm -rf "$TMP/cc"
+  if bash "$ROLLOUT" FAKE/x --render "$TMP/cc" --only "$spelling" >/dev/null 2>&1; then
+    ok "CC: --only $spelling resolves"
+  else bad "CC: --only $spelling" "did not resolve"; fi
+done
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
