@@ -70,6 +70,15 @@ jobs:
         # it, and every failure mode is a contributor quietly not thanked.
         run: bash scripts/credit-action.test.sh
 
+      - name: release-message parse-gate unit tests
+        # The gate that stops a PR whose squash commit release-please cannot
+        # parse. Its whole value is in cases that are invisible by inspection:
+        # the text usually parses exactly as typed and only breaks once GitHub
+        # hard-wraps the body at 72 columns on merge, which is why the suite
+        # pins the wrapped pass specifically. Without it the check would pass
+        # ofw-mcp#283 — the PR that prompted it.
+        run: bash scripts/relmsg.test.sh
+
       - name: verdict + arm-policy unit tests
         # This suite shipped without ever being wired in, so the no-verdict
         # diagnosis it guards was unguarded in CI. It also pins the arming
