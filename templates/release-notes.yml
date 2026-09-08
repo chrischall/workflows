@@ -1,6 +1,8 @@
 # Thin config — the fleet-wide shape lives in chrischall/workflows.
 # Renders to .github/release.yml.
-# Regenerate with: scripts/rollout.sh <owner/repo> --execute --only release-notes
+# Regenerate with: scripts/rollout.sh <owner/repo> --execute --only release
+# (--only names the DESTINATION basename, `.github/release.yml` -> `release`,
+#  not this template's filename.)
 #
 # Configuration for GitHub's auto-generated release notes. Honored by
 # softprops/action-gh-release when generate_release_notes: true, and by the

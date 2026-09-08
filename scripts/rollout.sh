@@ -34,7 +34,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --execute|--check|--pr-body) EXECUTE="$1" ;;
     --render) EXECUTE="--render"; DEST="${2:?usage: rollout.sh <owner/repo> --render <dir>}"; shift ;;
-    --only)   ONLY="${2:?--only needs a stub name, e.g. claude, ci, release-please}"; ONLY="${ONLY%.yml}"; shift ;;
+    # `%.*` not `%.yml`: stub extensions vary now (release-please-config.json),
+    # so stripping only .yml made `--only release-please-config.json` an error
+    # while `--only ci.yml` worked.
+    --only)   ONLY="${2:?--only needs a stub name, e.g. claude, ci, dependabot, release}"; ONLY="${ONLY%.*}"; shift ;;
     --reason) REASON="${2:?--reason needs text}"; shift ;;
     *) echo "::error::unknown argument: $1"; exit 1 ;;
   esac
@@ -80,9 +83,11 @@ CONNECTOR=$(cfg connector)
 FLY_DIR=$(cfg fly_dir)
 # Repo-config templates. `dependabot` picks the ecosystem variant (npm/gradle/
 # actions); `release_config` and `release_notes` are on/`none` switches.
-# package_name is NOT derivable from the repo name — 20 repos publish as
-# @chrischall/<name> and three under an entirely different name — so it is
-# recorded per repo and a missing one is a hard error below.
+# package_name is NOT derivable from the repo name: 16 of the 60 templated
+# repos publish under a scoped @chrischall/<name>. (The repos whose published
+# name differs entirely — gogcli-mcp-monorepo, opencode-m365-copilot — are
+# bespoke monorepos that set release_config: none, so they never reach this
+# template.) Recorded per repo; a missing one is a hard error below.
 DEPENDABOT=$(cfg dependabot)
 RELEASE_CONFIG=$(cfg release_config)
 RELEASE_NOTES=$(cfg release_notes)
@@ -440,9 +445,12 @@ EXTRAS=""
 [ "$RELEASE_MODE" = "mcp" ] && EXTRAS="$EXTRAS/release"
 [ -n "$LOCKFIX" ] && EXTRAS="$EXTRAS/lockfix"
 if [ -n "$ONLY" ]; then
+  # $ONLY_PATH, not templates/$ONLY.yml: the stub name is the DESTINATION
+  # basename, so the old form named templates that do not exist
+  # (templates/dependabot.yml, templates/release.yml).
   git commit -m "$TITLE
 
-Regenerated from fleet.json + templates/$ONLY.yml (single-stub sync).
+Regenerated $ONLY_PATH from fleet.json and the current template (single-stub sync).
 Pipeline source: https://github.com/chrischall/workflows"
 else
   git commit -m "$TITLE

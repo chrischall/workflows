@@ -285,11 +285,20 @@ Twenty-one repos set `release_config: none` for the same reason — their
 `extra-files` stamp versions into monorepo paths the shared template does not
 have.
 
-`package_name` is **not** derivable from the repo name: 20 repos publish as
-`@chrischall/<name>` and three under an entirely different name
-(`gogcli-mcp-monorepo`, `opencode-m365-copilot`). An unset one used to render
-`"package-name": ""`, which release-please accepts and then tags as an empty
-component, so rollout.sh now fails loudly instead.
+`package_name` is **not** derivable from the repo name: **16 of the 60**
+templated repos publish under a scoped `@chrischall/<name>`. (The repos whose
+published name differs entirely — `gogcli-mcp-monorepo`,
+`opencode-m365-copilot` — are bespoke monorepos that set
+`release_config: none`, so they never reach this template at all.) An unset one
+used to render `"package-name": ""`, which release-please accepts and then tags
+as an empty component, so rollout.sh now fails loudly instead.
+
+`--only` names the **destination basename**, not the template filename:
+`.github/release.yml` is `--only release`, even though it renders from
+`templates/release-notes.yml`. `rollout.test.sh` asserts that every
+`--only <name>` a template recommends in its own header actually resolves — a
+wrong instruction there is cheap now and expensive once it has rendered into
+81 repos.
 
 **Registering a repo does not back-fill the templates it missed.** A
 `fleet.json` entry enrols a repo in every rollout from that day FORWARD; every

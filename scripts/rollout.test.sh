@@ -509,5 +509,49 @@ assert_has   P "OK       FAKE/x"
 assert_lacks P "MISSING"
 assert_code  P 0
 
+
+# --- Q: every --only a template recommends must actually resolve ------------
+# The gap that let a broken instruction through review. --only names the
+# DESTINATION basename, so templates/release-notes.yml -> .github/release.yml
+# is `--only release`; the template's own header said `--only release-notes`,
+# which exits 1. Nothing caught it because block M only exercised the two
+# stubs whose template name happens to match their destination.
+#
+# Asserting the whole class rather than the one case: a template header is
+# copied into every consumer repo, so a wrong command there is cheap to fix
+# now and costs a second full fleet rollout once it has shipped to 81 repos.
+# ci-gradle.yml is a starter template nothing renders, so it is exempt.
+while IFS= read -r t; do
+  name=$(grep -oE -- '--only [a-z0-9-]+' "$t" | head -1 | awk '{print $2}')
+  [ -n "$name" ] || continue
+  # FAKE/x gets the widest stub set; FAKE/g covers the gradle-only templates.
+  if bash "$ROLLOUT" FAKE/x --render "$TMP/only-q" --only "$name" >/dev/null 2>&1 ||
+     bash "$ROLLOUT" FAKE/g --render "$TMP/only-q" --only "$name" >/dev/null 2>&1; then
+    ok "Q: $(basename "$t") recommends --only $name, which resolves"
+  else
+    bad "Q: $(basename "$t")" "its header recommends \`--only $name\`, which exits 1 — and that comment renders into every consumer repo"
+  fi
+done < <(grep -lE -- '--only [a-z0-9-]+' "$HERE"/templates/*.yml "$HERE"/templates/*.json 2>/dev/null | grep -v ci-gradle)
+
+# --- R: --only accepts a stub named WITH its extension ----------------------
+# `--only ci.yml` worked because .yml was stripped; `--only
+# release-please-config.json` did not, because only `.yml` was. Stub extensions
+# vary now, so the strip has to be extension-agnostic.
+for spelling in release-please-config release-please-config.json; do
+  if bash "$ROLLOUT" FAKE/x --render "$TMP/only-r" --only "$spelling" >/dev/null 2>&1 &&
+     [ -f "$TMP/only-r/release-please-config.json" ]; then
+    ok "R: --only $spelling resolves"
+  else bad "R: --only $spelling" "did not resolve to release-please-config.json"; fi
+  rm -rf "$TMP/only-r"
+done
+
+# --- S: the single-stub commit body names the file it actually regenerated --
+# It hardcoded templates/$ONLY.yml, which for the new stubs names templates
+# that do not exist (templates/dependabot.yml, templates/release.yml). The
+# commit message is the only record of what a sync touched.
+if grep -q 'Regenerated \$ONLY_PATH from fleet.json' "$ROLLOUT"; then
+  ok "S: single-stub commit body uses the resolved stub path"
+else bad "S: commit body" "still names templates/\$ONLY.yml, which does not exist for stubs whose template and destination differ"; fi
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
