@@ -8,6 +8,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # __DEPENDABOT_IGNORE__
     groups:
       # Dependabot does NOT hand a dependency to the first group that matches
       # it. `PatternSpecificityCalculator` scores every matching group and the

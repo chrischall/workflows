@@ -39,6 +39,11 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # FAKE/g is a gradle repo: its dependabot config must watch gradle, never npm.
 # FAKE/n opts out of both repo-config templates, which is the only way to prove
 # an opt-out renders NOTHING rather than an empty file.
+# FAKE/p is a pre-1.0 repo: it sets the two optional release-please keys the
+# template does not carry, and leaves both include-*-in-tag UNSET, so "empty
+# means absent" is exercised in both directions against FAKE/x's defaults.
+# (Keep prose OUT of the jq program: jq eats `#` to end-of-line, and an
+# apostrophe there closes the surrounding shell quote.)
 jq '{defaults: .defaults,
      repos: [{repo: "FAKE/x", connector: "true", package_name: "fake-x",
               version_files: "src/version.ts"},
@@ -48,6 +53,14 @@ jq '{defaults: .defaults,
               package_name: "fake-g"},
              {repo: "FAKE/a", dependabot: "actions", ci: "none", release: "none",
               package_name: "fake-a"},
+             {repo: "FAKE/i", dependabot_ignore: "agents-peer", ci: "none",
+              release: "none", package_name: "fake-i"},
+             {repo: "FAKE/bad", dependabot_ignore: "no-such-fragment",
+              ci: "none", release: "none", package_name: "fake-bad"},
+             {repo: "FAKE/p", ci: "none", release: "none",
+              package_name: "fake-p", bump_minor_pre_major: "true",
+              initial_version: "0.1.0", include_v_in_tag: "",
+              include_component_in_tag: ""},
              {repo: "FAKE/n", dependabot: "none", release_config: "none",
               release_notes: "none"}]}' \
   "$HERE/fleet.json" > "$ROOT/fleet.json"
@@ -581,6 +594,144 @@ done
 if grep -q 'Regenerated \$ONLY_PATH from fleet.json' "$ROLLOUT"; then
   ok "S: single-stub commit body uses the resolved stub path"
 else bad "S: commit body" "still names templates/\$ONLY.yml, which does not exist for stubs whose template and destination differ"; fi
+
+
+# --- T: a repo-specific `ignore:` block survives templating -----------------
+# gogcli-mcp and curtaincall were opted out of the dependabot template
+# entirely, purely to protect one hand-written `ignore:` block each — which
+# also cost them the vitest pin and every future fix. The block is a fragment
+# now, so the config is templated AND the hold is kept. If this regresses, the
+# hold disappears silently: dependabot simply starts proposing bumps that
+# cannot install (gogcli's agents ceiling) or that break the build (curtaincall's
+# javax-namespace JAXB pin).
+DIR="$TMP/ign-on"
+bash "$ROLLOUT" FAKE/i --render "$DIR" --only dependabot >/dev/null 2>&1
+if ruby -ryaml -e '
+    d = YAML.safe_load(File.read(ARGV[0]))
+    ign = (d["updates"] || []).flat_map { |u| u["ignore"] || [] }
+    abort "no ignore entries" if ign.empty?
+    abort "wrong dep" unless ign.any? { |i| i["dependency-name"] == "agents" }
+  ' "$DIR/.github/dependabot.yml" 2>/dev/null; then
+  ok "T: dependabot_ignore splices the fragment into the rendered config"
+else
+  bad "T: fragment" "the ignore block did not survive rendering — the hold it protects is silently gone"
+fi
+
+# The comment marker must never survive into a consumer repo, spliced or not.
+for case in ign-on paths; do
+  if grep -q '__DEPENDABOT_IGNORE__' "$TMP/$case/.github/dependabot.yml" 2>/dev/null; then
+    bad "T: marker ($case)" "the __DEPENDABOT_IGNORE__ marker rendered literally into the output"
+  else
+    ok "T: marker removed ($case)"
+  fi
+done
+
+# And a repo with no fragment gets no `ignore:` key at all — an empty one is a
+# config error GitHub reports on the repo.
+if ruby -ryaml -e '
+    d = YAML.safe_load(File.read(ARGV[0]))
+    abort "ignore present" if (d["updates"] || []).any? { |u| u.key?("ignore") }
+  ' "$TMP/paths/.github/dependabot.yml" 2>/dev/null; then
+  ok "T: no fragment renders no ignore: key"
+else
+  bad "T: empty ignore" "a repo without dependabot_ignore rendered an ignore: key anyway"
+fi
+
+# --- U: a fragment name with no file is a hard error, not a silent drop -----
+# Failing loudly matters more than usual here: the quiet failure is a rendered
+# config that looks right and has simply lost the hold.
+OUT="$TMP/badfrag.txt"
+if bash "$ROLLOUT" FAKE/bad --render "$TMP/badfrag" --only dependabot >"$OUT" 2>&1; then
+  bad "U: bad fragment" "an unknown dependabot_ignore name rendered successfully instead of failing"
+else
+  if grep -q "has no fragment" "$OUT"; then
+    ok "U: an unknown dependabot_ignore name fails with a named error"
+  else
+    bad "U: bad fragment" "failed, but without naming the missing fragment: $(head -1 "$OUT")"
+  fi
+fi
+
+# --- V: every shipped fragment is valid in the position it is spliced into --
+# A fragment is indented YAML with no document of its own, so nothing else
+# parses it until it is already inside 80 repos.
+for f in "$HERE"/templates/fragments/dependabot-ignore-*.yml; do
+  fname=$(basename "$f")
+  if { echo "updates:"; echo "  - package-ecosystem: npm"; cat "$f"; } |
+     ruby -ryaml -e 'd=YAML.safe_load(STDIN.read); abort "no entries" if (d["updates"][0]["ignore"]||[]).empty?' 2>/dev/null; then
+    ok "V: $fname parses as an ignore block at its splice indentation"
+  else
+    bad "V: $fname" "does not parse as an ignore: block when spliced into an update entry"
+  fi
+done
+
+
+# --- W: optional release-please keys — empty means ABSENT, not defaulted ----
+# The regression this whole PR exists to prevent, and it had no test.
+#
+# 21 repos set `bump-minor-pre-major: true` and every one of them is still
+# pre-1.0. A template that does not carry the key drops it, and the next
+# breaking change in those repos bumps 0.x straight to 1.0.0 instead of the
+# minor — a major nobody chose, 21 times over. The same shape applies to
+# include-*-in-tag: three repos leave them unset and two of those tag as
+# <name>-v<version>, and release-please finds the previous release BY TAG.
+#
+# So the assertion is not "the value round-trips" but "an unset key is ABSENT
+# from the rendered JSON". A defaulted key and a missing key are the same
+# character count in a diff and completely different releases.
+DIR="$TMP/rp-keys"
+bash "$ROLLOUT" FAKE/p --render "$DIR" --only release-please-config >/dev/null 2>&1
+if ruby -rjson -e '
+    p = JSON.parse(File.read(ARGV[0]))["packages"]["."]
+    abort "bump-minor-pre-major missing"    unless p["bump-minor-pre-major"] == true
+    abort "bump-minor-pre-major not a bool" unless p["bump-minor-pre-major"].is_a?(TrueClass)
+    abort "initial-version wrong"           unless p["initial-version"] == "0.1.0"
+    abort "include-v-in-tag PRESENT"         if p.key?("include-v-in-tag")
+    abort "include-component-in-tag PRESENT" if p.key?("include-component-in-tag")
+  ' "$DIR/release-please-config.json" 2>"$TMP/w.err"; then
+  ok "W: set keys render (as JSON booleans/strings) and unset keys are absent"
+else
+  bad "W: optional keys" "$(cat "$TMP/w.err")"
+fi
+
+# The mirror image: FAKE/x takes the fleet defaults, so it must NOT gain the
+# two keys it never had, and MUST carry the two it does.
+DIR="$TMP/rp-default"
+bash "$ROLLOUT" FAKE/x --render "$DIR" --only release-please-config >/dev/null 2>&1
+if ruby -rjson -e '
+    p = JSON.parse(File.read(ARGV[0]))["packages"]["."]
+    abort "bump-minor-pre-major invented" if p.key?("bump-minor-pre-major")
+    abort "initial-version invented"      if p.key?("initial-version")
+    abort "include-v-in-tag wrong"         unless p["include-v-in-tag"] == true
+    abort "include-component-in-tag wrong" unless p["include-component-in-tag"] == false
+  ' "$DIR/release-please-config.json" 2>"$TMP/w2.err"; then
+  ok "W: a repo on the defaults neither gains nor loses optional keys"
+else
+  bad "W: defaults" "$(cat "$TMP/w2.err")"
+fi
+
+# `false` must survive as false rather than being treated as "unset" — the
+# jq overlay tests the STRING for emptiness, and a truthiness test there would
+# silently delete every explicitly-false key.
+if ruby -rjson -e '
+    p = JSON.parse(File.read(ARGV[0]))["packages"]["."]
+    abort "explicit false was dropped" unless p["include-component-in-tag"] == false
+  ' "$TMP/rp-default/release-please-config.json" 2>/dev/null; then
+  ok "W: an explicit false is kept, not treated as unset"
+else
+  bad "W: false" "include-component-in-tag: false was dropped — a truthiness test where an emptiness test belongs"
+fi
+
+# version_files still land alongside the shared object entries, and the
+# optional-key overlay must not have clobbered them.
+if ruby -rjson -e '
+    e = JSON.parse(File.read(ARGV[0]))["packages"]["."]["extra-files"]
+    abort "version file missing" unless e.include?("src/version.ts")
+    abort "shared entries lost"  unless e.count { |x| x.is_a?(Hash) } == 6
+  ' "$TMP/rp-default/release-please-config.json" 2>/dev/null; then
+  ok "W: version_files append without disturbing the shared extra-files"
+else
+  bad "W: extra-files" "the optional-key overlay disturbed extra-files"
+fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

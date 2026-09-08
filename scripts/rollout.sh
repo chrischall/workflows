@@ -89,11 +89,31 @@ FLY_DIR=$(cfg fly_dir)
 # bespoke monorepos that set release_config: none, so they never reach this
 # template.) Recorded per repo; a missing one is a hard error below.
 DEPENDABOT=$(cfg dependabot)
+# Name of a templates/fragments/dependabot-ignore-<name>.yml block to splice in.
+DEPENDABOT_IGNORE=$(cfg dependabot_ignore)
 RELEASE_CONFIG=$(cfg release_config)
 RELEASE_NOTES=$(cfg release_notes)
 PACKAGE_NAME=$(cfg package_name)
 RELEASE_TYPE=$(cfg release_type)
 VERSION_FILES=$(cfg version_files)
+# Optional release-please keys. Each is recorded per repo and an EMPTY value
+# means the key is absent from the rendered config, not defaulted — the
+# distinction is load-bearing:
+#
+#   bump-minor-pre-major  21 repos set it and every one of them is still
+#                         pre-1.0. Dropping it makes the next breaking change
+#                         bump 0.x straight to 1.0.0 instead of the minor —
+#                         the encore-ios #39 failure, fleet-wide.
+#   initial-version       only affects a repo's first release, but dropping a
+#                         recorded value is still an unasked-for change.
+#   include-*-in-tag      three repos leave these unset, and two of them tag as
+#                         <name>-v<version>. Writing an explicit value where
+#                         there was none could change the tag scheme, and
+#                         release-please finds the previous release BY TAG.
+BUMP_MINOR_PRE_MAJOR=$(cfg bump_minor_pre_major)
+INITIAL_VERSION=$(cfg initial_version)
+INCLUDE_V_IN_TAG=$(cfg include_v_in_tag)
+INCLUDE_COMPONENT_IN_TAG=$(cfg include_component_in_tag)
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -227,7 +247,28 @@ fi
 # revert a hand-written reason (issue #76).
 rm -rf "$STAGE/.frag"
 
-[ "$DEPENDABOT" != "none" ] && render "dependabot-$DEPENDABOT.yml" ".github/dependabot.yml"
+if [ "$DEPENDABOT" != "none" ]; then
+  render "dependabot-$DEPENDABOT.yml" ".github/dependabot.yml"
+  # A repo-specific `ignore:` block is the ONLY thing that made gogcli-mcp and
+  # curtaincall "bespoke" — both are otherwise the stock config. Opting them out
+  # entirely to protect one block meant they also missed the vitest pin and every
+  # future template fix, so the block is a fragment instead: templated config,
+  # repo-specific hold, and the hold's reasoning kept under review here rather
+  # than only in the consumer.
+  #
+  # The marker is a COMMENT line. A bare __X__ at column 0 renders to a
+  # top-level scalar and breaks CI's template parse — the same shape as the
+  # placeholder that took out two repos' release workflows.
+  DB="$STAGE/.github/dependabot.yml"
+  if [ -n "$DEPENDABOT_IGNORE" ]; then
+    FRAG="$HERE/templates/fragments/dependabot-ignore-$DEPENDABOT_IGNORE.yml"
+    [ -f "$FRAG" ] || { echo "::error::$REPO: dependabot_ignore '$DEPENDABOT_IGNORE' has no fragment at $FRAG"; exit 1; }
+    sed -e "/^    # __DEPENDABOT_IGNORE__$/r $FRAG" \
+        -e '/^    # __DEPENDABOT_IGNORE__$/d' "$DB" > "$DB.tmp" && mv "$DB.tmp" "$DB"
+  else
+    sed -e '/^    # __DEPENDABOT_IGNORE__$/d' "$DB" > "$DB.tmp" && mv "$DB.tmp" "$DB"
+  fi
+fi
 [ "$RELEASE_NOTES" != "none" ] && render release-notes.yml ".github/release.yml"
 if [ "$RELEASE_CONFIG" != "none" ]; then
   # An unset package_name renders `"package-name": ""`, which release-please
@@ -236,18 +277,29 @@ if [ "$RELEASE_CONFIG" != "none" ]; then
   # line.
   [ -n "$PACKAGE_NAME" ] || { echo "::error::$REPO: release_config is on but package_name is unset in fleet.json"; exit 1; }
   render release-please-config.json "release-please-config.json"
-  # extra-files is a LIST, so it cannot be a sed placeholder. The template
-  # carries the shared object entries (the six manifest/server/plugin paths
-  # every MCP repo stamps); jq appends this repo's plain version files. Done
-  # with jq rather than string surgery so a bad value fails here instead of
-  # shipping a release-please-config.json that silently does not parse — which
+  # extra-files is a LIST and the optional keys must be able to be ABSENT, so
+  # neither can be a sed placeholder. The template carries the shared object
+  # entries (the six manifest/server/plugin paths every MCP repo stamps); jq
+  # appends this repo's version files and applies the optional keys, deleting
+  # each one whose fleet.json value is empty. Done with jq rather than string
+  # surgery so a bad value fails here instead of shipping a
+  # release-please-config.json that silently does not parse — which
   # release-please reports by skipping the repo, not by failing.
-  if [ -n "$VERSION_FILES" ]; then
-    RPC="$STAGE/release-please-config.json"
-    jq --arg vf "$VERSION_FILES" \
-      '.packages["."]["extra-files"] += ($vf | split(",") | map(select(length > 0)))' \
-      "$RPC" > "$RPC.tmp" && mv "$RPC.tmp" "$RPC"
-  fi
+  RPC="$STAGE/release-please-config.json"
+  jq --arg vf "$VERSION_FILES" \
+     --arg bmpm "$BUMP_MINOR_PRE_MAJOR" \
+     --arg iv "$INITIAL_VERSION" \
+     --arg ivt "$INCLUDE_V_IN_TAG" \
+     --arg ict "$INCLUDE_COMPONENT_IN_TAG" '
+    def setbool($k; $v): if $v == "" then del(.[$k]) else .[$k] = ($v == "true") end;
+    def setstr($k; $v):  if $v == "" then del(.[$k]) else .[$k] = $v end;
+    .packages["."] |= (
+        .["extra-files"] += ($vf | split(",") | map(select(length > 0)))
+      | setbool("bump-minor-pre-major"; $bmpm)
+      | setstr("initial-version"; $iv)
+      | setbool("include-v-in-tag"; $ivt)
+      | setbool("include-component-in-tag"; $ict)
+    )' "$RPC" > "$RPC.tmp" && mv "$RPC.tmp" "$RPC"
 fi
 
 if [ -n "$ONLY" ]; then

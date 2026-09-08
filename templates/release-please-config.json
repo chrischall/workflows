@@ -4,8 +4,6 @@
     ".": {
       "package-name": "__PACKAGE_NAME__",
       "release-type": "__RELEASE_TYPE__",
-      "include-v-in-tag": true,
-      "include-component-in-tag": false,
       "changelog-sections": [
         { "type": "feat", "section": "Features" },
         { "type": "fix", "section": "Bug Fixes" },

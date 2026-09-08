@@ -1,0 +1,21 @@
+    ignore:
+      # The root buildscript pins these two at 2.3.1 ON PURPOSE, because they are
+      # the last releases in the OLD `javax.xml.bind.*` namespace — which is the
+      # whole point of having them. AGP's `sdklib` parses the Android SDK with the
+      # javax-namespace JAXB API and builds a real `JAXBContext`, while the
+      # Hibernate plugin drags `jakarta.xml.bind-api:4.x` onto the same classpath;
+      # the 2.3.1 javax artifacts coexist with jakarta's rather than colliding.
+      # See the comment at the top of `build.gradle.kts`.
+      #
+      # Every major after 2.x renamed the packages to `jakarta.*`, so a major bump
+      # removes the javax classes sdklib needs and the Android lane dies with
+      # `Cannot invoke "javax.xml.bind.JAXBContext.createUnmarshaller()" because
+      # "context" is null` (PR #228, jaxb-impl 2.3.1 → 4.0.9). There is no newer
+      # javax-namespace release to move to, so majors here are permanently
+      # un-upgradable — not merely deferred. 2.3.x patches stay allowed.
+      - dependency-name: com.sun.xml.bind:jaxb-impl
+        update-types:
+          - version-update:semver-major
+      - dependency-name: javax.xml.bind:jaxb-api
+        update-types:
+          - version-update:semver-major

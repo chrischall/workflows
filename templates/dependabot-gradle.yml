@@ -4,10 +4,14 @@
 #
 # Majors are deliberately absent from the gradle group: a Gradle/AGP/Kotlin
 # major is never a drive-by merge, and dependabot cannot run gradle, so a
-# grouped major lands with a stale kotlin-js-store/yarn.lock. Repos that need a
-# permanent major hold (a pin that exists BECAUSE of the old major) carry their
-# own `ignore:` block and opt out with `dependabot: none` in fleet.json rather
-# than losing it to a regeneration.
+# grouped major lands with a stale kotlin-js-store/yarn.lock.
+#
+# A repo that needs a permanent major hold (a pin that exists BECAUSE of the
+# old major) keeps it in a fragment — templates/fragments/dependabot-ignore-
+# <name>.yml, named by `dependabot_ignore` in fleet.json — NOT by opting out
+# with `dependabot: none`. Opting out to protect one block costs the repo every
+# other fix the template carries; curtaincall sat outside the template for its
+# javax-namespace JAXB hold and missed the vitest pin because of it.
 version: 2
 updates:
   - package-ecosystem: gradle
@@ -15,6 +19,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # __DEPENDABOT_IGNORE__
     groups:
       gradle-dependencies:
         update-types:
