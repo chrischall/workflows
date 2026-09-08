@@ -39,6 +39,11 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # FAKE/g is a gradle repo: its dependabot config must watch gradle, never npm.
 # FAKE/n opts out of both repo-config templates, which is the only way to prove
 # an opt-out renders NOTHING rather than an empty file.
+# FAKE/p is a pre-1.0 repo: it sets the two optional release-please keys the
+# template does not carry, and leaves both include-*-in-tag UNSET, so "empty
+# means absent" is exercised in both directions against FAKE/x's defaults.
+# (Keep prose OUT of the jq program: jq eats `#` to end-of-line, and an
+# apostrophe there closes the surrounding shell quote.)
 jq '{defaults: .defaults,
      repos: [{repo: "FAKE/x", connector: "true", package_name: "fake-x",
               version_files: "src/version.ts"},
@@ -52,6 +57,10 @@ jq '{defaults: .defaults,
               release: "none", package_name: "fake-i"},
              {repo: "FAKE/bad", dependabot_ignore: "no-such-fragment",
               ci: "none", release: "none", package_name: "fake-bad"},
+             {repo: "FAKE/p", ci: "none", release: "none",
+              package_name: "fake-p", bump_minor_pre_major: "true",
+              initial_version: "0.1.0", include_v_in_tag: "",
+              include_component_in_tag: ""},
              {repo: "FAKE/n", dependabot: "none", release_config: "none",
               release_notes: "none"}]}' \
   "$HERE/fleet.json" > "$ROOT/fleet.json"
@@ -654,6 +663,75 @@ for f in "$HERE"/templates/fragments/dependabot-ignore-*.yml; do
     bad "V: $fname" "does not parse as an ignore: block when spliced into an update entry"
   fi
 done
+
+
+# --- W: optional release-please keys — empty means ABSENT, not defaulted ----
+# The regression this whole PR exists to prevent, and it had no test.
+#
+# 21 repos set `bump-minor-pre-major: true` and every one of them is still
+# pre-1.0. A template that does not carry the key drops it, and the next
+# breaking change in those repos bumps 0.x straight to 1.0.0 instead of the
+# minor — a major nobody chose, 21 times over. The same shape applies to
+# include-*-in-tag: three repos leave them unset and two of those tag as
+# <name>-v<version>, and release-please finds the previous release BY TAG.
+#
+# So the assertion is not "the value round-trips" but "an unset key is ABSENT
+# from the rendered JSON". A defaulted key and a missing key are the same
+# character count in a diff and completely different releases.
+DIR="$TMP/rp-keys"
+bash "$ROLLOUT" FAKE/p --render "$DIR" --only release-please-config >/dev/null 2>&1
+if ruby -rjson -e '
+    p = JSON.parse(File.read(ARGV[0]))["packages"]["."]
+    abort "bump-minor-pre-major missing"    unless p["bump-minor-pre-major"] == true
+    abort "bump-minor-pre-major not a bool" unless p["bump-minor-pre-major"].is_a?(TrueClass)
+    abort "initial-version wrong"           unless p["initial-version"] == "0.1.0"
+    abort "include-v-in-tag PRESENT"         if p.key?("include-v-in-tag")
+    abort "include-component-in-tag PRESENT" if p.key?("include-component-in-tag")
+  ' "$DIR/release-please-config.json" 2>"$TMP/w.err"; then
+  ok "W: set keys render (as JSON booleans/strings) and unset keys are absent"
+else
+  bad "W: optional keys" "$(cat "$TMP/w.err")"
+fi
+
+# The mirror image: FAKE/x takes the fleet defaults, so it must NOT gain the
+# two keys it never had, and MUST carry the two it does.
+DIR="$TMP/rp-default"
+bash "$ROLLOUT" FAKE/x --render "$DIR" --only release-please-config >/dev/null 2>&1
+if ruby -rjson -e '
+    p = JSON.parse(File.read(ARGV[0]))["packages"]["."]
+    abort "bump-minor-pre-major invented" if p.key?("bump-minor-pre-major")
+    abort "initial-version invented"      if p.key?("initial-version")
+    abort "include-v-in-tag wrong"         unless p["include-v-in-tag"] == true
+    abort "include-component-in-tag wrong" unless p["include-component-in-tag"] == false
+  ' "$DIR/release-please-config.json" 2>"$TMP/w2.err"; then
+  ok "W: a repo on the defaults neither gains nor loses optional keys"
+else
+  bad "W: defaults" "$(cat "$TMP/w2.err")"
+fi
+
+# `false` must survive as false rather than being treated as "unset" — the
+# jq overlay tests the STRING for emptiness, and a truthiness test there would
+# silently delete every explicitly-false key.
+if ruby -rjson -e '
+    p = JSON.parse(File.read(ARGV[0]))["packages"]["."]
+    abort "explicit false was dropped" unless p["include-component-in-tag"] == false
+  ' "$TMP/rp-default/release-please-config.json" 2>/dev/null; then
+  ok "W: an explicit false is kept, not treated as unset"
+else
+  bad "W: false" "include-component-in-tag: false was dropped — a truthiness test where an emptiness test belongs"
+fi
+
+# version_files still land alongside the shared object entries, and the
+# optional-key overlay must not have clobbered them.
+if ruby -rjson -e '
+    e = JSON.parse(File.read(ARGV[0]))["packages"]["."]["extra-files"]
+    abort "version file missing" unless e.include?("src/version.ts")
+    abort "shared entries lost"  unless e.count { |x| x.is_a?(Hash) } == 6
+  ' "$TMP/rp-default/release-please-config.json" 2>/dev/null; then
+  ok "W: version_files append without disturbing the shared extra-files"
+else
+  bad "W: extra-files" "the optional-key overlay disturbed extra-files"
+fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
