@@ -452,6 +452,233 @@ jobs:
       # violation fails the review deterministically (the model never runs),
       # and on a clean table the verdict step discards any contradicting
       # finding the model emits anyway.
+      # Deterministic pre-check, and a sibling of the ancestry check below: a
+      # fact the pipeline can establish without asking a model, about a failure
+      # a model would have no way to see.
+      #
+      # release-please parses the merged commit with `@conventional-commits
+      # /parser`, a strict PEG grammar, and it parses the BODY as well as the
+      # subject. One unclosed "(" before a newline anywhere in the message makes
+      # the parse THROW — and release-please catches the throw and skips the
+      # commit. Silently. `git log` shows the commit in range, the workflow is
+      # green, the publish job is correctly skipped because no release was
+      # created, and the only place the reason appears is `--debug`:
+      #
+      #   commit could not be parsed: 0a6722d fix(manifest): …
+      #   error message: Error: unexpected token '\n' at 30:72, valid tokens [)]
+      #
+      # ofw-mcp#284 sat unreleased for two days on `grep "registerTool('ofw_"`
+      # in a PR body, and the assumption that the next release would sweep it
+      # up was wrong: the failure is a property of the commit, so it recurs on
+      # every run forever. A scan of every clone since 2026-06-01 then found 21
+      # such commits across 13 repos, ten of them feat/fix — a `feat(connector)`
+      # in gemini-mcp and a `fix(tools)` in eventbrite-mcp among them, all
+      # absent from their changelogs with nothing anywhere warning.
+      #
+      # The check has to run BEFORE the model review (a broken body should not
+      # cost review tokens) and its finding routes through the same `fail`
+      # verdict path the ancestry check uses, so a PR that would ship an
+      # unreadable commit is de-armed rather than merged. The body stays
+      # editable at that point; `/auto-review` re-runs after the fix, with no
+      # push needed.
+      - name: Check the squash message release-please will read
+        id: relmsg
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ needs.context.outputs.number }}
+        run: |
+          # Every read is failure-guarded and every failure is OPEN. This step
+          # must never be the reason a fleet repo's review job dies (pipefail
+          # is on): a network blip here would otherwise block a clean PR, which
+          # is a worse failure than the one being prevented.
+          # Fetched raw and narrowed with a local `jq` rather than `gh --jq`:
+          # the two squash settings decide the whole check, and reading them
+          # through a flag on the fetch would leave that decision untestable
+          # without a `gh` that reimplements jq.
+          repo_json=$(gh api "repos/$REPO" 2>/dev/null || true)
+          pr_json=$(gh api "repos/$REPO/pulls/$PR" 2>/dev/null || true)
+          commits_json=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate 2>/dev/null || true)
+          sq_title=$(printf '%s' "$repo_json" | jq -r '.squash_merge_commit_title // ""' 2>/dev/null || true)
+          sq_body=$(printf '%s' "$repo_json" | jq -r '.squash_merge_commit_message // ""' 2>/dev/null || true)
+          if [ -z "$sq_title" ] || [ -z "$pr_json" ] || [ -z "$commits_json" ]; then
+            echo "::warning::could not read the PR or its squash settings; skipping the release-message check"
+            echo "unparseable=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Reconstruct what GitHub will actually commit. This is NOT one thing
+          # across the fleet — 42 repos are on COMMIT_OR_PR_TITLE/
+          # COMMIT_MESSAGES and 38 on PR_TITLE/PR_BODY — so checking "the PR
+          # title and body" would read a message half the fleet never ships,
+          # missing real breakage in one direction and failing clean PRs in the
+          # other.
+          #
+          #   title:  PR_TITLE            -> the PR title
+          #           COMMIT_OR_PR_TITLE  -> the sole commit's subject when the
+          #                                  PR has exactly one, else the title
+          #   body:   PR_BODY             -> the PR body
+          #           COMMIT_MESSAGES     -> the commit messages, joined
+          #           BLANK               -> nothing
+          #
+          # The COMMIT_MESSAGES join is not byte-exact with GitHub's ("* " item
+          # prefixes for multi-commit PRs). It does not need to be: a stray
+          # parenthesis survives any concatenation, and the reconstruction only
+          # has to be faithful about WHICH TEXT ships, not how it is bulleted.
+          MESSAGE=$(jq -rn \
+            --argjson pr "$pr_json" --argjson commits "$commits_json" \
+            --arg sqt "$sq_title" --arg sqb "$sq_body" '
+              ($commits | map(.commit.message)) as $msgs
+              | (if $sqt == "PR_TITLE" then $pr.title
+                 elif ($msgs | length) == 1 then ($msgs[0] | split("\n")[0])
+                 else $pr.title end) as $title
+              | (if   $sqb == "PR_BODY"        then ($pr.body // "")
+                 elif $sqb == "COMMIT_MESSAGES" then ($msgs | join("\n\n"))
+                 else "" end) as $body
+              | $title + "\n\n" + $body' 2>/dev/null || true)
+          [ -n "$MESSAGE" ] || { echo "unparseable=" >> "$GITHUB_OUTPUT"; exit 0; }
+
+          # No pipe: `head -1` closing the pipe early SIGPIPEs the writer, and
+          # under `pipefail` that aborts the step.
+          SUBJECT=${MESSAGE%%$'\n'*}
+
+          # Only a commit release-please would have SHIPPED can block the PR.
+          # Dropping a `chore`/`ci`/`test`/`build` costs nothing — those are
+          # hidden from the changelog anyway — and failing over one would be
+          # pure noise on exactly the PRs whose bodies are machine-generated
+          # release notes full of parentheses. `docs`/`refactor`/`perf` DO
+          # block: they cut no version but they do earn a changelog line, and a
+          # silently missing one is the thing this check exists to stop.
+          # A subject with no conventional type at all is invisible to
+          # release-please for a different reason entirely, so it is not
+          # reported here as though the parenthesis were the problem.
+          #
+          # Written as nested `if`s rather than `grep -q … && VAR=1`: a failing
+          # `grep` ends an `&&` list non-zero, and this step runs under the
+          # aborting shell GitHub gives a `run:` block, so the idiomatic-looking
+          # one-liner would kill the job on every PR that is NOT breaking.
+          BLOCKING=0
+          if printf '%s' "$SUBJECT" | grep -qE '^[a-z]+(\([^)]*\))?!?:'; then
+            if printf '%s' "$SUBJECT" | grep -qE '^[a-z]+(\([^)]*\))?!:'; then
+              BLOCKING=1                       # breaking, whatever the type
+            else
+              case "$SUBJECT" in
+                feat*|fix*|perf*|revert*|refactor*|docs*) BLOCKING=1 ;;
+              esac
+            fi
+          fi
+
+          # The parser release-please itself depends on, pinned to the version
+          # release-please 17.6.0 resolves. Anything else here would be a
+          # different grammar guessing at this one.
+          PARSER_DIR="${RUNNER_TEMP:-/tmp}/relmsg-parser"
+          if [ ! -d "$PARSER_DIR/node_modules/@conventional-commits/parser" ]; then
+            npm install --silent --prefix "$PARSER_DIR" --no-audit --no-fund \
+              --no-package-lock @conventional-commits/parser@0.4.1 >/dev/null 2>&1 || true
+          fi
+          if [ ! -d "$PARSER_DIR/node_modules/@conventional-commits/parser" ]; then
+            echo "::warning::could not install @conventional-commits/parser; skipping the release-message check"
+            echo "unparseable=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Check the text BOTH as written and HARD-WRAPPED at 72 columns,
+          # because GitHub wraps the body when it builds the squash commit —
+          # and the wrap is usually what breaks the parse rather than the prose.
+          #
+          # This is the trap, and it is worth stating plainly because the
+          # obvious version of this check does not work. ofw-mcp#283's PR body
+          # PARSES: its `grep "registerTool('ofw_"` sits mid-way through one
+          # long unwrapped line, so the grammar never meets a newline while it
+          # is waiting for `)`. GitHub then wrapped that line at 72 columns on
+          # merge, the `(` landed at the end of line 30, and the commit on
+          # `main` throws `unexpected token '\n' at 30:72` — the exact error
+          # release-please reported. Verified by reproducing it: the PR body
+          # parses, `fold -s -w 72` of the same text throws at the same line.
+          #
+          # So a gate that reads the PR body verbatim would have passed the
+          # very PR that prompted this and shipped the silent failure. Do not
+          # "simplify" the wrapped pass away.
+          parse_fail() {
+            printf '%s' "$1" > "$RUNNER_TEMP/relmsg.txt"
+            NODE_PATH="$PARSER_DIR/node_modules" node -e '
+              const { parser } = require("@conventional-commits/parser");
+              const msg = require("fs").readFileSync(process.argv[1], "utf8");
+              // Flattened, not truncated: the grammar reports an unexpected
+              // NEWLINE, so its message literally contains one — and taking
+              // the first line drops the "at <line>:<col>" that follows it,
+              // which is the only part a human can act on.
+              try { parser(msg); } catch (e) {
+                process.stdout.write(String(e.message).replace(/\r?\n/g, "\\n"));
+              }
+            ' "$RUNNER_TEMP/relmsg.txt" 2>/dev/null || true
+          }
+
+          FORM="as written"
+          CHECKED="$MESSAGE"
+          ERR=$(parse_fail "$MESSAGE")
+          if [ -z "$ERR" ]; then
+            WRAPPED=$(printf '%s' "$MESSAGE" | fold -s -w 72 || true)
+            if [ -n "$WRAPPED" ]; then
+              ERR=$(parse_fail "$WRAPPED")
+              FORM="once GitHub hard-wraps it at 72 columns on merge"
+              CHECKED="$WRAPPED"
+            fi
+          fi
+
+          if [ -z "$ERR" ]; then
+            echo "unparseable=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Quote the offending line. A maintainer who is told only "it does not
+          # parse" has to bisect a sixty-line body by hand, which is how this
+          # gets waved through as a flaky check.
+          LINE_NO=$(printf '%s' "$ERR" | { grep -oE 'at [0-9]+:[0-9]+' || true; } \
+            | sed -n '1s/^at //p' | cut -d: -f1)
+          OFFENDING=""
+          if [ -n "$LINE_NO" ]; then
+            OFFENDING=$(printf '%s' "$CHECKED" | sed -n "${LINE_NO}p")
+          fi
+
+          {
+            echo "### release-please cannot read the commit this PR will create"
+            echo
+            echo "\`$REPO\` squashes with **title=\`$sq_title\`, message=\`$sq_body\`** —"
+            echo "that setting, not a convention, decides which text becomes the commit."
+            echo "It does not parse **$FORM**."
+            echo
+            echo '```'
+            echo "parse error: $ERR"
+            if [ -n "$OFFENDING" ]; then echo "line $LINE_NO:   $OFFENDING"; fi
+            echo '```'
+            echo
+            echo "An unclosed \`(\` before a newline is the usual cause. The parser"
+            echo "release-please uses is a strict PEG grammar and reads the whole message,"
+            echo "body included — and release-please **catches the throw and skips the"
+            echo "commit**. No version bump, no changelog entry, and a green workflow."
+            echo
+            echo "Note that a line which is fine as you typed it can still break here:"
+            echo "GitHub hard-wraps the body at 72 columns when it squashes, which can put"
+            echo "a \`(\` at the end of a line whose \`)\` is now on the next one."
+            echo
+            echo "Fix the text above (balance the parenthesis, or put the snippet on one"
+            echo "line), then re-run this review by commenting \`/auto-review\`."
+            # `|| true`: the diagnosis is a nicety, the FINDING below is the
+            # job. An unwritable summary must not abort the step and swallow
+            # the very thing it was reporting.
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+          if [ "$BLOCKING" -eq 1 ]; then
+            echo "::error::release-please cannot parse this PR's commit message: $ERR"
+            echo "unparseable=$ERR" >> "$GITHUB_OUTPUT"
+          else
+            # Hidden type: nothing ships, so nothing is lost. Say so anyway —
+            # the same body usually gets reused, and the next one may not be a
+            # chore.
+            echo "::warning::this PR's commit message does not parse ($ERR), but its type is hidden from the changelog so nothing is lost"
+            echo "unparseable=" >> "$GITHUB_OUTPUT"
+          fi
       - name: Precompute changelog commit ancestry (ground truth)
         id: ancestry
         env:
@@ -566,7 +793,7 @@ jobs:
         # A deterministic ancestry violation IS the verdict — running a model
         # review on top would only produce prose beside a fact the pipeline
         # already established (the verdict step emits the fail directly).
-        if: ${{ steps.ancestry.outputs.violations == '' }}
+        if: ${{ steps.ancestry.outputs.violations == '' && steps.relmsg.outputs.unparseable == '' }}
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
@@ -672,6 +899,7 @@ jobs:
           REPO: ${{ github.repository }}
           OUT: ${{ steps.review.outputs.structured_output }}
           VIOLATIONS: ${{ steps.ancestry.outputs.violations }}
+          UNPARSEABLE: ${{ steps.relmsg.outputs.unparseable }}
           EVENT: ${{ github.event_name }}
           # Names the workflow that was initially triggered — the CALLER's
           # stub, not this reusable file — which is the copy the action
@@ -679,7 +907,23 @@ jobs:
           WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           verdict=""; summary=""; DISCARD_NOTE=""
-          if [ -n "$VIOLATIONS" ]; then
+          if [ -n "$UNPARSEABLE" ]; then
+            # Deterministic path, same shape as the ancestry branch below: the
+            # squash-message step proved release-please cannot parse the commit
+            # this PR will create, so the model review was skipped.
+            #
+            # This is a `fail` rather than a nit because the consequence is
+            # SILENT. A merged PR whose commit does not parse produces a green
+            # workflow, a correctly-skipped publish job, and no release — the
+            # only trace is `--debug` output nobody reads. ofw-mcp#284 lost two
+            # days to it, and a fleet scan found 21 such commits across 13
+            # repos, ten of them feat/fix, every one absent from its changelog.
+            #
+            # It is recoverable without a push: fix the PR body and comment
+            # `/auto-review`. The run summary carries the offending line.
+            OUT=$(jq -nc --arg f "release-please cannot parse the commit this PR will create (${UNPARSEABLE}) — it silently SKIPS commits it cannot parse, so this would merge green and ship no release and no changelog entry; established by the pipeline's deterministic parse check against @conventional-commits/parser (the run summary quotes the offending line), and the model review was skipped" \
+              '{verdict: "fail", summary: $f, important_findings: [$f], nits: []}')
+          elif [ -n "$VIOLATIONS" ]; then
             # Deterministic path: the ancestry step proved the CHANGELOG
             # documents commits this PR does not contain, and the model review
             # was skipped. Synthesize the structured output the rest of the

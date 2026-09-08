@@ -24,6 +24,53 @@ silently and the releases looked done. **After any release, confirm with
 from the Actions UI: the npm step is idempotent, MCP Registry publish is
 idempotent in practice, and `gh release upload --clobber` overwrites.
 
+**A stray `(` in a PR body can silently cost you the release.**
+release-please parses the merged commit with `@conventional-commits/parser`, a
+strict PEG grammar, and it parses the **body**, not just the subject. One
+unclosed `(` before a newline makes the parse throw — and release-please
+**catches the throw and skips the commit**. There is no warning anywhere: the
+merge is green, `git log` shows the commit in range, and the publish job is
+correctly skipped because no release was ever created. The only trace is
+`--debug` output:
+
+```
+commit could not be parsed: 0a6722d fix(manifest): …
+error message: Error: unexpected token '\n' at 30:72, valid tokens [)]
+```
+
+`ofw-mcp`#284 lost two days to this, and the assumption that the next release
+would sweep the commit up was wrong — the failure is a property of the commit,
+so it recurs on every run forever. A scan of every clone since 2026-06-01 found
+**21 such commits across 13 repos**, ten of them `feat`/`fix`, every one
+missing from its changelog with nothing anywhere reporting it.
+
+**The trap is that the text usually parses exactly as you typed it.** GitHub
+hard-wraps the body at 72 columns when it builds the squash commit. A `grep
+"registerTool('ofw_"` sitting mid-way through one long line is fine — the
+grammar never meets a newline while it waits for `)` — and breaks only once the
+wrap puts that `(` at the end of a line. Reproduce it with
+`fold -s -w 72`; `ofw-mcp`#283's body parses as written and throws at line 30
+folded, which is the line release-please named.
+
+The auto-review pipeline now blocks this before the merge (the
+`Check the squash message release-please will read` step, pinned by
+`scripts/relmsg.test.sh`): it rebuilds the message from the repo's own squash
+settings, parses it as written *and* wrapped, and fails the review — de-arming
+the PR — when a commit release-please would have shipped will not parse. Hidden
+types (`chore`/`ci`/`test`/`build`) only warn, since dropping one costs nothing.
+Fix the body and comment `/auto-review`; no push is needed.
+
+**Which text becomes the commit is a per-repo SETTING, not a convention.** The
+fleet is split: 42 repos squash with `COMMIT_OR_PR_TITLE`/`COMMIT_MESSAGES` and
+38 with `PR_TITLE`/`PR_BODY`. So "the PR title is the release decision" is only
+true in the second group — in the first, a single-commit PR takes its COMMIT
+subject, which is how `encore-ios`#39 shipped a major bump from a `refactor!:`
+commit under a `fix(android):` PR title. Check with:
+
+```
+gh api repos/<owner>/<repo> --jq '{t: .squash_merge_commit_title, m: .squash_merge_commit_message}'
+```
+
 **A repo may ship several skills; they all publish.** `mcp-publish`
 auto-discovers three layouts, in strict order: a root `SKILL.md`, else every
 `skills/*/SKILL.md`, else every `packages/*/SKILL.md` (a workspace monorepo's
