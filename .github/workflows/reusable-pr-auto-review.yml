@@ -441,17 +441,6 @@ jobs:
           # fails on release PRs whose CHANGELOG references older commits.
           fetch-depth: 0
 
-      # Reviewer models issued three false `fail` verdicts in one day claiming
-      # a CHANGELOG-referenced commit was "not an ancestor of the release"
-      # (mcp-host#127, mcp-host#134, untappd-mcp#110) — escalating from
-      # asserting without checking, to fabricating a command transcript after
-      # the prompt required quoted evidence, to contradicting a correct
-      # ground-truth table injected into the prompt. Instructions cannot make
-      # a model's evidence authentic, so the pipeline owns this claim family
-      # outright: this step computes the facts with real git, a genuine
-      # violation fails the review deterministically (the model never runs),
-      # and on a clean table the verdict step discards any contradicting
-      # finding the model emits anyway.
       # Deterministic pre-check, and a sibling of the ancestry check below: a
       # fact the pipeline can establish without asking a model, about a failure
       # a model would have no way to see.
@@ -489,9 +478,15 @@ jobs:
           PR: ${{ needs.context.outputs.number }}
         run: |
           # Every read is failure-guarded and every failure is OPEN. This step
-          # must never be the reason a fleet repo's review job dies (pipefail
-          # is on): a network blip here would otherwise block a clean PR, which
-          # is a worse failure than the one being prevented.
+          # must never be the reason a fleet repo's review job dies: a network
+          # blip here would otherwise block a clean PR, which is a worse
+          # failure than the one being prevented.
+          #
+          # GitHub runs a `run:` block as `bash -e {0}` — `-e`, and NOT
+          # `pipefail`, since this file sets no `shell:` or `defaults:`. So the
+          # guards here are written against `-e`: every command whose failure
+          # is acceptable ends in `|| true`, and no bare `cmd && VAR=…` is used
+          # (a failing `&&` list ends non-zero and would abort the step).
           # Fetched raw and narrowed with a local `jq` rather than `gh --jq`:
           # the two squash settings decide the whole check, and reading them
           # through a flag on the fetch would leave that decision untestable
@@ -508,8 +503,9 @@ jobs:
           fi
 
           # Reconstruct what GitHub will actually commit. This is NOT one thing
-          # across the fleet — 42 repos are on COMMIT_OR_PR_TITLE/
-          # COMMIT_MESSAGES and 38 on PR_TITLE/PR_BODY — so checking "the PR
+          # across the fleet — of the 81 repos in fleet.json, 42 are on
+          # COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, 38 on PR_TITLE/PR_BODY and one
+          # on the mixed PR_TITLE/COMMIT_MESSAGES — so checking "the PR
           # title and body" would read a message half the fleet never ships,
           # missing real breakage in one direction and failing clean PRs in the
           # other.
@@ -536,10 +532,19 @@ jobs:
                  elif $sqb == "COMMIT_MESSAGES" then ($msgs | join("\n\n"))
                  else "" end) as $body
               | $title + "\n\n" + $body' 2>/dev/null || true)
-          [ -n "$MESSAGE" ] || { echo "unparseable=" >> "$GITHUB_OUTPUT"; exit 0; }
+          if [ -z "$MESSAGE" ]; then
+            # The third fail-open, and it used to be the silent one — a
+            # reconstruction that produced nothing looked identical to a clean
+            # PR in the log.
+            echo "::warning::could not reconstruct the squash message; skipping the release-message check"
+            echo "unparseable=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-          # No pipe: `head -1` closing the pipe early SIGPIPEs the writer, and
-          # under `pipefail` that aborts the step.
+          # A parameter expansion, not `| head -1`: no subprocess, and nothing
+          # to reason about. (`pipefail` is off here, so a pipe would in fact
+          # have been safe — but the expansion is simpler than the argument
+          # for why.)
           SUBJECT=${MESSAGE%%$'\n'*}
 
           # Only a commit release-please would have SHIPPED can block the PR.
@@ -571,10 +576,20 @@ jobs:
           # The parser release-please itself depends on, pinned to the version
           # release-please 17.6.0 resolves. Anything else here would be a
           # different grammar guessing at this one.
-          PARSER_DIR="${RUNNER_TEMP:-/tmp}/relmsg-parser"
+          # One guarded value, used by everything below — `$RUNNER_TEMP` is set
+          # on a real runner and absent when the step is exercised elsewhere,
+          # and half-guarding it puts the parser and the file it parses in
+          # different places.
+          TMPD="${RUNNER_TEMP:-/tmp}"
+          PARSER_DIR="$TMPD/relmsg-parser"
           if [ ! -d "$PARSER_DIR/node_modules/@conventional-commits/parser" ]; then
+            # `--ignore-scripts`: this job holds pull-requests/issues/id-token
+            # write, and without it every lifecycle script in the package and
+            # its transitive tree runs with those scopes. The parser is pure
+            # JS and needs none of them.
             npm install --silent --prefix "$PARSER_DIR" --no-audit --no-fund \
-              --no-package-lock @conventional-commits/parser@0.4.1 >/dev/null 2>&1 || true
+              --ignore-scripts --no-package-lock \
+              @conventional-commits/parser@0.4.1 >/dev/null 2>&1 || true
           fi
           if [ ! -d "$PARSER_DIR/node_modules/@conventional-commits/parser" ]; then
             echo "::warning::could not install @conventional-commits/parser; skipping the release-message check"
@@ -600,7 +615,7 @@ jobs:
           # very PR that prompted this and shipped the silent failure. Do not
           # "simplify" the wrapped pass away.
           parse_fail() {
-            printf '%s' "$1" > "$RUNNER_TEMP/relmsg.txt"
+            printf '%s' "$1" > "$TMPD/relmsg.txt"
             NODE_PATH="$PARSER_DIR/node_modules" node -e '
               const { parser } = require("@conventional-commits/parser");
               const msg = require("fs").readFileSync(process.argv[1], "utf8");
@@ -611,7 +626,7 @@ jobs:
               try { parser(msg); } catch (e) {
                 process.stdout.write(String(e.message).replace(/\r?\n/g, "\\n"));
               }
-            ' "$RUNNER_TEMP/relmsg.txt" 2>/dev/null || true
+            ' "$TMPD/relmsg.txt" 2>/dev/null || true
           }
 
           FORM="as written"
@@ -679,6 +694,17 @@ jobs:
             echo "::warning::this PR's commit message does not parse ($ERR), but its type is hidden from the changelog so nothing is lost"
             echo "unparseable=" >> "$GITHUB_OUTPUT"
           fi
+      # Reviewer models issued three false `fail` verdicts in one day claiming
+      # a CHANGELOG-referenced commit was "not an ancestor of the release"
+      # (mcp-host#127, mcp-host#134, untappd-mcp#110) — escalating from
+      # asserting without checking, to fabricating a command transcript after
+      # the prompt required quoted evidence, to contradicting a correct
+      # ground-truth table injected into the prompt. Instructions cannot make
+      # a model's evidence authentic, so the pipeline owns this claim family
+      # outright: this step computes the facts with real git, a genuine
+      # violation fails the review deterministically (the model never runs),
+      # and on a clean table the verdict step discards any contradicting
+      # finding the model emits anyway.
       - name: Precompute changelog commit ancestry (ground truth)
         id: ancestry
         env:

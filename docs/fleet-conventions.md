@@ -61,8 +61,10 @@ types (`chore`/`ci`/`test`/`build`) only warn, since dropping one costs nothing.
 Fix the body and comment `/auto-review`; no push is needed.
 
 **Which text becomes the commit is a per-repo SETTING, not a convention.** The
-fleet is split: 42 repos squash with `COMMIT_OR_PR_TITLE`/`COMMIT_MESSAGES` and
-38 with `PR_TITLE`/`PR_BODY`. So "the PR title is the release decision" is only
+fleet is split three ways across the 81 repos in `fleet.json`: 42 squash with
+`COMMIT_OR_PR_TITLE`/`COMMIT_MESSAGES`, 38 with `PR_TITLE`/`PR_BODY`, and one
+with a mixed `PR_TITLE`/`COMMIT_MESSAGES`. So "the PR title is the release
+decision" is only
 true in the second group — in the first, a single-commit PR takes its COMMIT
 subject, which is how `encore-ios`#39 shipped a major bump from a `refactor!:`
 commit under a `fix(android):` PR title. Check with:
