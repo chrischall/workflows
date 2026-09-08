@@ -738,7 +738,11 @@ jobs:
           # {40,} then length==40: a 40-char slice of a longer hex string
           # (e.g. a sha256 in the text) must not masquerade as a commit.
           # Every segment is failure-guarded: this step must never be the
-          # reason a fleet repo's review job dies (pipefail is on).
+          # reason a fleet repo's review job dies. (Each segment carries its
+          # own `|| true` rather than relying on the shell: GitHub runs a
+          # `run:` block here as `bash -e {0}` — no `pipefail`, since this file
+          # sets no `shell:` or `defaults:` — so a pipeline's status is its
+          # LAST command's, and the guards have to be per-segment either way.)
           SHAS=$({ git diff "$BASE_SHA"..HEAD -- CHANGELOG.md 2>/dev/null || true; } \
             | { grep -E '^\+' || true; } | { grep -oE '[0-9a-f]{40,}' || true; } \
             | awk 'length($0) == 40' | sort -u)
@@ -1108,9 +1112,10 @@ jobs:
       # findings have a durable home while the PR is iterated.
       - name: Open or update follow-up issue
         id: followup
-        # Best-effort: GitHub runs `run:` with `bash -eo pipefail`, so an
-        # unguarded gh API failure (rate-limit, transient 5xx) would abort the
-        # step and mark the JOB failed — while the arm step still runs on
+        # Best-effort: GitHub runs a `run:` block here as `bash -e {0}` (`-e`,
+        # and NOT `pipefail` — that comes with an explicit `shell: bash`, which
+        # this file does not set), so an unguarded gh API failure (rate-limit,
+        # transient 5xx) would abort the step and mark the JOB failed — while the arm step still runs on
         # !cancelled() and adds ready-to-merge, a contradictory red-job +
         # armed-PR state. continue-on-error keeps issue tracking auxiliary to
         # the load-bearing verdict/arm contract.

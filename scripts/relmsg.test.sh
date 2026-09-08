@@ -280,6 +280,28 @@ else
 fi
 
 echo
+echo "— the shell contract every guard in this file is written against —"
+# The step's guards (`|| true` on each acceptable failure, no bare
+# `cmd && VAR=…`) are correct for `-e`, and the reason has to stay accurate:
+# GitHub runs a `run:` block as `bash -e {0}` UNLESS the file asks for
+# `shell: bash`, which yields `bash -eo pipefail`. This file asks for neither,
+# so no comment in it may claim pipefail is on — four did, describing the very
+# constructs a reader would otherwise re-derive. A wrong rationale is worse
+# than none: it is believed.
+if grep -nE '^\s*(defaults:|shell:)' "$WF" >/dev/null 2>&1; then
+  ok "SKIP: this file now sets shell:/defaults: — revisit the claims below"
+else
+  ok "the workflow sets no shell:/defaults:, so its blocks run as bash -e {0}"
+  claims="$(grep -n 'pipefail' "$WF" | grep -v 'set -euo pipefail' \
+    | grep -viE "no .?pipefail|not .?.pipefail|pipefail. is off|sets no|NOT \`pipefail\`" || true)"
+  if [ -z "$claims" ]; then
+    ok "no comment claims pipefail is on"
+  else
+    bad "no comment claims pipefail is on" "$claims"
+  fi
+fi
+
+echo
 # Same harness invariant verdict.test.sh pins: the extracted step must run
 # under the aborting shell GitHub gives a `run:` block, or every "it keeps
 # going" assertion above tests nothing.
