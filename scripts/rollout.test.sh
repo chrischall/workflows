@@ -733,5 +733,74 @@ else
   bad "W: extra-files" "the optional-key overlay disturbed extra-files"
 fi
 
+
+# --- X: --only takes a LIST, so one repo needs one PR ----------------------
+# Three repo-config stubs landed together. Syncing them one at a time is three
+# PRs per repo — 213 across the fleet instead of 75, each with its own review,
+# CI run and auto-merge. It is also worse for correctness: a repo either
+# matches fleet.json or it does not, and splitting that over three PRs makes a
+# half-synced repo a normal intermediate state instead of an anomaly.
+DIR="$TMP/multi"
+bash "$ROLLOUT" FAKE/x --render "$DIR" --only dependabot,release,release-please-config >/dev/null 2>&1
+got=$(cd "$DIR" 2>/dev/null && find . -type f | sed 's|^\./||' | sort | tr '\n' ' ')
+want=".github/dependabot.yml .github/release.yml release-please-config.json "
+if [ "$got" = "$want" ]; then ok "X: --only takes a comma-separated list"
+else bad "X: list" "wanted '$want' got '$got'"; fi
+
+# The workflow stubs must be untouched by a repo-config sync — that is the
+# whole reason for using --only instead of a full regeneration (#76).
+if [ ! -d "$DIR/.github/workflows" ]; then ok "X: a repo-config sync stages no workflow stubs"
+else bad "X: workflows" "a repo-config sync staged $(cd "$DIR/.github/workflows" && ls | tr '\n' ' ')"; fi
+
+# A single name must keep behaving exactly as before.
+DIR="$TMP/multi-one"
+bash "$ROLLOUT" FAKE/x --render "$DIR" --only dependabot >/dev/null 2>&1
+got=$(cd "$DIR" 2>/dev/null && find . -type f | sed 's|^\./||' | tr '\n' ' ')
+if [ "$got" = ".github/dependabot.yml " ]; then ok "X: a single --only name is unchanged"
+else bad "X: single" "wanted '.github/dependabot.yml ' got '$got'"; fi
+
+# --- Y: every unresolved name is reported, not just the first --------------
+# Stopping at the first would hide the rest of a bad list behind one name, and
+# the operator fixes them one run at a time — across 75 repos that is 75 runs
+# per typo.
+OUT="$TMP/multi-bad.txt"
+if bash "$ROLLOUT" FAKE/x --render "$TMP/multi-bad" --only dependabot,nope,alsonope >"$OUT" 2>&1; then
+  bad "Y: bad list" "a list containing unknown names rendered successfully"
+else
+  if grep -q "nope" "$OUT" && grep -q "alsonope" "$OUT"; then
+    ok "Y: every unresolved name in the list is reported"
+  else
+    bad "Y: bad list" "did not name both unresolved stubs: $(grep -o '::error::.*' "$OUT" | head -1)"
+  fi
+fi
+
+# --- Z: a combined sync's title, branch and commit subject agree -----------
+# On a single-commit PR GitHub squashes using the COMMIT subject, not the PR
+# title, so the two must not diverge — a mismatch there once shipped a major
+# nobody chose. `ci:` is the correct type: a stub sync ships no user-facing
+# change and maps to the hidden changelog section.
+if grep -q 'TITLE="ci: sync repo-config stubs from chrischall/workflows"' "$ROLLOUT"; then
+  ok "Z: a combined sync has its own ci: title"
+else bad "Z: title" "combined --only does not set a distinct title"; fi
+
+if grep -q 'BRANCH="ci/sync-repo-config"' "$ROLLOUT"; then
+  ok "Z: a combined sync gets a stable branch name"
+else bad "Z: branch" "combined --only has no stable branch name (a name built from the list grows with it)"; fi
+
+# The commit body must name what it regenerated. It once hardcoded
+# templates/$ONLY.yml, naming templates that do not exist.
+if grep -q 'Regenerated \$ONLY_PATH from fleet.json' "$ROLLOUT"; then
+  ok "Z: the commit body names the resolved stub paths"
+else bad "Z: commit body" "the commit body does not use the resolved paths"; fi
+
+# And the PR body must list all of them, or a reviewer of a 3-file PR sees one.
+BODY=$(bash "$ROLLOUT" FAKE/x --pr-body --only dependabot,release,release-please-config 2>/dev/null)
+n=0
+for f in .github/dependabot.yml .github/release.yml release-please-config.json; do
+  printf '%s' "$BODY" | grep -qF -- "$f" && n=$((n+1))
+done
+if [ "$n" = 3 ]; then ok "Z: the PR body lists every file the sync regenerates"
+else bad "Z: pr body" "listed $n of 3 files:$(printf '\n')$(printf '%s' "$BODY" | sed 's/^/       /')"; fi
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

@@ -241,8 +241,11 @@ existing (untappd-mcp#105, #83).
 
 Rollout tooling: `fleet.json` (per-repo parameters), `scripts/rollout.sh`
 (stub-conversion PRs; `--check` reports drift without opening one, `--only
-<stub>` narrows any mode to a single stub, named by basename minus
-extension so it reaches files outside `.github/workflows/` too — prefer it for
+<stub>[,<stub>...]` narrows any mode to the named stubs, each named by
+destination basename minus extension so it reaches files outside
+`.github/workflows/` too — pass a list to sync several in ONE PR per repo
+(the three repo-config stubs one at a time is three PRs per repo, 213 across
+the fleet instead of 75) — prefer it for
 single-template rollouts, since full regeneration reverts hand-edits, #76;
 `--reason <text>` adds a "Why this change" section to the PR body — use it
 whenever the motive lives here rather than in the consumer, or the reviewer

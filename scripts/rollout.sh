@@ -2,7 +2,7 @@
 # Convert one fleet repo to chrischall/workflows stubs via PR.
 #
 # Usage: scripts/rollout.sh <owner/repo> [--execute|--check|--render <dir>|--pr-body]
-#                          [--only <stub>] [--reason <text>]
+#                          [--only <stub>[,<stub>...]] [--reason <text>]
 # Dry-run by default: prints generated stubs and planned actions.
 #
 # --reason <text> adds a "Why this change" section to the PR body. Reach for it
@@ -17,8 +17,10 @@
 # clone — it exists so the body is testable, since its failure mode is a PR that
 # merely under-explains itself, which nothing downstream flags.
 #
-# --only <stub> narrows every mode to a single stub file (e.g. `--only claude`,
-# `--only ci`): --check diffs just that file, --execute syncs just that file.
+# --only <stub>[,<stub>...] narrows every mode to the named stubs (e.g. `--only
+# claude`, `--only dependabot,release,release-please-config`): --check diffs
+# just those files, --execute syncs just those files. Names are the
+# DESTINATION basename minus extension, not the template filename.
 # Issue #76's sweep only needed claude.yml; regenerating everything is what
 # turned a one-file rollout into a fleet-wide revert of hand-edits. Reach for
 # --only whenever the change you are rolling out touches one template.
@@ -27,7 +29,7 @@
 # Run scripts/update-ruleset.sh after the PR is open.
 set -euo pipefail
 
-REPO="${1:?usage: rollout.sh <owner/repo> [--execute|--check|--render <dir>|--pr-body] [--only <stub>] [--reason <text>]}"
+REPO="${1:?usage: rollout.sh <owner/repo> [--execute|--check|--render <dir>|--pr-body] [--only <stub>[,<stub>...]] [--reason <text>]}"
 shift
 EXECUTE=""; ONLY=""; ONLY_PATH=""; DEST=""; REASON=""
 while [ $# -gt 0 ]; do
@@ -37,7 +39,14 @@ while [ $# -gt 0 ]; do
     # `%.*` not `%.yml`: stub extensions vary now (release-please-config.json),
     # so stripping only .yml made `--only release-please-config.json` an error
     # while `--only ci.yml` worked.
-    --only)   ONLY="${2:?--only needs a stub name, e.g. claude, ci, dependabot, release}"; ONLY="${ONLY%.*}"; shift ;;
+    # Accepts a COMMA-SEPARATED list. Three repo-config stubs landed at once
+    # (dependabot, release, release-please-config) and syncing them one at a
+    # time is three PRs per repo — 213 across the fleet instead of 75, each
+    # with its own review, CI run and auto-merge. Combining them is not just
+    # cheaper: a repo either matches fleet.json or it does not, and splitting
+    # that across three PRs makes a half-synced repo a normal intermediate
+    # state rather than an anomaly.
+    --only)   ONLY="${2:?--only needs one or more stub names, e.g. ci or dependabot,release}"; shift ;;
     --reason) REASON="${2:?--reason needs text}"; shift ;;
     *) echo "::error::unknown argument: $1"; exit 1 ;;
   esac
@@ -54,7 +63,12 @@ FLEET="$HERE/fleet.json"
 if [ -n "${ROLLOUT_BRANCH:-}" ]; then
   BRANCH="$ROLLOUT_BRANCH"
 elif [ -n "$ONLY" ]; then
-  BRANCH="ci/sync-$ONLY"
+  # One stub keeps its own branch name; a combined sync gets a stable shared
+  # one rather than a name that grows with the list.
+  case "$ONLY" in
+    *,*) BRANCH="ci/sync-repo-config" ;;
+    *)   BRANCH="ci/sync-${ONLY%.*}" ;;
+  esac
 else
   BRANCH="ci/reusable-workflows"
 fi
@@ -311,20 +325,32 @@ if [ -n "$ONLY" ]; then
   # can only appear once across the stage. Matching a bare prefix would make
   # `--only release-please` ambiguous with release-please-config, so the
   # comparison is on the whole name.
-  keep=""
-  while IFS= read -r f; do
-    base="${f##*/}"; name="${base%.*}"
-    [ "$name" = "$ONLY" ] && keep="$f"
-  done < <(cd "$STAGE" && find . -type f | sed 's|^\./||')
-  if [ -z "$keep" ]; then
-    echo "::error::--only $ONLY: not in this repo's stub set ($(cd "$STAGE" && find . -type f | sed 's|^\./||' | sort | tr '\n' ' '))"
+  KEEP=""; MISSING=""
+  # Resolve each requested name against what this repo actually stages, and
+  # report EVERY unresolved one. Stopping at the first would hide the rest of
+  # a bad list behind one name, and the operator would fix them one run at a
+  # time.
+  IFS=',' read -ra wanted <<< "$ONLY"
+  for w in "${wanted[@]}"; do
+    w="${w# }"; w="${w% }"; w="${w%.*}"
+    [ -n "$w" ] || continue
+    hit=""
+    while IFS= read -r f; do
+      base="${f##*/}"
+      [ "${base%.*}" = "$w" ] && hit="$f"
+    done < <(cd "$STAGE" && find . -type f | sed 's|^\./||')
+    if [ -n "$hit" ]; then KEEP="$KEEP$hit"$'\n'; else MISSING="$MISSING $w"; fi
+  done
+  if [ -n "$MISSING" ]; then
+    echo "::error::--only:$MISSING not in this repo's stub set ($(cd "$STAGE" && find . -type f | sed 's|^\./||' | sort | tr '\n' ' '))"
     exit 1
   fi
   while IFS= read -r f; do
-    [ "$f" = "$keep" ] || rm -f "$STAGE/$f"
+    printf '%s\n' "$KEEP" | grep -qxF -- "$f" || rm -f "$STAGE/$f"
   done < <(cd "$STAGE" && find . -type f | sed 's|^\./||')
   find "$STAGE" -type d -empty -delete
-  ONLY_PATH="$keep"
+  ONLY_PATH=$(printf '%s' "$KEEP" | grep -v '^$' | sort | tr '\n' ' ')
+  ONLY_PATH="${ONLY_PATH% }"
 fi
 
 if [ "$EXECUTE" != "--check" ] && [ "$EXECUTE" != "--render" ] && [ "$EXECUTE" != "--pr-body" ]; then
@@ -339,7 +365,14 @@ fi
 # only shows up as a puzzled reviewer in someone else's repo.
 pr_body() {
   if [ -n "$ONLY" ]; then
-    echo "Single-stub sync: regenerates \`$ONLY_PATH\` from fleet.json and the current template. Other files are untouched."
+    n=$(printf '%s' "$ONLY_PATH" | wc -w | tr -d ' ')
+    if [ "$n" = 1 ]; then
+      echo "Single-stub sync: regenerates \`$ONLY_PATH\` from fleet.json and the current template. Other files are untouched."
+    else
+      echo "Repo-config sync: regenerates these from fleet.json and the current templates. Other files are untouched."
+      echo ""
+      for f in $ONLY_PATH; do echo "- \`$f\`"; done
+    fi
   else
     echo "Replaces vendored pipeline workflows with thin stubs calling chrischall/workflows@main."
   fi
@@ -488,7 +521,12 @@ if git diff --cached --quiet; then
   exit 0
 fi
 if [ -n "$ONLY" ]; then
-  TITLE="ci: sync the $ONLY stub from chrischall/workflows"
+  # The PR title is also the SQUASH SUBJECT on a single-commit PR, so the
+  # commit below uses $TITLE verbatim rather than a second wording.
+  case "$ONLY" in
+    *,*) TITLE="ci: sync repo-config stubs from chrischall/workflows" ;;
+    *)   TITLE="ci: sync the ${ONLY%.*} stub from chrischall/workflows" ;;
+  esac
 else
   TITLE="ci: convert to chrischall/workflows reusable pipeline"
 fi
@@ -502,7 +540,7 @@ if [ -n "$ONLY" ]; then
   # (templates/dependabot.yml, templates/release.yml).
   git commit -m "$TITLE
 
-Regenerated $ONLY_PATH from fleet.json and the current template (single-stub sync).
+Regenerated $ONLY_PATH from fleet.json and the current templates.
 Pipeline source: https://github.com/chrischall/workflows"
 else
   git commit -m "$TITLE
