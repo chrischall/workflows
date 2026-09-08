@@ -461,10 +461,12 @@ if [ "$EXECUTE" != "--execute" ]; then
   exit 0
 fi
 
-# Labels the pipeline depends on (idempotent).
-for L in "auto-review:bfdadc" "ready-to-merge:0e8a16" "review-with-opus:5319e7" "release-ready:fbca04"; do
-  gh label create "${L%%:*}" --repo "$REPO" --color "${L##*:}" --force >/dev/null
-done
+# The canonical label set (idempotent). Delegated to ensure-labels.sh so there
+# is ONE list: this loop carried four pipeline labels and knew nothing about
+# the release-notes vocabulary, which is how `refactor` ended up missing from
+# 36 repos and `ci` from 8 — and a label a repo does not have is a
+# .github/release.yml category that silently never matches.
+bash "$HERE/scripts/ensure-labels.sh" "$REPO" >/dev/null
 
 gh repo clone "$REPO" "$WORK/clone" -- --depth 1 --quiet
 cd "$WORK/clone"

@@ -135,3 +135,13 @@ jobs:
         # notice. These stub `gh` and assert the whole report, not just the
         # first line.
         run: bash scripts/rollout.test.sh
+
+      - name: label contract unit tests
+        # Both halves of the label story fail QUIETLY. A missing pipeline label
+        # does not error — the workflow that wanted it just does not find it.
+        # A missing release-notes label leaves a .github/release.yml category
+        # that is valid, real, and matches nothing, so those PRs vanish into
+        # "Other Changes". Case B is the contract nothing else checks:
+        # release.yml names labels, labels.json creates them, and if they drift
+        # apart the only symptom is a changelog section that stays empty.
+        run: bash scripts/labels.test.sh
