@@ -18,9 +18,12 @@
 #                  the config is valid, the category is real, and it matches
 #                  nothing.
 #
-# Colours are the fleet PLURALITY where one already existed, chosen so
-# standardising rewrites as few repos as possible. `gh label create --force`
-# is create-or-update, so this is idempotent and safe to re-run.
+# Colours are NOT chosen to minimise churn: this script rewrites every label on
+# every repo regardless, so matching whatever a repo already had buys nothing
+# operationally. labels.json picks a legible palette instead — every colour
+# unique across both families, hue carrying meaning — and its `_palette` note
+# is the rationale. `gh label create --force` is create-or-update, so this is
+# idempotent and safe to re-run.
 #
 # --check reports drift and opens nothing (exit 1 if any label is missing or
 # has the wrong colour), so it can run on a schedule the way rollout.sh
