@@ -102,7 +102,7 @@
       "fly_dir": "fly-gog-runner",
       "release_config": "none",
       "release_notes": "none",
-      "dependabot_ignore": "agents-peer"
+      "dependabot_ignore": "gogcli-peers"
     },
     {
       "repo": "chrischall/homes-mcp",
@@ -292,7 +292,7 @@
       "ci": "custom",
       "release": "custom",
       "conventions_hint": "TDD project; XcodeGen-generated project rules; setlist.fm API-terms constraints; secrets handling. All in CLAUDE.md.",
-      "dependabot": "actions",
+      "dependabot": "gradle",
       "release_config": "none"
     },
     {
@@ -317,7 +317,7 @@
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "custom",
       "release": "none",
-      "dependabot": "actions",
+      "dependabot": "gradle",
       "release_config": "none"
     },
     {

@@ -77,7 +77,9 @@ while IFS=$'\t' read -r name color desc; do
     if gh label create "$name" --repo "$REPO" --color "$color" --description "$desc" --force >/dev/null 2>&1; then
       ok=1; break
     fi
-    sleep $((attempt * 3))
+    # Not after the last attempt: nothing follows it, so the delay is pure
+    # wall-clock — 9s per permanently-failing label across a fleet run.
+    [ "$attempt" -lt 3 ] && sleep $((attempt * 3))
   done
   [ -n "$ok" ] || failed="$failed $name"
 done < <(spec)
