@@ -1,0 +1,31 @@
+    ignore:
+      # Spring Boot majors are a MIGRATION here, not a bump, and dependabot
+      # cannot tell the difference — it proposed 3.4.0-M2 -> 4.2.0-M1 and the
+      # build failed with 22 compile errors (#24).
+      #
+      # Boot 4 relocated packages this app imports directly:
+      #   org.springframework.boot.autoconfigure.http
+      #   org.springframework.boot.autoconfigure.web.client
+      #   org.springframework.boot.web.client
+      #
+      # The source side of that is small — all 22 errors are in one file,
+      # BackendApplication.java. The blocker is COORDINATION: this project also
+      # pins Spring AI (`springAiVersion`), and Spring AI's starters are built
+      # against a specific Boot generation. Moving Boot without moving Spring AI
+      # to a Boot-4-compatible release cannot work, and Spring AI renamed every
+      # starter artifact at 1.0 (`spring-ai-<x>-spring-boot-starter` ->
+      # `spring-ai-starter-<x>`), so that half is a rewrite of the dependency
+      # block rather than a version change.
+      #
+      # Both pins are also MILESTONES (Boot 3.4.0-M2, Spring AI 1.0.0-M2). The
+      # right next step is a deliberate move to GA on the 3.x line first, not a
+      # milestone-to-milestone jump across a major.
+      #
+      # Minors and patches still flow. Lift this when the Boot 4 + Spring AI
+      # migration is done as its own piece of work.
+      - dependency-name: org.springframework.boot
+        update-types:
+          - version-update:semver-major
+      - dependency-name: org.springframework.boot:*
+        update-types:
+          - version-update:semver-major
