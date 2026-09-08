@@ -16,6 +16,9 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 | `.github/actions/arm-gate` | composite action | bespoke-CI repos (gradle, swift) |
 | `templates/ci-gradle.yml` | starter template | Gradle/KMP repos |
 | `templates/dependabot-lockfix-{npm,gradle}.yml` | stub templates | repos with `lockfix` set in `fleet.json` |
+| `templates/dependabot-{npm,gradle,actions}.yml` | repo-config template | renders `.github/dependabot.yml`; ecosystem picked by `dependabot` in `fleet.json` |
+| `templates/release-please-config.json` | repo-config template | renders `release-please-config.json`; repos with `release_config: mcp` |
+| `templates/release-notes.yml` | repo-config template | renders `.github/release.yml`; all repos unless `release_notes: none` |
 | `.github/actions/mcp-publish` | composite action | MCP publishers |
 | `.github/actions/install-mcp-publisher` | composite action | via mcp-publish |
 
@@ -238,7 +241,8 @@ existing (untappd-mcp#105, #83).
 
 Rollout tooling: `fleet.json` (per-repo parameters), `scripts/rollout.sh`
 (stub-conversion PRs; `--check` reports drift without opening one, `--only
-<stub>` narrows any mode to a single workflow file — prefer it for
+<stub>` narrows any mode to a single stub, named by basename minus
+extension so it reaches files outside `.github/workflows/` too — prefer it for
 single-template rollouts, since full regeneration reverts hand-edits, #76;
 `--reason <text>` adds a "Why this change" section to the PR body — use it
 whenever the motive lives here rather than in the consumer, or the reviewer
@@ -247,6 +251,54 @@ there sees a diff and no reason for it),
 `--check` across the whole fleet daily and maintains one marker-tagged drift
 issue, so a hand-edited stub or unrolled template change surfaces the day it
 happens instead of during the next sweep.
+
+### Repo-config templates (outside `.github/workflows/`)
+
+Three of the fleet's config files are not workflows, and until they were
+templated nothing rendered them — so they drifted in the dark, with no
+`--check` and no daily sweep watching:
+
+| file | before | shape of the drift |
+| --- | --- | --- |
+| `.github/dependabot.yml` | 72 repos, 17 variants | mostly a missing trailing newline, `vitest` vs `"vitest"`, and **three repos carrying three differently-worded comments about the same bug** |
+| `release-please-config.json` | 79 repos, **78 unique copies** | JSON whitespace — but 8 repos had drifted to **no `changelog-sections` at all**, i.e. no release policy |
+| `.github/release.yml` | 36 repos | simply **absent from 45** |
+
+The stage rollout.sh builds is therefore repo-shaped rather than a flat bag of
+workflow files: every mode walks it with `find`, and `--check` derives the
+contents-API path from the same repo-relative path. A file staged flat would
+have landed in `.github/workflows/`, where neither dependabot nor
+release-please would ever look — a rollout that reports success and changes
+nothing.
+
+`fleet.json` keys: `dependabot` (`npm`|`gradle`|`actions`|`none`),
+`release_config` (`mcp`|`none`), `release_notes` (`on`|`none`),
+`package_name`, `release_type`, `version_files` (comma-separated).
+
+**`none` renders NO FILE, not an empty one.** That is the escape hatch for a
+config that is deliberately bespoke, and it exists so a regeneration cannot
+quietly revert a hand-written reason (#76). Four repos use it today:
+`curtaincall` (a permanent javax-namespace JAXB major hold that no newer
+release can satisfy), `StoryMint` (per-target Swift package directories),
+`PassMint` (a worker-only npm directory), and `gogcli-mcp` (a monorepo).
+Twenty-one repos set `release_config: none` for the same reason — their
+`extra-files` stamp versions into monorepo paths the shared template does not
+have.
+
+`package_name` is **not** derivable from the repo name: **16 of the 60**
+templated repos publish under a scoped `@chrischall/<name>`. (The repos whose
+published name differs entirely — `gogcli-mcp-monorepo`,
+`opencode-m365-copilot` — are bespoke monorepos that set
+`release_config: none`, so they never reach this template at all.) An unset one
+used to render `"package-name": ""`, which release-please accepts and then tags
+as an empty component, so rollout.sh now fails loudly instead.
+
+`--only` names the **destination basename**, not the template filename:
+`.github/release.yml` is `--only release`, even though it renders from
+`templates/release-notes.yml`. `rollout.test.sh` asserts that every
+`--only <name>` a template recommends in its own header actually resolves — a
+wrong instruction there is cheap now and expensive once it has rendered into
+81 repos.
 
 **Registering a repo does not back-fill the templates it missed.** A
 `fleet.json` entry enrols a repo in every rollout from that day FORWARD; every

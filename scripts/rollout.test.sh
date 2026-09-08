@@ -36,10 +36,18 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # be pinned — an always-on trigger would silently drift all 60 standard-CI
 # repos, and an always-off one would silently drop the escape hatch the repo
 # that opted in is relying on.
+# FAKE/g is a gradle repo: its dependabot config must watch gradle, never npm.
+# FAKE/n opts out of both repo-config templates, which is the only way to prove
+# an opt-out renders NOTHING rather than an empty file.
 jq '{defaults: .defaults,
-     repos: [{repo: "FAKE/x", connector: "true"},
-             {repo: "FAKE/y", ci_dispatch: "true"},
-             {repo: "FAKE/z", ci: "none"}]}' \
+     repos: [{repo: "FAKE/x", connector: "true", package_name: "fake-x",
+              version_files: "src/version.ts"},
+             {repo: "FAKE/y", ci_dispatch: "true", package_name: "fake-y"},
+             {repo: "FAKE/z", ci: "none", package_name: "fake-z"},
+             {repo: "FAKE/g", dependabot: "gradle", ci: "none", release: "none",
+              package_name: "fake-g"},
+             {repo: "FAKE/n", dependabot: "none", release_config: "none",
+              release_notes: "none"}]}' \
   "$HERE/fleet.json" > "$ROOT/fleet.json"
 ROLLOUT="$ROOT/scripts/rollout.sh"
 
@@ -54,7 +62,11 @@ if [ -n "${GH_FAIL_MODE:-}" ]; then
   echo "gh: Internal Server Error (HTTP $GH_FAIL_MODE)" >&2
   exit 1
 fi
-name="${2##*/}"
+# `gh api repos/<owner>/<repo>/contents/<path>` -> fixture at <path>.
+# Keyed on the full path so a --check that looks in the wrong directory 404s
+# here exactly as it would against GitHub, instead of quietly matching a
+# same-named file somewhere else.
+name="${2#*/contents/}"
 if [ -f "$GH_FIXTURES/$name" ]; then
   # Line-wrapped, as the contents API returns it (and as `--jq .content`
   # hands it back) — the decode has to survive embedded newlines.
@@ -87,14 +99,14 @@ bash "$ROLLOUT" FAKE/y --render "$CANON_Y" >/dev/null || {
 fixtures_y() { # fixtures_y <case> -> fresh copy of FAKE/y's canonical stubs
   local dir="$TMP/casey-$1"
   rm -rf "$dir"; mkdir -p "$dir"
-  cp "$CANON_Y"/* "$dir"/
+  cp -R "$CANON_Y"/. "$dir"/
   printf '%s' "$dir"
 }
 
 fixtures() { # fixtures <case> -> fresh copy of the canonical stubs, echoes dir
   local dir="$TMP/case-$1"
   rm -rf "$dir"; mkdir -p "$dir"
-  cp "$CANON"/* "$dir"/
+  cp -R "$CANON"/. "$dir"/
   printf '%s' "$dir"
 }
 
@@ -136,11 +148,11 @@ assert_code() {
 # differ, so under `set -euo pipefail` the first drifting stub killed the loop
 # and every later stub went unexamined — silent under-reporting, not a crash.
 DIR=$(fixtures a)
-printf '\n# hand-edited: ci\n' >> "$DIR/ci.yml"
-printf '\n# hand-edited: release-please\n' >> "$DIR/release-please.yml"
+printf '\n# hand-edited: ci\n' >> "$DIR/.github/workflows/ci.yml"
+printf '\n# hand-edited: release-please\n' >> "$DIR/.github/workflows/release-please.yml"
 run_check "$DIR"
-assert_has  A "DRIFT    FAKE/x/ci.yml"
-assert_has  A "DRIFT    FAKE/x/release-please.yml"
+assert_has  A "DRIFT    FAKE/x/.github/workflows/ci.yml"
+assert_has  A "DRIFT    FAKE/x/.github/workflows/release-please.yml"
 # The headers are not the report — the per-stub diff body IS the payload that
 # fleet-drift.yml pastes into the issue. Assert it survives, or a change that
 # stops printing it ships green through the CI step this suite backs.
@@ -150,11 +162,11 @@ assert_clean_stderr A
 
 # --- B: drift does not hide a MISSING stub later in the set ----------------
 DIR=$(fixtures b)
-printf '\n# hand-edited: ci\n' >> "$DIR/ci.yml"
-rm "$DIR/deploy-connector.yml"
+printf '\n# hand-edited: ci\n' >> "$DIR/.github/workflows/ci.yml"
+rm "$DIR/.github/workflows/deploy-connector.yml"
 run_check "$DIR"
-assert_has  B "DRIFT    FAKE/x/ci.yml"
-assert_has  B "MISSING  FAKE/x/deploy-connector.yml"
+assert_has  B "DRIFT    FAKE/x/.github/workflows/ci.yml"
+assert_has  B "MISSING  FAKE/x/.github/workflows/deploy-connector.yml"
 assert_code B 1
 
 # --- C: clean repo is OK ---------------------------------------------------
@@ -203,15 +215,15 @@ assert_clean_stderr D
 # ci.yml is early in the stub glob and release-please.yml is last, so the
 # assertion that BOTH are reported is what fails if the loop dies early.
 DIR=$(fixtures e)
-awk 'BEGIN{for(i=1;i<=5000;i++) printf "# hand-edited filler line %05d\n", i}' >> "$DIR/ci.yml"
-printf '\n# hand-edited: release-please\n' >> "$DIR/release-please.yml"
+awk 'BEGIN{for(i=1;i<=5000;i++) printf "# hand-edited filler line %05d\n", i}' >> "$DIR/.github/workflows/ci.yml"
+printf '\n# hand-edited: release-please\n' >> "$DIR/.github/workflows/release-please.yml"
 run_check "$DIR"
-assert_has  E "DRIFT    FAKE/x/ci.yml"
-assert_has  E "DRIFT    FAKE/x/release-please.yml"
+assert_has  E "DRIFT    FAKE/x/.github/workflows/ci.yml"
+assert_has  E "DRIFT    FAKE/x/.github/workflows/release-please.yml"
 assert_code E 1
 # ...and the cap itself still holds: the indented diff body printed under
 # ci.yml's header is exactly 20 lines, not 5000 pasted into a GitHub issue.
-BODY=$(awk '/^DRIFT    FAKE\/x\/ci\.yml$/{f=1;next} f&&/^    /{c++;next} f{exit} END{print c+0}' "$OUT")
+BODY=$(awk '/^DRIFT    FAKE\/x\/\.github\/workflows\/ci\.yml$/{f=1;next} f&&/^    /{c++;next} f{exit} END{print c+0}' "$OUT")
 if [ "$BODY" = 20 ]; then ok "E: ci.yml diff body capped at 20 lines"
 else bad "E: expected a 20-line diff body for ci.yml, got $BODY" "head of output:$(printf '\n')$(head -5 "$OUT" | sed 's/^/       /')"; fi
 # The assertion that actually catches EPIPE: a 190KB diff must not make the
@@ -257,21 +269,21 @@ assert_has   F3 "After this PR is open, run"
 
 # --- G: ci_dispatch renders the manual trigger, and only when opted in -----
 G="$TMP/g-off"; bash "$ROLLOUT" FAKE/x --render "$G" >/dev/null
-if grep -q '^  workflow_dispatch:$' "$G/ci.yml"; then
+if grep -q '^  workflow_dispatch:$' "$G/.github/workflows/ci.yml"; then
   bad "G: unset ci_dispatch" "ci.yml gained workflow_dispatch without opting in"
 else ok "G: unset ci_dispatch leaves ci.yml without workflow_dispatch"; fi
 # The rationale comment must go with it — a stranded comment explaining a
 # trigger that is not there is how the skill-path block drifted (issue #138).
-if grep -q 'A manual gate, for when the automatic one' "$G/ci.yml"; then
+if grep -q 'A manual gate, for when the automatic one' "$G/.github/workflows/ci.yml"; then
   bad "G: unset ci_dispatch" "the rationale comment was left behind without its trigger"
 else ok "G: unset ci_dispatch drops the rationale comment too"; fi
 
 G2="$TMP/g-on"; bash "$ROLLOUT" FAKE/y --render "$G2" >/dev/null
-if grep -q '^  workflow_dispatch:$' "$G2/ci.yml"; then
+if grep -q '^  workflow_dispatch:$' "$G2/.github/workflows/ci.yml"; then
   ok "G: ci_dispatch=true renders workflow_dispatch"
-else bad "G: ci_dispatch=true" "ci.yml has no workflow_dispatch:$(printf '\n')$(sed -n '10,20p' "$G2/ci.yml")"; fi
+else bad "G: ci_dispatch=true" "ci.yml has no workflow_dispatch:$(printf '\n')$(sed -n '10,20p' "$G2/.github/workflows/ci.yml")"; fi
 # It has to sit under `on:`, not merely appear somewhere in the file.
-if ruby -ryaml -e 'y=YAML.load_file(ARGV[0]); exit(y[true].key?("workflow_dispatch") ? 0 : 1)' "$G2/ci.yml" 2>/dev/null; then
+if ruby -ryaml -e 'y=YAML.load_file(ARGV[0]); exit(y[true].key?("workflow_dispatch") ? 0 : 1)' "$G2/.github/workflows/ci.yml" 2>/dev/null; then
   ok "G: workflow_dispatch parses as a trigger under on:"
 else bad "G: ci_dispatch=true" "workflow_dispatch is not a key under on:"; fi
 
@@ -288,9 +300,9 @@ assert_clean_stderr H1
 # that is the whole point of recording the opt-in in fleet.json rather than
 # leaving it a hand-edit the next --execute deletes (issue #76).
 DIR=$(fixtures_y h2)
-grep -v '^  workflow_dispatch:$' "$DIR/ci.yml" > "$DIR/ci.yml.tmp" && mv "$DIR/ci.yml.tmp" "$DIR/ci.yml"
+grep -v '^  workflow_dispatch:$' "$DIR/.github/workflows/ci.yml" > "$DIR/.github/workflows/ci.yml.tmp" && mv "$DIR/.github/workflows/ci.yml.tmp" "$DIR/.github/workflows/ci.yml"
 run_check "$DIR" FAKE/y
-assert_has  H2 "DRIFT    FAKE/y/ci.yml"
+assert_has  H2 "DRIFT    FAKE/y/.github/workflows/ci.yml"
 assert_code H2 1
 
 # --- I: ci-fork-status renders with standard CI, and never without it ------
@@ -301,7 +313,7 @@ assert_code H2 1
 # where ci.yml is absent produces a workflow that can never fire and silently
 # never posts `ci-gated` for a fork.
 I="$TMP/i-std"; bash "$ROLLOUT" FAKE/x --render "$I" >/dev/null
-if [ -f "$I/ci-fork-status.yml" ]; then
+if [ -f "$I/.github/workflows/ci-fork-status.yml" ]; then
   ok "I: standard CI mode renders ci-fork-status.yml"
 else bad "I: standard CI" "ci-fork-status.yml was not rendered alongside ci.yml"; fi
 
@@ -309,19 +321,19 @@ else bad "I: standard CI" "ci-fork-status.yml was not rendered alongside ci.yml"
 if ruby -ryaml -e '
   y = YAML.load_file(ARGV[0])
   wr = y[true]["workflow_run"]
-  exit(wr["workflows"] == ["CI"] && wr["types"] == ["completed"] ? 0 : 1)' "$I/ci-fork-status.yml" 2>/dev/null; then
+  exit(wr["workflows"] == ["CI"] && wr["types"] == ["completed"] ? 0 : 1)' "$I/.github/workflows/ci-fork-status.yml" 2>/dev/null; then
   ok "I: triggers on workflow_run of \"CI\", completed only"
 else bad "I: trigger shape" "workflow_run does not name the CI workflow on completion"; fi
 
 # The pwn-request guard: it must never check out head-repo content.
 # Match a USES line, not the security comment that warns against it — a bare
 # grep for the string matches that comment and fails on a correct file.
-if grep -qE "^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*actions/checkout" "$I/ci-fork-status.yml"; then
+if grep -qE "^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*actions/checkout" "$I/.github/workflows/ci-fork-status.yml"; then
   bad "I: security" "ci-fork-status.yml checks out code — it runs with a WRITE token on untrusted forks"
 else ok "I: ci-fork-status.yml checks out nothing (pwn-request guard)"; fi
 
 # And it must only act on forks; a same-repo PR posts its own status.
-if grep -q "head_repository.full_name != github.repository" "$I/ci-fork-status.yml"; then
+if grep -q "head_repository.full_name != github.repository" "$I/.github/workflows/ci-fork-status.yml"; then
   ok "I: guarded to fork PRs only"
 else bad "I: fork guard" "missing the head_repository != repository condition"; fi
 
@@ -329,10 +341,10 @@ else bad "I: fork guard" "missing the head_repository != repository condition"; 
 # there was no such fixture, so that claim was asserted by the case NAME and
 # tested by nothing. FAKE/z has `ci: "none"`.
 IZ="$TMP/i-none"; bash "$ROLLOUT" FAKE/z --render "$IZ" >/dev/null
-if [ -f "$IZ/ci-fork-status.yml" ]; then
+if [ -f "$IZ/.github/workflows/ci-fork-status.yml" ]; then
   bad "I: non-standard ci" "ci-fork-status.yml rendered without ci.yml — it triggers on the \"CI\" workflow by NAME, so it could never fire"
 else ok "I: non-standard ci mode renders no ci-fork-status.yml"; fi
-if [ -f "$IZ/ci.yml" ]; then
+if [ -f "$IZ/.github/workflows/ci.yml" ]; then
   bad "I: non-standard ci" "ci.yml rendered for a repo with ci mode 'none'"
 else ok "I: non-standard ci mode renders no ci.yml either"; fi
 
@@ -361,6 +373,185 @@ else bad "J: best-effort" "the label step can abort a rollout that already pushe
 if grep -q 'gh label list --repo "$REPO"' "$ROLLOUT"; then
   ok "J: label applied only where the repo has one"
 else bad "J: guard" "the label is applied unconditionally"; fi
+
+
+# --- K: stubs render to their REPO-RELATIVE paths, not a flat directory -----
+# The whole point of the destination-path change: templates that do not live in
+# .github/workflows/ (dependabot.yml, release-please-config.json,
+# .github/release.yml) have to land where the consumer repo actually keeps
+# them. A flat stage silently put every one of them in .github/workflows/,
+# where dependabot and release-please would never look — a no-op rollout that
+# reports success.
+DIR="$TMP/paths"
+bash "$ROLLOUT" FAKE/x --render "$DIR" >/dev/null 2>&1
+for want in .github/workflows/ci.yml \
+            .github/workflows/pr-auto-review.yml \
+            .github/dependabot.yml \
+            .github/release.yml \
+            release-please-config.json; do
+  if [ -f "$DIR/$want" ]; then ok "K: renders $want"
+  else bad "K: $want" "not rendered; got:$(printf '\n')$(cd "$DIR" && find . -type f | sed 's|^\./|       |')"; fi
+done
+
+# --- L: the rendered config files are VALID, not merely present ------------
+# A JSON template rendered through sed can lose its syntax to a value
+# containing a quote or a backslash and still be written out happily; the
+# failure then surfaces as release-please skipping the repo entirely.
+if ruby -rjson -e 'JSON.parse(File.read(ARGV[0]))' "$DIR/release-please-config.json" 2>/dev/null; then
+  ok "L: release-please-config.json is valid JSON"
+else bad "L: JSON" "rendered release-please-config.json does not parse"; fi
+
+if ruby -ryaml -e 'YAML.safe_load(File.read(ARGV[0]))' "$DIR/.github/dependabot.yml" 2>/dev/null; then
+  ok "L: dependabot.yml is valid YAML"
+else bad "L: YAML" "rendered dependabot.yml does not parse"; fi
+
+# The reason this whole change exists: @vitest/coverage-v8 must be pinned into
+# the vitest group by EXACT name. Dependabot scores group patterns by
+# specificity and hands the dependency to the highest scorer, so the wildcard
+# "@vitest/*" (94) loses it to the pattern-less dev-dependencies group (500);
+# the exact name scores 1000 and wins. Without this line the fleet goes back to
+# two peer-conflicting PRs per vitest major that deadlock on ERESOLVE.
+if grep -q '"@vitest/coverage-v8"' "$DIR/.github/dependabot.yml"; then
+  ok "L: dependabot.yml pins @vitest/coverage-v8 by exact name"
+else bad "L: vitest pin" "the vitest group does not list @vitest/coverage-v8 exactly"; fi
+
+# release-please-config.json carries the RELEASE POLICY — which commit types
+# bump and which stay hidden. It drifted into 78 unique copies, 8 of them with
+# no changelog-sections at all, which is why it is templated now.
+if ruby -rjson -e '
+  c = JSON.parse(File.read(ARGV[0]))["packages"]["."]
+  s = c["changelog-sections"].map { |x| x["type"] }
+  hidden = c["changelog-sections"].select { |x| x["hidden"] }.map { |x| x["type"] }
+  abort "missing types" unless (%w[feat fix perf ci chore test build] - s).empty?
+  abort "ci/chore/test/build must be hidden" unless (%w[ci chore test build] - hidden).empty?
+  abort "feat/fix must NOT be hidden" unless (%w[feat fix] & hidden).empty?
+' "$DIR/release-please-config.json" 2>/dev/null; then
+  ok "L: changelog-sections encode the fleet release policy"
+else bad "L: policy" "rendered changelog-sections do not match the fleet release policy"; fi
+
+# --- M: --only narrows to a stub OUTSIDE .github/workflows ------------------
+# --only is how a single-template change reaches the fleet without regenerating
+# everything (issue #76). It matched on a flat filename, so it could not name a
+# file in another directory at all.
+DIR="$TMP/only-dependabot"
+bash "$ROLLOUT" FAKE/x --render "$DIR" --only dependabot >/dev/null 2>&1
+if [ -f "$DIR/.github/dependabot.yml" ] && [ ! -f "$DIR/.github/workflows/ci.yml" ]; then
+  ok "M: --only dependabot renders just .github/dependabot.yml"
+else bad "M: --only" "expected only .github/dependabot.yml; got:$(printf '\n')$(cd "$DIR" && find . -type f | sed 's|^\./|       |')"; fi
+
+DIR="$TMP/only-rpc"
+bash "$ROLLOUT" FAKE/x --render "$DIR" --only release-please-config >/dev/null 2>&1
+if [ -f "$DIR/release-please-config.json" ] && [ ! -f "$DIR/.github/workflows/release-please.yml" ]; then
+  ok "M: --only release-please-config does not collide with the release-please workflow"
+else bad "M: collision" "--only release-please-config did not select the config file alone"; fi
+
+# The reverse direction of the same collision: the workflow stub and the config
+# file share a name prefix, and `--only release-please` must still mean the
+# workflow.
+DIR="$TMP/only-rp"
+bash "$ROLLOUT" FAKE/x --render "$DIR" --only release-please >/dev/null 2>&1
+if [ -f "$DIR/.github/workflows/release-please.yml" ] && [ ! -f "$DIR/release-please-config.json" ]; then
+  ok "M: --only release-please still means the workflow stub"
+else bad "M: prefix" "--only release-please selected the wrong file(s)"; fi
+
+# --- N: per-repo ecosystem selection ---------------------------------------
+# A gradle repo must not be handed an npm dependabot config: it would open PRs
+# against a package.json that does not exist, while its real dependencies go
+# unwatched. FAKE/g is gradle, FAKE/z (ci: none) keeps the actions-only variant.
+DIR="$TMP/gradle"
+bash "$ROLLOUT" FAKE/g --render "$DIR" >/dev/null 2>&1
+if grep -q "package-ecosystem: gradle" "$DIR/.github/dependabot.yml" 2>/dev/null &&
+   ! grep -q "package-ecosystem: npm" "$DIR/.github/dependabot.yml" 2>/dev/null; then
+  ok "N: a gradle repo renders the gradle ecosystem, not npm"
+else bad "N: gradle" "gradle repo did not get the gradle dependabot config"; fi
+
+# github-actions updates are wanted in EVERY repo, whatever the language —
+# that block is the one thing all three variants share.
+for v in npm gradle; do
+  if grep -q "package-ecosystem: github-actions" "$TMP/${v/npm/paths}/.github/dependabot.yml" 2>/dev/null ||
+     grep -q "package-ecosystem: github-actions" "$TMP/$v/.github/dependabot.yml" 2>/dev/null; then
+    ok "N: $v variant still watches github-actions"
+  else bad "N: $v actions" "the $v dependabot variant dropped the github-actions ecosystem"; fi
+done
+
+# --- O: opting out renders nothing rather than an empty file ---------------
+# A repo with no npm/gradle manifest (or one deliberately excluded) must not
+# receive a stub file at all — an empty or half-rendered dependabot.yml is a
+# config error GitHub reports on the repo, not a no-op.
+DIR="$TMP/optout"
+bash "$ROLLOUT" FAKE/n --render "$DIR" >/dev/null 2>&1
+if [ ! -e "$DIR/.github/dependabot.yml" ]; then ok "O: dependabot: none renders no file"
+else bad "O: opt-out" "rendered a dependabot.yml for a repo that opted out"; fi
+if [ ! -e "$DIR/release-please-config.json" ]; then ok "O: release_config: none renders no file"
+else bad "O: opt-out" "rendered a release-please-config.json for a repo that opted out"; fi
+
+# --- P: --check reports and fetches REPO-RELATIVE paths --------------------
+# The report is what fleet-drift.yml pastes into the drift issue. With files in
+# three directories a bare basename no longer identifies anything, and — worse
+# — a --check that asks for .github/workflows/dependabot.yml gets a 404 and
+# reports every repo in the fleet as MISSING a file it correctly does not have.
+DIR=$(fixtures p)
+printf '\n# hand-edited\n' >> "$DIR/.github/dependabot.yml"
+run_check "$DIR"
+assert_has  P "DRIFT    FAKE/x/.github/dependabot.yml"
+assert_code P 1
+assert_clean_stderr P
+
+DIR=$(fixtures q)
+rm "$DIR/release-please-config.json"
+run_check "$DIR"
+assert_has  P "MISSING  FAKE/x/release-please-config.json"
+assert_code P 1
+
+DIR=$(fixtures r)
+run_check "$DIR"
+assert_has   P "OK       FAKE/x"
+assert_lacks P "MISSING"
+assert_code  P 0
+
+
+# --- Q: every --only a template recommends must actually resolve ------------
+# The gap that let a broken instruction through review. --only names the
+# DESTINATION basename, so templates/release-notes.yml -> .github/release.yml
+# is `--only release`; the template's own header said `--only release-notes`,
+# which exits 1. Nothing caught it because block M only exercised the two
+# stubs whose template name happens to match their destination.
+#
+# Asserting the whole class rather than the one case: a template header is
+# copied into every consumer repo, so a wrong command there is cheap to fix
+# now and costs a second full fleet rollout once it has shipped to 81 repos.
+# ci-gradle.yml is a starter template nothing renders, so it is exempt.
+while IFS= read -r t; do
+  name=$(grep -oE -- '--only [a-z0-9-]+' "$t" | head -1 | awk '{print $2}')
+  [ -n "$name" ] || continue
+  # FAKE/x gets the widest stub set; FAKE/g covers the gradle-only templates.
+  if bash "$ROLLOUT" FAKE/x --render "$TMP/only-q" --only "$name" >/dev/null 2>&1 ||
+     bash "$ROLLOUT" FAKE/g --render "$TMP/only-q" --only "$name" >/dev/null 2>&1; then
+    ok "Q: $(basename "$t") recommends --only $name, which resolves"
+  else
+    bad "Q: $(basename "$t")" "its header recommends \`--only $name\`, which exits 1 — and that comment renders into every consumer repo"
+  fi
+done < <(grep -lE -- '--only [a-z0-9-]+' "$HERE"/templates/*.yml "$HERE"/templates/*.json 2>/dev/null | grep -v ci-gradle)
+
+# --- R: --only accepts a stub named WITH its extension ----------------------
+# `--only ci.yml` worked because .yml was stripped; `--only
+# release-please-config.json` did not, because only `.yml` was. Stub extensions
+# vary now, so the strip has to be extension-agnostic.
+for spelling in release-please-config release-please-config.json; do
+  if bash "$ROLLOUT" FAKE/x --render "$TMP/only-r" --only "$spelling" >/dev/null 2>&1 &&
+     [ -f "$TMP/only-r/release-please-config.json" ]; then
+    ok "R: --only $spelling resolves"
+  else bad "R: --only $spelling" "did not resolve to release-please-config.json"; fi
+  rm -rf "$TMP/only-r"
+done
+
+# --- S: the single-stub commit body names the file it actually regenerated --
+# It hardcoded templates/$ONLY.yml, which for the new stubs names templates
+# that do not exist (templates/dependabot.yml, templates/release.yml). The
+# commit message is the only record of what a sync touched.
+if grep -q 'Regenerated \$ONLY_PATH from fleet.json' "$ROLLOUT"; then
+  ok "S: single-stub commit body uses the resolved stub path"
+else bad "S: commit body" "still names templates/\$ONLY.yml, which does not exist for stubs whose template and destination differ"; fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
