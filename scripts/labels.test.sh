@@ -120,23 +120,49 @@ else ok "F: rollout.sh no longer carries a second list"; fi
 
 
 # --- G: no workflow defines a label colour that labels.json also defines ---
-# followup-orphan-sweep.yml creates `orphaned-followup` on demand, so the
-# sweep keeps working against a repo that has never been rolled out. That is
-# correct, but it is a SECOND definition of the same label: if the two colours
-# drift, which one a repo gets depends on whether the sweep or the rollout
-# reached it first. Same-colour is the contract; the inline create stays.
-while IFS= read -r line; do
-  name=$(printf '%s' "$line" | sed -n 's/.*gh label create \([a-z-]*\).*/\1/p')
-  color=$(printf '%s' "$line" | sed -n 's/.*--color \([0-9A-Fa-f]\{6\}\).*/\1/p')
-  [ -n "$name" ] && [ -n "$color" ] || continue
+# followup-orphan-sweep.yml and reusable-pr-auto-review.yml create their labels
+# on demand, so they keep working against a repo that has never been rolled
+# out. That is correct, but it is a SECOND definition of the same label: if the
+# colours drift, which one a repo gets depends on whether the workflow or the
+# rollout reached it first. Same-colour is the contract; the inline creates
+# stay.
+#
+# Parsed with continuations JOINED. The first version of this test read line by
+# line, so `gh label create <name> --repo ... \` with `--color` on the next
+# line matched the name, found no colour, and skipped — and it skipped a REAL
+# clash (auto-review-followup: FBCA04 inline vs d4c5f9 canonical), which is
+# exactly the failure this test exists to catch. An invocation whose colour
+# cannot be read is now a FAILURE, not a silent skip: unparseable and
+# in-agreement must not look the same.
+found=0
+while IFS=$'\t' read -r file name color; do
+  [ -n "$name" ] || continue
   want=$(jq -r --arg n "$name" '[.pipeline[],.["release-notes"][]][]|select(.name==$n)|.color' "$HERE/labels.json")
-  [ -n "$want" ] || continue
-  if [ "$(printf '%s' "$color" | tr 'A-Z' 'a-z')" = "$want" ]; then
-    ok "G: $name inline colour agrees with labels.json"
+  [ -n "$want" ] || continue   # not a label we own; the workflow may define it freely
+  found=$((found+1))
+  if [ -z "$color" ]; then
+    bad "G: $name in $file" "creates a label labels.json owns, but its colour could not be parsed — an unreadable definition hides a clash exactly like a matching one"
+  elif [ "$(printf '%s' "$color" | tr 'A-Z' 'a-z')" = "$want" ]; then
+    ok "G: $name in $file agrees with labels.json (#$want)"
   else
-    bad "G: $name" "a workflow creates it as #$color, labels.json says #$want — which one a repo gets depends on who reached it first"
+    bad "G: $name in $file" "created as #$color, labels.json says #$want — which colour a repo gets depends on whether the workflow or the rollout reached it first"
   fi
-done < <(grep -rh 'gh label create' "$HERE/.github/workflows/" 2>/dev/null)
+done < <(
+  for f in "$HERE"/.github/workflows/*.yml; do
+    # Join backslash continuations, then pull name and colour from the whole
+    # invocation rather than from one physical line.
+    sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba' -e '}' "$f" \
+      | grep -o 'gh label create [^|;&]*' \
+      | while IFS= read -r inv; do
+          n=$(printf '%s' "$inv" | sed -n 's/gh label create \([A-Za-z0-9_.-]*\).*/\1/p')
+          c=$(printf '%s' "$inv" | sed -n 's/.*--color[= ]"\{0,1\}\([0-9A-Fa-f]\{6\}\).*/\1/p')
+          [ -n "$n" ] && printf '%s\t%s\t%s\n' "$(basename "$f")" "$n" "$c"
+        done
+  done
+)
+# A test that silently examines nothing passes forever. Pin that it saw work.
+if [ "$found" -ge 1 ]; then ok "G: found $found inline definition(s) of a canonical label to check"
+else bad "G: coverage" "no inline label creations were parsed at all — the extraction is broken, and this test is asserting nothing"; fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
