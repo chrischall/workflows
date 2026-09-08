@@ -19,35 +19,51 @@
     "release_notes": "on",
     "package_name": "",
     "release_type": "node",
-    "version_files": ""
+    "version_files": "",
+    "bump_minor_pre_major": "",
+    "initial_version": "",
+    "include_v_in_tag": "true",
+    "include_component_in_tag": "false",
+    "dependabot_ignore": ""
   },
   "repos": [
     {
       "repo": "chrischall/freshbooks-mcp",
       "package_name": "@chrischall/freshbooks-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/jobber-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "@chrischall/jobber-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/housecallpro-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "@chrischall/housecallpro-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0",
+      "include_v_in_tag": ""
     },
     {
       "repo": "chrischall/groupon-mcp",
       "package_name": "groupon-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/onthecheap-mcp",
       "package_name": "onthecheap-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/zola-mcp",
@@ -84,8 +100,9 @@
       "repo": "chrischall/gogcli-mcp",
       "connector": "true",
       "fly_dir": "fly-gog-runner",
-      "dependabot": "none",
-      "release_config": "none"
+      "release_config": "none",
+      "release_notes": "none",
+      "dependabot_ignore": "agents-peer"
     },
     {
       "repo": "chrischall/homes-mcp",
@@ -163,7 +180,9 @@
     {
       "repo": "chrischall/myatriumhealth-mcp",
       "package_name": "@chrischall/myatriumhealth-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/app-store-connect-mcp",
@@ -253,7 +272,8 @@
     {
       "repo": "chrischall/tripadvisor-mcp",
       "package_name": "@chrischall/tripadvisor-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true"
     },
     {
       "repo": "nullnet-app/curtaincall",
@@ -262,8 +282,9 @@
       "release": "custom",
       "conventions_hint": "TDD project (behavior changes ship with tests; never weaken assertions); Hibernate Envers auditing rules; one shared test context; Flyway owns the schema. All in CLAUDE.md.",
       "lockfix": "gradle",
-      "dependabot": "none",
-      "release_config": "none"
+      "dependabot": "gradle",
+      "release_config": "none",
+      "dependabot_ignore": "jaxb"
     },
     {
       "repo": "nullnet-app/encore",
@@ -422,12 +443,16 @@
       "repo": "chrischall/kiaaccess-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "kiaaccess-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/simplisafe-mcp",
       "package_name": "simplisafe-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/eventbrite-mcp",
@@ -437,67 +462,95 @@
     {
       "repo": "chrischall/crowntowncompost-mcp",
       "package_name": "crowntowncompost-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/myersparkathleticzone-mcp",
       "package_name": "myersparkathleticzone-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/maxpreps-mcp",
       "package_name": "maxpreps-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/thumbtack-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "@chrischall/thumbtack-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0",
+      "include_v_in_tag": "",
+      "include_component_in_tag": ""
     },
     {
       "repo": "chrischall/angi-mcp",
       "package_name": "@chrischall/angi-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/pickuppatrol-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "@chrischall/pickuppatrol-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/accessoticketing-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "@chrischall/accessoticketing-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/myhotlunchbox-mcp",
       "package_name": "myhotlunchbox-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/schoolpass-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "schoolpass-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/simplepractice-mcp",
       "package_name": "simplepractice-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/alphaportal-mcp",
       "package_name": "alphaportal-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     },
     {
       "repo": "chrischall/remind-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "@chrischall/remind-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0",
+      "include_v_in_tag": "",
+      "include_component_in_tag": ""
     },
     {
       "repo": "chrischall/mcp-host",

@@ -15,6 +15,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # __DEPENDABOT_IGNORE__
     groups:
       gradle-dependencies:
         update-types:

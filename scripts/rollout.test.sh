@@ -48,6 +48,10 @@ jq '{defaults: .defaults,
               package_name: "fake-g"},
              {repo: "FAKE/a", dependabot: "actions", ci: "none", release: "none",
               package_name: "fake-a"},
+             {repo: "FAKE/i", dependabot_ignore: "agents-peer", ci: "none",
+              release: "none", package_name: "fake-i"},
+             {repo: "FAKE/bad", dependabot_ignore: "no-such-fragment",
+              ci: "none", release: "none", package_name: "fake-bad"},
              {repo: "FAKE/n", dependabot: "none", release_config: "none",
               release_notes: "none"}]}' \
   "$HERE/fleet.json" > "$ROOT/fleet.json"
@@ -581,6 +585,75 @@ done
 if grep -q 'Regenerated \$ONLY_PATH from fleet.json' "$ROLLOUT"; then
   ok "S: single-stub commit body uses the resolved stub path"
 else bad "S: commit body" "still names templates/\$ONLY.yml, which does not exist for stubs whose template and destination differ"; fi
+
+
+# --- T: a repo-specific `ignore:` block survives templating -----------------
+# gogcli-mcp and curtaincall were opted out of the dependabot template
+# entirely, purely to protect one hand-written `ignore:` block each — which
+# also cost them the vitest pin and every future fix. The block is a fragment
+# now, so the config is templated AND the hold is kept. If this regresses, the
+# hold disappears silently: dependabot simply starts proposing bumps that
+# cannot install (gogcli's agents ceiling) or that break the build (curtaincall's
+# javax-namespace JAXB pin).
+DIR="$TMP/ign-on"
+bash "$ROLLOUT" FAKE/i --render "$DIR" --only dependabot >/dev/null 2>&1
+if ruby -ryaml -e '
+    d = YAML.safe_load(File.read(ARGV[0]))
+    ign = (d["updates"] || []).flat_map { |u| u["ignore"] || [] }
+    abort "no ignore entries" if ign.empty?
+    abort "wrong dep" unless ign.any? { |i| i["dependency-name"] == "agents" }
+  ' "$DIR/.github/dependabot.yml" 2>/dev/null; then
+  ok "T: dependabot_ignore splices the fragment into the rendered config"
+else
+  bad "T: fragment" "the ignore block did not survive rendering — the hold it protects is silently gone"
+fi
+
+# The comment marker must never survive into a consumer repo, spliced or not.
+for case in ign-on paths; do
+  if grep -q '__DEPENDABOT_IGNORE__' "$TMP/$case/.github/dependabot.yml" 2>/dev/null; then
+    bad "T: marker ($case)" "the __DEPENDABOT_IGNORE__ marker rendered literally into the output"
+  else
+    ok "T: marker removed ($case)"
+  fi
+done
+
+# And a repo with no fragment gets no `ignore:` key at all — an empty one is a
+# config error GitHub reports on the repo.
+if ruby -ryaml -e '
+    d = YAML.safe_load(File.read(ARGV[0]))
+    abort "ignore present" if (d["updates"] || []).any? { |u| u.key?("ignore") }
+  ' "$TMP/paths/.github/dependabot.yml" 2>/dev/null; then
+  ok "T: no fragment renders no ignore: key"
+else
+  bad "T: empty ignore" "a repo without dependabot_ignore rendered an ignore: key anyway"
+fi
+
+# --- U: a fragment name with no file is a hard error, not a silent drop -----
+# Failing loudly matters more than usual here: the quiet failure is a rendered
+# config that looks right and has simply lost the hold.
+OUT="$TMP/badfrag.txt"
+if bash "$ROLLOUT" FAKE/bad --render "$TMP/badfrag" --only dependabot >"$OUT" 2>&1; then
+  bad "U: bad fragment" "an unknown dependabot_ignore name rendered successfully instead of failing"
+else
+  if grep -q "has no fragment" "$OUT"; then
+    ok "U: an unknown dependabot_ignore name fails with a named error"
+  else
+    bad "U: bad fragment" "failed, but without naming the missing fragment: $(head -1 "$OUT")"
+  fi
+fi
+
+# --- V: every shipped fragment is valid in the position it is spliced into --
+# A fragment is indented YAML with no document of its own, so nothing else
+# parses it until it is already inside 80 repos.
+for f in "$HERE"/templates/fragments/dependabot-ignore-*.yml; do
+  fname=$(basename "$f")
+  if { echo "updates:"; echo "  - package-ecosystem: npm"; cat "$f"; } |
+     ruby -ryaml -e 'd=YAML.safe_load(STDIN.read); abort "no entries" if (d["updates"][0]["ignore"]||[]).empty?' 2>/dev/null; then
+    ok "V: $fname parses as an ignore block at its splice indentation"
+  else
+    bad "V: $fname" "does not parse as an ignore: block when spliced into an update entry"
+  fi
+done
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

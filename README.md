@@ -272,18 +272,43 @@ release-please would ever look — a rollout that reports success and changes
 nothing.
 
 `fleet.json` keys: `dependabot` (`npm`|`gradle`|`actions`|`none`),
-`release_config` (`mcp`|`none`), `release_notes` (`on`|`none`),
-`package_name`, `release_type`, `version_files` (comma-separated).
+`dependabot_ignore` (a fragment name, see below), `release_config`
+(`mcp`|`none`), `release_notes` (`on`|`none`), `package_name`, `release_type`,
+`version_files` (comma-separated), and the optional release-please keys
+`bump_minor_pre_major`, `initial_version`, `include_v_in_tag`,
+`include_component_in_tag`.
+
+**An empty optional release-please key means the key is ABSENT from the
+rendered config, not defaulted.** That distinction is load-bearing:
+`bump-minor-pre-major` is set in 21 repos and every one of them is still
+pre-1.0, so dropping it would make their next breaking change bump 0.x
+straight to 1.0.0 — a major nobody chose, fleet-wide. Three repos leave
+`include-*-in-tag` unset and two of those tag as `<name>-v<version>`; writing
+an explicit value where there was none could change the tag scheme, and
+release-please finds the previous release *by tag*.
+
+**A repo-specific `ignore:` block is a fragment, not a reason to opt out.**
+`templates/fragments/dependabot-ignore-<name>.yml`, selected by
+`dependabot_ignore`. `gogcli-mcp` (an `agents` ceiling mirroring
+`mcp-connector`'s published peer range) and `curtaincall` (a permanent
+javax-namespace JAXB hold) were both opted out of the dependabot template
+purely to protect one block each — which also cost them the vitest pin and
+every future fix. The splice marker is a *comment* line: a bare `__X__` at
+column 0 renders to a top-level scalar and breaks the template parse, the same
+shape as the placeholder that took out two repos' release workflows. An
+unknown fragment name is a hard error, because the quiet failure is a config
+that looks right and has simply lost the hold.
 
 **`none` renders NO FILE, not an empty one.** That is the escape hatch for a
 config that is deliberately bespoke, and it exists so a regeneration cannot
-quietly revert a hand-written reason (#76). Four repos use it today:
-`curtaincall` (a permanent javax-namespace JAXB major hold that no newer
-release can satisfy), `StoryMint` (per-target Swift package directories),
-`PassMint` (a worker-only npm directory), and `gogcli-mcp` (a monorepo).
-Twenty-one repos set `release_config: none` for the same reason — their
-`extra-files` stamp versions into monorepo paths the shared template does not
-have.
+quietly revert a hand-written reason (#76). Two repos use `dependabot: none`
+today — `StoryMint` (per-target Swift package directories) and `PassMint` (a
+worker-only npm directory); `curtaincall` and `gogcli-mcp` were moved off it
+onto `dependabot_ignore` fragments. Twenty-one repos set
+`release_config: none` — their `extra-files` stamp versions into monorepo
+paths the shared template does not have — and `gogcli-mcp` sets
+`release_notes: none` for a `⚠️ Required gogcli version` category keyed on a
+`gogcli-bump` label that means nothing in the other 80 repos.
 
 `package_name` is **not** derivable from the repo name: **16 of the 60**
 templated repos publish under a scoped `@chrischall/<name>`. (The repos whose
