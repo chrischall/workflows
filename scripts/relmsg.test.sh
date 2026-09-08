@@ -12,8 +12,9 @@
 # such commits across 13 repos, ten of them feat/fix.
 #
 # The step therefore has to reconstruct the message GitHub will actually
-# create, which is NOT one thing across this fleet: 42 repos squash with
-# COMMIT_OR_PR_TITLE/COMMIT_MESSAGES and 38 with PR_TITLE/PR_BODY, so the same
+# create, which is NOT one thing across this fleet: of the 81 repos in
+# fleet.json, 42 squash with COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, 38 with
+# PR_TITLE/PR_BODY and one with a mixed PR_TITLE/COMMIT_MESSAGES — so the same
 # PR yields a different commit depending on the repo. Most of these cases are
 # about that reconstruction; the parse itself is one library call.
 #
@@ -45,7 +46,8 @@ export RUNNER_TEMP="$TMP/runner"
 mkdir -p "$RUNNER_TEMP"
 PARSER_OK=1
 npm install --silent --prefix "$RUNNER_TEMP/relmsg-parser" --no-audit --no-fund \
-  --no-package-lock @conventional-commits/parser@0.4.1 >/dev/null 2>&1 || PARSER_OK=0
+  --ignore-scripts --no-package-lock \
+  @conventional-commits/parser@0.4.1 >/dev/null 2>&1 || PARSER_OK=0
 if [ "$PARSER_OK" -eq 0 ]; then
   echo "FAIL: could not install @conventional-commits/parser (network?) — the"
   echo "      parse assertions below are the point of this suite, so this is a"
@@ -171,6 +173,27 @@ export REPO_JSON='{"squash_merge_commit_title":"COMMIT_OR_PR_TITLE","squash_merg
 pr_json 'fix: x' "$BROKEN_BODY"
 run_case "COMMIT_MESSAGES repo: a broken PR body is not the shipped message" ok
 
+# BLANK is the third setting GitHub offers, and no repo here uses it today —
+# which is exactly why it needs a case: the jq `else "" end` branch is
+# unreachable from the fleet's current config, so nothing else would notice it
+# breaking. A blank body cannot contain a paren, so this must always be clean.
+setup
+export REPO_JSON='{"squash_merge_commit_title":"PR_TITLE","squash_merge_commit_message":"BLANK"}'
+pr_json 'fix: x' "$BROKEN_BODY"
+run_case "BLANK body: nothing ships, so nothing can fail" ok
+
+# COMMIT_OR_PR_TITLE takes the sole commit's subject only when there IS one
+# commit. With two it falls back to the PR title — the branch that decides
+# whether `refactor!:` or `fix:` is the release decision on a multi-commit PR.
+setup
+export REPO_JSON='{"squash_merge_commit_title":"COMMIT_OR_PR_TITLE","squash_merge_commit_message":"COMMIT_MESSAGES"}'
+COMMITS_JSON="$(jq -nc --arg a "chore: wip" --arg b "chore: more wip
+
+$BROKEN_BODY" '[{commit:{message:$a}},{commit:{message:$b}}]')"
+export COMMITS_JSON
+pr_json 'fix(manifest): three registered tools were missing' 'ignored'
+run_case "multi-commit COMMIT_OR_PR_TITLE falls back to the PR title" fail
+
 echo
 echo "— only a commit release-please would have SHIPPED can block —"
 
@@ -254,6 +277,28 @@ if printf '%s' "$relmsg_verdict" | grep -qF 'verdict: "fail"'; then
 else
   bad "the synthesized verdict is fail, not warn (warn would still arm)" \
       "branch did not set verdict fail"
+fi
+
+echo
+echo "— the shell contract every guard in this file is written against —"
+# The step's guards (`|| true` on each acceptable failure, no bare
+# `cmd && VAR=…`) are correct for `-e`, and the reason has to stay accurate:
+# GitHub runs a `run:` block as `bash -e {0}` UNLESS the file asks for
+# `shell: bash`, which yields `bash -eo pipefail`. This file asks for neither,
+# so no comment in it may claim pipefail is on — four did, describing the very
+# constructs a reader would otherwise re-derive. A wrong rationale is worse
+# than none: it is believed.
+if grep -nE '^\s*(defaults:|shell:)' "$WF" >/dev/null 2>&1; then
+  ok "SKIP: this file now sets shell:/defaults: — revisit the claims below"
+else
+  ok "the workflow sets no shell:/defaults:, so its blocks run as bash -e {0}"
+  claims="$(grep -n 'pipefail' "$WF" | grep -v 'set -euo pipefail' \
+    | grep -viE "no .?pipefail|not .?.pipefail|pipefail. is off|sets no|NOT \`pipefail\`" || true)"
+  if [ -z "$claims" ]; then
+    ok "no comment claims pipefail is on"
+  else
+    bad "no comment claims pipefail is on" "$claims"
+  fi
 fi
 
 echo
