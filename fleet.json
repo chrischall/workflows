@@ -318,7 +318,8 @@
       "ci": "custom",
       "release": "none",
       "dependabot": "gradle",
-      "release_config": "none"
+      "release_config": "none",
+      "dependabot_ignore": "spring-boot-major"
     },
     {
       "repo": "nullnet-app/nullnet",
