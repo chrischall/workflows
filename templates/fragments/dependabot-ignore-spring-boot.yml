@@ -21,11 +21,28 @@
       # right next step is a deliberate move to GA on the 3.x line first, not a
       # milestone-to-milestone jump across a major.
       #
-      # Minors and patches still flow. Lift this when the Boot 4 + Spring AI
-      # migration is done as its own piece of work.
+      # Widened from majors-only to ALL Boot updates on 2026-09-08, because the
+      # MINOR fails too. #27 (3.4.0-M2 -> 3.5.16) compiles cleanly and then
+      # `contextLoads()` dies:
+      #
+      #   UnsatisfiedDependencyException -> BeanCreationException
+      #     -> BeanInstantiationException -> NullPointerException
+      #      (ReflectionUtils.java:564)
+      #
+      # OBSERVED: every Boot update currently breaks the Spring context.
+      # NOT PROVEN: the precise cause. Gradle's console output does not name
+      # the failing bean (that is in build/reports/tests), so the Spring AI
+      # 1.0.0-M2 pin is the strong suspect — it is a milestone built against an
+      # older Boot, and nearly every dependency here is a Spring AI starter —
+      # but it is a suspicion, not a finding. Read the HTML report before
+      # acting on it.
+      #
+      # Nothing is lost by holding all of them: 3.4.0-M2 is a MILESTONE, so
+      # there is no 3.4.x patch stream to stay current with, and every update
+      # proposed so far fails. Without this the repo gets a red PR every week
+      # that nobody can merge.
+      #
+      # The unblocker is the Spring AI upgrade, and Boot moves with it. Lift
+      # this entirely at that point rather than narrowing it back to majors.
       - dependency-name: org.springframework.boot
-        update-types:
-          - version-update:semver-major
       - dependency-name: org.springframework.boot:*
-        update-types:
-          - version-update:semver-major
