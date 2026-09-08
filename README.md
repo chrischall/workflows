@@ -255,6 +255,47 @@ there sees a diff and no reason for it),
 issue, so a hand-edited stub or unrolled template change surfaces the day it
 happens instead of during the next sweep.
 
+### Labels
+
+`labels.json` is the fleet's canonical label set and `scripts/ensure-labels.sh
+<repo>` applies it (`--check` reports drift, exit 1). `rollout.sh` calls it, so
+every rollout keeps a repo's labels true.
+
+Two families, both load-bearing and both failing **quietly**:
+
+| family | what breaks when one is missing |
+| --- | --- |
+| pipeline (`ready-to-merge`, `release-ready`, `auto-review-followup`, …) | the workflow that wanted it does not error — it just does not find it |
+| release-notes (`enhancement`, `bug`, `refactor`, `ci`, …) | `.github/release.yml` categorises by label, so the category is valid, real, and matches nothing; those PRs land in "Other Changes" |
+
+The audit that prompted this found **0 of 81 repos fully correct**: 169 missing
+labels and 168 wrong colours. `refactor` was absent from 36 repos, `ci` from 8;
+`test` existed in 11 different colours and `ci` in 12. **Every colour is unique across both families**, and hue carries meaning:
+amber is `release-ready` alone, purples are review, reds darken from `bug` to
+`security`, blues are informational. That is not cosmetic — `fbca04` was worn
+by `release-ready`, `auto-review-followup` and `ci` at once, so on a PR list an
+automation state and a changelog category were the same swatch, and `test` was
+a pale blue indistinguishable from `refactor`. Colours are **not** chosen to
+minimise churn: `ensure-labels.sh` rewrites every label on every repo
+regardless, so plurality buys nothing operationally and a legible palette is
+worth more. The exceptions are `enhancement`/`bug`/`documentation` (GitHub
+defaults) and `dependencies`/`github_actions` (Dependabot defaults), kept
+because fighting those conventions costs more than it buys. The `--check`
+comparison is case-insensitive, because the same label exists as both `FBCA04`
+and `fbca04` and rewriting 71 repos to change nothing is not drift.
+
+`feature`/`fix` were dropped from `release.yml`: they were aliases for
+`enhancement`/`bug` and existed in 2 of 81 repos, so the categories they fed
+matched almost nothing.
+
+`scripts/labels.test.sh` pins the contract nothing else checks — **every label
+`release.yml` categorises by must exist in `labels.json`**. If they drift
+apart the only symptom is a changelog section that stays empty forever. It
+also asserts no workflow defines a colour for a label `labels.json` already
+owns, since `followup-orphan-sweep.yml` creates `orphaned-followup` on demand
+and two definitions would mean the colour depends on who reached the repo
+first.
+
 ### Repo-config templates (outside `.github/workflows/`)
 
 Three of the fleet's config files are not workflows, and until they were

@@ -1,0 +1,24 @@
+{
+  "_comment": "The fleet's canonical label set. Two families: `pipeline` labels drive automation and must exist for it to work; `release-notes` labels are the vocabulary .github/release.yml categorises by — a label a repo does not have is a category that silently never matches, and everything lands in Other Changes.",
+  "_palette": "Every colour is UNIQUE across both families, and hue carries meaning: amber is the pipeline's 'needs a human' state and is release-ready alone; purples are review; reds are things that went wrong, darkening from bug to security; blues are informational. `ci` was amber and collided with release-ready across families; `test` was a pale blue indistinguishable from refactor. Colours are not chosen to minimise churn — ensure-labels.sh rewrites every label on every repo regardless, so plurality buys nothing operationally and a legible palette is worth more. The exceptions are enhancement/bug/documentation (GitHub defaults) and dependencies/github_actions (Dependabot defaults), kept as-is because fighting those conventions costs more than it buys.",
+  "pipeline": [
+    { "name": "auto-review",          "color": "bfdadc", "description": "Auto-review pipeline is handling this PR" },
+    { "name": "ready-to-merge",       "color": "0e8a16", "description": "Arms auto-merge — added by the pipeline on a pass/warn verdict, never by hand" },
+    { "name": "review-with-opus",     "color": "5319e7", "description": "Escalate this PR's auto-review to Opus" },
+    { "name": "release-ready",        "color": "fbca04", "description": "Starts auto-review on a release PR" },
+    { "name": "auto-review-followup", "color": "d4c5f9", "description": "Tracks unresolved auto-review findings for a PR" },
+    { "name": "orphaned-followup",    "color": "d93f0b", "description": "This follow-up's PR closed without merging — its findings are unowned, not resolved" }
+  ],
+  "release-notes": [
+    { "name": "enhancement",        "color": "a2eeef", "description": "Release notes: Features" },
+    { "name": "bug",                "color": "d73a4a", "description": "Release notes: Bug Fixes" },
+    { "name": "security",           "color": "b60205", "description": "Release notes: Security" },
+    { "name": "refactor",           "color": "c5def5", "description": "Release notes: Refactor" },
+    { "name": "documentation",      "color": "0075ca", "description": "Release notes: Documentation" },
+    { "name": "test",               "color": "c2e0c6", "description": "Release notes: Tests" },
+    { "name": "dependencies",       "color": "0366d6", "description": "Release notes: Dependencies (third-party bumps)" },
+    { "name": "ci",                 "color": "006b75", "description": "Release notes: CI & Build" },
+    { "name": "github_actions",     "color": "000000", "description": "Release notes: CI & Build (Dependabot actions bumps)" },
+    { "name": "ignore-for-release", "color": "ededed", "description": "Excluded from generated release notes" }
+  ]
+}

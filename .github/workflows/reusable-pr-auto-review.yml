@@ -1138,8 +1138,15 @@ jobs:
           MARKER="<!-- auto-review-followup:PR-${PR} -->"
 
           # Ensure the tracking label exists (idempotent).
+          # Colour and description must match labels.json, which is the
+          # canonical set: this create exists so the sweep still works against
+          # a repo that has never been rolled out, but it is a SECOND
+          # definition, and if the two drift the colour a repo gets depends on
+          # whether this workflow or ensure-labels.sh reached it first.
+          # scripts/labels.test.sh case G pins the agreement.
           gh label create auto-review-followup --repo "$REPO" \
-            --color FBCA04 --description "Auto-review findings to address" 2>/dev/null || true
+            --color d4c5f9 \
+            --description "Tracks unresolved auto-review findings for a PR" 2>/dev/null || true
 
           # One issue per PR: find an open one carrying this PR's marker (filter
           # out PRs, which the issues endpoint also returns). Resolved BEFORE
