@@ -164,5 +164,45 @@ done < <(
 if [ "$found" -ge 1 ]; then ok "G: found $found inline definition(s) of a canonical label to check"
 else bad "G: coverage" "no inline label creations were parsed at all — the extraction is broken, and this test is asserting nothing"; fi
 
+
+# --- H: a transient write failure is retried, not left half-applied --------
+# 16 labels x 81 repos is ~1300 create calls, and GitHub's SECONDARY rate
+# limit on bursts of content-creating requests does not show in the core
+# quota. A real fleet run hit it on 6 repos, every one of which succeeded on
+# retry. Without retry, `set -e` aborts on the first bad write and the repo is
+# left PARTIALLY labelled — some canonical, some not — which is exactly the
+# quiet half-state this script exists to eliminate.
+mkdir -p "$TMP/bin2"
+cat > "$TMP/bin2/gh" <<'SHIM'
+#!/usr/bin/env bash
+# Fails the first N attempts at one label, then succeeds. Counter is on disk
+# because each invocation is a fresh process.
+if [ "${1:-}" = "label" ] && [ "${2:-}" = "create" ]; then
+  if [ "${3:-}" = "$FLAKY_LABEL" ]; then
+    c=$(cat "$FLAKY_COUNT" 2>/dev/null || echo 0); c=$((c+1)); echo "$c" > "$FLAKY_COUNT"
+    [ "$c" -le "${FLAKY_FAILS:-0}" ] && { echo "You have exceeded a secondary rate limit" >&2; exit 1; }
+  fi
+  exit 0
+fi
+exit 0
+SHIM
+chmod +x "$TMP/bin2/gh"
+export FLAKY_COUNT="$TMP/flaky.count" FLAKY_LABEL=ci
+
+# Two transient failures then success: the run must still succeed.
+rm -f "$FLAKY_COUNT"
+out=$(PATH="$TMP/bin2:$PATH" FLAKY_FAILS=2 bash "$HERE/scripts/ensure-labels.sh" FAKE/x 2>&1); code=$?
+if [ "$code" = 0 ] && printf '%s' "$out" | grep -q "labels applied"; then
+  ok "H: a transient write failure is retried and the run succeeds"
+else bad "H: retry" "expected success after 2 transient failures, got exit $code: $out"; fi
+
+# Permanently failing: must exit non-zero AND name the label, so the repo can
+# be finished rather than blindly re-run.
+rm -f "$FLAKY_COUNT"
+out=$(PATH="$TMP/bin2:$PATH" FLAKY_FAILS=99 bash "$HERE/scripts/ensure-labels.sh" FAKE/x 2>&1); code=$?
+if [ "$code" != 0 ] && printf '%s' "$out" | grep -q "ci"; then
+  ok "H: a permanent failure exits non-zero and names the label"
+else bad "H: report" "expected a non-zero exit naming 'ci', got exit $code: $out"; fi
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

@@ -60,7 +60,32 @@ if [ "$MODE" = "--check" ]; then
   exit "$drift"
 fi
 
+# Retry each write. 16 labels x 81 repos is ~1300 create calls, and GitHub
+# applies a SECONDARY rate limit to bursts of content-creating requests that
+# the core quota does not show — a fleet run hit it on 6 repos, all of which
+# succeeded immediately on retry.
+#
+# Without this the failure is worse than a failed run: `set -e` aborts on the
+# first bad write, so the repo is left PARTIALLY labelled — some labels
+# canonical, some not, and the script reporting failure with no record of how
+# far it got. A half-labelled repo is the quiet state this whole script exists
+# to eliminate.
+failed=""
 while IFS=$'\t' read -r name color desc; do
-  gh label create "$name" --repo "$REPO" --color "$color" --description "$desc" --force >/dev/null
+  ok=""
+  for attempt in 1 2 3; do
+    if gh label create "$name" --repo "$REPO" --color "$color" --description "$desc" --force >/dev/null 2>&1; then
+      ok=1; break
+    fi
+    sleep $((attempt * 3))
+  done
+  [ -n "$ok" ] || failed="$failed $name"
 done < <(spec)
+
+if [ -n "$failed" ]; then
+  # Name every label that did not land, so the repo can be finished rather
+  # than blindly re-run, and exit non-zero so a sweep counts it.
+  echo "::error::$REPO: could not apply after 3 attempts:$failed" >&2
+  exit 1
+fi
 echo "labels applied to $REPO"
