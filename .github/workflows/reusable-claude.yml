@@ -90,7 +90,16 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@v1
+        # PINNED, not @v1. v1.0.218 (published 2026-09-08T20:39Z) broke the
+        # installer: every run fails with
+        #   ReferenceError: Claude Code native binary not found at
+        #   /home/runner/.local/bin/claude
+        # and the job exits "auto-review completed without emitting a verdict",
+        # so the PR is left UN-REVIEWED and cannot arm. It took the whole fleet
+        # down at once because @v1 is a floating tag — last good run 22:07:24Z,
+        # first failure 22:19:42Z, with no change on our side in between.
+        # Lift back to @v1 once a release past 1.0.218 fixes the binary path.
+        uses: anthropics/claude-code-action@v1.0.217
         with:
           # Auth via the user's Claude Max plan (OAuth token from
           # `claude setup-token`). Counts against the Max subscription's
