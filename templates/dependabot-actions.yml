@@ -1,4 +1,5 @@
 # Thin config — the fleet-wide shape lives in chrischall/workflows.
+# Renders to: .github/dependabot.yml
 # Regenerate with: scripts/rollout.sh <owner/repo> --execute --only dependabot
 #
 # For repos with no npm or gradle manifest dependabot can read (Swift packages
