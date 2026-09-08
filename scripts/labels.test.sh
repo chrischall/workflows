@@ -173,6 +173,14 @@ else bad "G: coverage" "no inline label creations were parsed at all — the ext
 # left PARTIALLY labelled — some canonical, some not — which is exactly the
 # quiet half-state this script exists to eliminate.
 mkdir -p "$TMP/bin2"
+# Stub `sleep` too. The retry backoff is 3s + 6s per failing label, so a
+# permanently-failing case pays ~27s of real wall-clock to assert something
+# that has nothing to do with timing — the same reason dedupe.test.sh stubs it.
+cat > "$TMP/bin2/sleep" <<'SLEEP'
+#!/usr/bin/env bash
+exit 0
+SLEEP
+chmod +x "$TMP/bin2/sleep"
 cat > "$TMP/bin2/gh" <<'SHIM'
 #!/usr/bin/env bash
 # Fails the first N attempts at one label, then succeeds. Counter is on disk

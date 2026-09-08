@@ -315,6 +315,15 @@ have landed in `.github/workflows/`, where neither dependabot nor
 release-please would ever look — a rollout that reports success and changes
 nothing.
 
+**Choosing `dependabot`**: by the repo's BUILD MANIFEST, not by what it
+happens to have. `npm` for a root `package.json`, `gradle` for a root
+`build.gradle(.kts)`, `actions` only when there is neither. The initial
+classification was a one-time heuristic that checked for `package.json` and
+fell through to `actions` — which silently gave `encore` and
+`aikidsbook-backend` an actions-only config despite root `build.gradle.kts`,
+leaving every Kotlin/AGP/Compose dependency untracked. A wrong value here is
+invisible: the config is valid and dependabot simply watches nothing.
+
 `fleet.json` keys: `dependabot` (`npm`|`gradle`|`actions`|`none`),
 `dependabot_ignore` (a fragment name, see below), `release_config`
 (`mcp`|`none`), `release_notes` (`on`|`none`), `package_name`, `release_type`,
