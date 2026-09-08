@@ -44,7 +44,13 @@ entries.each do |repo, entry|
       next
     end
 
-    Dir.glob(File.join(dir, '*.yml')).sort.each do |f|
+    # `**/*` and dotfile-prefixed directories: the stage is repo-shaped now, so
+    # the workflow stubs sit under .github/workflows/ and the repo-config stubs
+    # under .github/ and the root. A flat '*.yml' glob silently checked NOTHING
+    # once the layout changed — the validator would have gone green on an
+    # entirely unrendered fleet.
+    Dir.glob(File.join(dir, '**', '*'), File::FNM_DOTMATCH).select { |f| File.file?(f) }.sort.each do |f|
+      rel  = f.sub(%r{\A#{Regexp.escape(dir)}/}, '')
       name = File.basename(f)
       src  = File.read(f)
       checked += 1
@@ -52,21 +58,66 @@ entries.each do |repo, entry|
       # 1. A placeholder that survived rendering means a template gained a token
       #    nothing wires up — it would ship literally into a consumer repo.
       if (left = src.scan(/__[A-Z_]+__/).uniq).any?
-        failures << "#{repo}/#{name}: unrendered placeholder(s) #{left.join(', ')}"
+        failures << "#{repo}/#{rel}: unrendered placeholder(s) #{left.join(', ')}"
+        next
+      end
+
+      # release-please-config.json is JSON, and its failure mode is quiet:
+      # release-please skips a repo whose config does not parse rather than
+      # failing, so a malformed render would show up as a repo that simply
+      # stops cutting releases.
+      if name.end_with?('.json')
+        begin
+          cfgdoc = JSON.parse(src)
+        rescue => e
+          failures << "#{repo}/#{rel}: does not parse as JSON — #{e.message.lines.first.strip}"
+          next
+        end
+
+        if name == 'release-please-config.json'
+          pkg = cfgdoc.dig('packages', '.') || {}
+          want_name = cfg(entry, defaults, 'package_name')
+          if pkg['package-name'].to_s != want_name
+            failures << "#{repo}/#{rel}: package-name #{pkg['package-name'].inspect} != fleet.json #{want_name.inspect}"
+          end
+          # The release policy is the reason this file is templated at all: 8
+          # repos had drifted to no changelog-sections whatsoever, which makes
+          # every commit type invisible to the changelog.
+          types  = (pkg['changelog-sections'] || []).map { |x| x['type'] }
+          hidden = (pkg['changelog-sections'] || []).select { |x| x['hidden'] }.map { |x| x['type'] }
+          missing = %w[feat fix perf revert refactor docs test build ci chore] - types
+          failures << "#{repo}/#{rel}: changelog-sections missing #{missing.join(', ')}" if missing.any?
+          wrong = %w[ci chore test build] - hidden
+          failures << "#{repo}/#{rel}: #{wrong.join(', ')} must be hidden from the changelog" if wrong.any?
+          leaked = %w[feat fix] & hidden
+          failures << "#{repo}/#{rel}: #{leaked.join(', ')} must NOT be hidden" if leaked.any?
+          # Every version file fleet.json records has to actually land in the
+          # list; a dropped one means release-please stops stamping it and the
+          # published version silently disagrees with the tag.
+          extra = (pkg['extra-files'] || []).select { |x| x.is_a?(String) }
+          cfg(entry, defaults, 'version_files').split(',').reject(&:empty?).each do |vf|
+            failures << "#{repo}/#{rel}: version file #{vf.inspect} missing from extra-files" unless extra.include?(vf)
+          end
+        end
         next
       end
 
       begin
         doc = YAML.load(src)
       rescue => e
-        failures << "#{repo}/#{name}: does not parse — #{e.message.lines.first.strip}"
+        failures << "#{repo}/#{rel}: does not parse — #{e.message.lines.first.strip}"
         next
       end
 
       # 2. Psych parses the `on:` key as boolean true (YAML 1.1). Accept either.
-      unless doc.is_a?(Hash) && (doc.key?('on') || doc.key?(true)) && doc.key?('jobs')
-        failures << "#{repo}/#{name}: missing `on:` or `jobs:`"
-        next
+      #    Only WORKFLOW stubs have on:/jobs: — .github/dependabot.yml and
+      #    .github/release.yml are plain config and must be exempted, or every
+      #    repo fails on two files that are perfectly correct.
+      if rel.start_with?('.github/workflows/')
+        unless doc.is_a?(Hash) && (doc.key?('on') || doc.key?(true)) && doc.key?('jobs')
+          failures << "#{repo}/#{rel}: missing `on:` or `jobs:`"
+          next
+        end
       end
 
       case name
@@ -78,15 +129,15 @@ entries.each do |repo, entry|
         got = steps.map { |s| s.is_a?(Hash) ? s.dig('with', 'skill-path') : nil }.compact
         if want.empty?
           bad = got.reject { |g| g.nil? || g.to_s.strip.empty? }
-          failures << "#{repo}/#{name}: skill-path #{bad.inspect} rendered but fleet.json records none" if bad.any?
+          failures << "#{repo}/#{rel}: skill-path #{bad.inspect} rendered but fleet.json records none" if bad.any?
         elsif !got.map(&:to_s).include?(want)
-          failures << "#{repo}/#{name}: skill-path not inside a step's with: — wanted #{want.inspect}, found #{got.inspect}"
+          failures << "#{repo}/#{rel}: skill-path not inside a step's with: — wanted #{want.inspect}, found #{got.inspect}"
         end
 
       when 'ci.yml'
         want = cfg(entry, defaults, 'test_command')
         got  = doc.dig('jobs', 'ci', 'with', 'test-command').to_s
-        failures << "#{repo}/#{name}: test-command #{got.inspect} != fleet.json #{want.inspect}" unless got == want
+        failures << "#{repo}/#{rel}: test-command #{got.inspect} != fleet.json #{want.inspect}" unless got == want
 
       when 'pr-auto-review.yml'
         want = cfg(entry, defaults, 'rereview_on_push')
@@ -97,16 +148,35 @@ entries.each do |repo, entry|
           # to nil, so a `got.nil?` check alone would pass while every repo
           # shipped a line meaning "explicitly null" instead of "unset".
           if src =~ /^\s*rereview_on_push:/
-            failures << "#{repo}/#{name}: renders a rereview_on_push line but fleet.json records none"
+            failures << "#{repo}/#{rel}: renders a rereview_on_push line but fleet.json records none"
           end
         elsif got.to_s != want
-          failures << "#{repo}/#{name}: rereview_on_push #{got.inspect} != fleet.json #{want.inspect} (must sit inside the review job's with:)"
+          failures << "#{repo}/#{rel}: rereview_on_push #{got.inspect} != fleet.json #{want.inspect} (must sit inside the review job's with:)"
+        end
+
+      when 'dependabot.yml'
+        # The vitest split deadlock, pinned. @vitest/coverage-v8 must be listed
+        # by EXACT name: dependabot scores group patterns by specificity and
+        # the wildcard "@vitest/*" (94) loses the package to the pattern-less
+        # dev-dependencies group (500), which on a major cannot take it either
+        # — so it escapes into its own PR and the peer-locked pair deadlocks on
+        # ERESOLVE. The exact name scores 1000 and nothing outbids it.
+        eco = (doc['updates'] || []).map { |u| u['package-ecosystem'] }
+        unless eco.include?('github-actions')
+          failures << "#{repo}/#{rel}: no github-actions ecosystem — pinned action versions would stop moving"
+        end
+        npm = (doc['updates'] || []).find { |u| u['package-ecosystem'] == 'npm' }
+        if npm
+          pats = npm.dig('groups', 'vitest', 'patterns') || []
+          unless pats.include?('@vitest/coverage-v8')
+            failures << "#{repo}/#{rel}: vitest group does not pin @vitest/coverage-v8 by exact name"
+          end
         end
 
       when 'claude.yml'
         uses = doc.dig('jobs', 'claude', 'uses').to_s
         unless uses.include?('reusable-claude.yml')
-          failures << "#{repo}/#{name}: job does not call reusable-claude.yml (got #{uses.inspect})"
+          failures << "#{repo}/#{rel}: job does not call reusable-claude.yml (got #{uses.inspect})"
         end
       end
     end

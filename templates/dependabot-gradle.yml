@@ -1,0 +1,32 @@
+# Thin config — the fleet-wide shape lives in chrischall/workflows.
+# Regenerate with: scripts/rollout.sh <owner/repo> --execute --only dependabot
+#
+# Majors are deliberately absent from the gradle group: a Gradle/AGP/Kotlin
+# major is never a drive-by merge, and dependabot cannot run gradle, so a
+# grouped major lands with a stale kotlin-js-store/yarn.lock. Repos that need a
+# permanent major hold (a pin that exists BECAUSE of the old major) carry their
+# own `ignore:` block and opt out with `dependabot: none` in fleet.json rather
+# than losing it to a regeneration.
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      gradle-dependencies:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch

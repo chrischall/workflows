@@ -29,7 +29,7 @@ set -euo pipefail
 
 REPO="${1:?usage: rollout.sh <owner/repo> [--execute|--check|--render <dir>|--pr-body] [--only <stub>] [--reason <text>]}"
 shift
-EXECUTE=""; ONLY=""; DEST=""; REASON=""
+EXECUTE=""; ONLY=""; ONLY_PATH=""; DEST=""; REASON=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --execute|--check|--pr-body) EXECUTE="$1" ;;
@@ -78,6 +78,17 @@ JAVA_VERSION=$(cfg java_version)
 # holding fly.toml for repos that also run a Fly backend (implies a Fly job).
 CONNECTOR=$(cfg connector)
 FLY_DIR=$(cfg fly_dir)
+# Repo-config templates. `dependabot` picks the ecosystem variant (npm/gradle/
+# actions); `release_config` and `release_notes` are on/`none` switches.
+# package_name is NOT derivable from the repo name — 20 repos publish as
+# @chrischall/<name> and three under an entirely different name — so it is
+# recorded per repo and a missing one is a hard error below.
+DEPENDABOT=$(cfg dependabot)
+RELEASE_CONFIG=$(cfg release_config)
+RELEASE_NOTES=$(cfg release_notes)
+PACKAGE_NAME=$(cfg package_name)
+RELEASE_TYPE=$(cfg release_type)
+VERSION_FILES=$(cfg version_files)
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -90,7 +101,15 @@ trap 'rm -rf "$WORK"' EXIT
 # because each `&` re-inserted the placeholder it had just matched.
 sed_escape() { printf '%s' "$1" | sed -e 's/[&|\\]/\\&/g'; }
 
-render() { # render <template> <dest>
+# Stage paths are REPO-RELATIVE (".github/workflows/ci.yml",
+# ".github/dependabot.yml", "release-please-config.json"), so the stage is a
+# picture of the consumer repo rather than a flat bag of workflow files. Every
+# mode below walks it with `find`, and --check derives the contents API path
+# from the same relative path. A flat stage put dependabot.yml and
+# release-please-config.json into .github/workflows/, where nothing reads them.
+render() { # render <template> <repo-relative dest>
+  mkdir -p "$STAGE/$(dirname "$2")"
+  local dest="$STAGE/$2"
   sed -e "s|__PAT_SECRET__|$(sed_escape "$PAT_SECRET")|g" \
       -e "s|__NODE_VERSION__|$(sed_escape "$NODE_VERSION")|g" \
       -e "s|__JAVA_VERSION__|$(sed_escape "$JAVA_VERSION")|g" \
@@ -100,7 +119,9 @@ render() { # render <template> <dest>
       -e "s|__SKILL_PATH__|$(sed_escape "$SKILL_PATH")|g" \
       -e "s|__FLY_DIR__|$(sed_escape "$FLY_DIR")|g" \
       -e "s|__REREVIEW_ON_PUSH__|$(sed_escape "$REREVIEW_ON_PUSH")|g" \
-      "$HERE/templates/$1" > "$2"
+      -e "s|__PACKAGE_NAME__|$(sed_escape "$PACKAGE_NAME")|g" \
+      -e "s|__RELEASE_TYPE__|$(sed_escape "$RELEASE_TYPE")|g" \
+      "$HERE/templates/$1" > "$dest"
   # An unset skill_path renders `skill-path:` with no value. That is harmless
   # (the action treats unset and empty identically) but it is a meaningless
   # line in every repo that does not pin one, so drop it. Done post-render
@@ -127,15 +148,15 @@ render() { # render <template> <dest>
     # rendering an orphan comment, which YAML-parses fine and so slips past
     # validate-render.rb. Keep the two in sync.
     sed -i.bak -e '/^[[:space:]]*# skill-path pins ONE skill/,/^[[:space:]]*skill-path:[[:space:]]*$/d' \
-               "$2" && rm -f "$2.bak"
+               "$dest" && rm -f "$dest.bak"
   fi
-  sed -i.bak -e '/^[[:space:]]*rereview_on_push:[[:space:]]*$/d' "$2" && rm -f "$2.bak"
+  sed -i.bak -e '/^[[:space:]]*rereview_on_push:[[:space:]]*$/d' "$dest" && rm -f "$dest.bak"
   # Same guarded-range shape as skill-path above, and guarded for the same
   # reason: an unterminated sed range runs to end of file. Scoped to ci.yml so
   # the anchors cannot match anything in another template.
   if [ "$1" = "ci.yml" ] && [ -z "$CI_DISPATCH" ]; then
     sed -i.bak -e '/^  # A manual gate, for when the automatic one/,/^  workflow_dispatch:$/d' \
-               "$2" && rm -f "$2.bak"
+               "$dest" && rm -f "$dest.bak"
   fi
 }
 
@@ -157,46 +178,102 @@ REREVIEW_ON_PUSH="$(cfg rereview_on_push)"
 CI_DISPATCH="$(cfg ci_dispatch)"
 
 STAGE="$WORK/stage"; mkdir -p "$STAGE"
-render pr-auto-review.yml "$STAGE/pr-auto-review.yml"
-render auto-merge.yml "$STAGE/auto-merge.yml"
-render claude.yml "$STAGE/claude.yml"
-[ "$CI_MODE" = "standard" ] && render ci.yml "$STAGE/ci.yml"
+WF=".github/workflows"
+render pr-auto-review.yml "$WF/pr-auto-review.yml"
+render auto-merge.yml "$WF/auto-merge.yml"
+render claude.yml "$WF/claude.yml"
+[ "$CI_MODE" = "standard" ] && render ci.yml "$WF/ci.yml"
 # Fork PRs cannot post their own `ci-gated` (read-only token), so a separate
 # `workflow_run` workflow posts it from the base-repo context. Rendered
 # alongside ci.yml and only in standard CI mode: it triggers on the "CI"
 # workflow by name, so it is meaningless where that stub is not installed.
-[ "$CI_MODE" = "standard" ] && render ci-fork-status.yml "$STAGE/ci-fork-status.yml"
+[ "$CI_MODE" = "standard" ] && render ci-fork-status.yml "$WF/ci-fork-status.yml"
 if [ "$RELEASE_MODE" = "mcp" ]; then
-  render release-please.yml "$STAGE/release-please.yml"
+  render release-please.yml "$WF/release-please.yml"
   # Deploy jobs are APPENDED to the release stub rather than living in a
   # separate workflow, because they must gate on release-please's
   # `release_created` output — which only exists inside this workflow.
   if [ -n "$FLY_DIR" ]; then
-    render fragments/deploy-fly-job.yml "$WORK/fly.frag"
-    cat "$WORK/fly.frag" >> "$STAGE/release-please.yml"
+    render fragments/deploy-fly-job.yml ".frag/fly.yml"
+    cat "$STAGE/.frag/fly.yml" >> "$STAGE/$WF/release-please.yml"
   fi
   if [ -n "$CONNECTOR" ]; then
     if [ -n "$FLY_DIR" ]; then
-      render fragments/deploy-connector-job-after-fly.yml "$WORK/conn.frag"
+      render fragments/deploy-connector-job-after-fly.yml ".frag/conn.yml"
     else
-      render fragments/deploy-connector-job.yml "$WORK/conn.frag"
+      render fragments/deploy-connector-job.yml ".frag/conn.yml"
     fi
-    cat "$WORK/conn.frag" >> "$STAGE/release-please.yml"
-    render deploy-connector.yml "$STAGE/deploy-connector.yml"
+    cat "$STAGE/.frag/conn.yml" >> "$STAGE/$WF/release-please.yml"
+    render deploy-connector.yml "$WF/deploy-connector.yml"
   fi
 fi
-[ -n "$LOCKFIX" ] && render "dependabot-lockfix-$LOCKFIX.yml" "$STAGE/dependabot-lockfix.yml"
+[ -n "$LOCKFIX" ] && render "dependabot-lockfix-$LOCKFIX.yml" "$WF/dependabot-lockfix.yml"
+
+# Repo-config stubs. These are the files that drifted worst precisely BECAUSE
+# nothing rendered them: 78 unique release-please-config.json among 79 repos,
+# 17 dependabot.yml variants among 72, and .github/release.yml simply absent
+# from 45. They live outside .github/workflows/, which is why the stage is
+# path-shaped.
+#
+# `none` opts a repo out entirely, and opting out renders NO FILE rather than
+# an empty one. That is the escape hatch for a config that is deliberately
+# bespoke — StoryMint's per-target Swift directories, curtaincall's permanent
+# javax-namespace JAXB hold — and it exists so a regeneration cannot quietly
+# revert a hand-written reason (issue #76).
+rm -rf "$STAGE/.frag"
+
+[ "$DEPENDABOT" != "none" ] && render "dependabot-$DEPENDABOT.yml" ".github/dependabot.yml"
+[ "$RELEASE_NOTES" != "none" ] && render release-notes.yml ".github/release.yml"
+if [ "$RELEASE_CONFIG" != "none" ]; then
+  # An unset package_name renders `"package-name": ""`, which release-please
+  # accepts and then tags as an empty component — a broken release that looks
+  # like a working config. Fail here instead, where the fix is one fleet.json
+  # line.
+  [ -n "$PACKAGE_NAME" ] || { echo "::error::$REPO: release_config is on but package_name is unset in fleet.json"; exit 1; }
+  render release-please-config.json "release-please-config.json"
+  # extra-files is a LIST, so it cannot be a sed placeholder. The template
+  # carries the shared object entries (the six manifest/server/plugin paths
+  # every MCP repo stamps); jq appends this repo's plain version files. Done
+  # with jq rather than string surgery so a bad value fails here instead of
+  # shipping a release-please-config.json that silently does not parse — which
+  # release-please reports by skipping the repo, not by failing.
+  if [ -n "$VERSION_FILES" ]; then
+    RPC="$STAGE/release-please-config.json"
+    jq --arg vf "$VERSION_FILES" \
+      '.packages["."]["extra-files"] += ($vf | split(",") | map(select(length > 0)))' \
+      "$RPC" > "$RPC.tmp" && mv "$RPC.tmp" "$RPC"
+  fi
+fi
 
 if [ -n "$ONLY" ]; then
   # Filter AFTER staging so the name is validated against what this repo
   # actually gets — `--only ci` on a custom-CI repo is an error, not a no-op.
-  [ -f "$STAGE/$ONLY.yml" ] || { echo "::error::--only $ONLY: not in this repo's stub set ($(cd "$STAGE" && ls | tr '\n' ' '))"; exit 1; }
-  find "$STAGE" -type f ! -name "$ONLY.yml" -delete
+  #
+  # Stubs are now identified by NAME (basename minus extension) rather than
+  # filename, because the extension is no longer always .yml and the same name
+  # can only appear once across the stage. Matching a bare prefix would make
+  # `--only release-please` ambiguous with release-please-config, so the
+  # comparison is on the whole name.
+  keep=""
+  while IFS= read -r f; do
+    base="${f##*/}"; name="${base%.*}"
+    [ "$name" = "$ONLY" ] && keep="$f"
+  done < <(cd "$STAGE" && find . -type f | sed 's|^\./||')
+  if [ -z "$keep" ]; then
+    echo "::error::--only $ONLY: not in this repo's stub set ($(cd "$STAGE" && find . -type f | sed 's|^\./||' | sort | tr '\n' ' '))"
+    exit 1
+  fi
+  while IFS= read -r f; do
+    [ "$f" = "$keep" ] || rm -f "$STAGE/$f"
+  done < <(cd "$STAGE" && find . -type f | sed 's|^\./||')
+  find "$STAGE" -type d -empty -delete
+  ONLY_PATH="$keep"
 fi
 
 if [ "$EXECUTE" != "--check" ] && [ "$EXECUTE" != "--render" ] && [ "$EXECUTE" != "--pr-body" ]; then
-  echo "=== $REPO  (pat=$PAT_SECRET ci=$CI_MODE release=$RELEASE_MODE lockfix=${LOCKFIX:-none} connector=${CONNECTOR:-no} fly=${FLY_DIR:-no}) ==="
-  for f in "$STAGE"/*; do echo "--- $(basename "$f")"; cat "$f"; done
+  echo "=== $REPO  (pat=$PAT_SECRET ci=$CI_MODE release=$RELEASE_MODE lockfix=${LOCKFIX:-none} connector=${CONNECTOR:-no} fly=${FLY_DIR:-no} dependabot=$DEPENDABOT) ==="
+  while IFS= read -r f; do echo "--- $f"; cat "$STAGE/$f"; done \
+    < <(cd "$STAGE" && find . -type f | sed 's|^\./||' | sort)
 fi
 
 # The PR body --execute posts. A function rather than an inline block so
@@ -205,7 +282,7 @@ fi
 # only shows up as a puzzled reviewer in someone else's repo.
 pr_body() {
   if [ -n "$ONLY" ]; then
-    echo "Single-stub sync: regenerates \`.github/workflows/$ONLY.yml\` from fleet.json and the current template. Other workflow files are untouched."
+    echo "Single-stub sync: regenerates \`$ONLY_PATH\` from fleet.json and the current template. Other files are untouched."
   else
     echo "Replaces vendored pipeline workflows with thin stubs calling chrischall/workflows@main."
   fi
@@ -244,7 +321,10 @@ if [ "$EXECUTE" = "--render" ]; then
   # never sees a real value, so a placeholder that renders wrong for a specific
   # repo's config gets through it.
   mkdir -p "$DEST"
-  cp "$STAGE"/* "$DEST"/
+  # `cp -R "$STAGE"/. ` rather than `"$STAGE"/*`: the stage has directories
+  # now, and a glob copy would flatten .github/workflows/ into $DEST or miss
+  # dotfile-prefixed directories entirely.
+  cp -R "$STAGE"/. "$DEST"/
   exit 0
 fi
 
@@ -253,13 +333,16 @@ if [ "$EXECUTE" = "--check" ]; then
   # what the repo actually has, and report. Opens nothing. Exit 1 on drift so a
   # scheduled run can fail loudly instead of a future sweep reverting the repo.
   drift=0; unknown=0
-  for f in "$STAGE"/*; do
-    name=$(basename "$f")
+  while IFS= read -r name; do
+    f="$STAGE/$name"
     # A failed API call is NOT a missing file. Conflating them makes every
     # auth blip, rate-limit, or network hiccup look like a repo that lost a
     # workflow — which, once --check is scheduled (#76), is a false alarm that
     # trains you to ignore it. 404 means missing; anything else means unknown.
-    if ! raw=$(gh api "repos/$REPO/contents/.github/workflows/$name" --jq '.content' 2>"$WORK/gh.err"); then
+    # $name is already repo-relative, so this addresses .github/dependabot.yml
+    # and release-please-config.json as readily as a workflow. Asking for the
+    # wrong directory would 404 and report a correct repo as MISSING a file.
+    if ! raw=$(gh api "repos/$REPO/contents/$name" --jq '.content' 2>"$WORK/gh.err"); then
       if grep -q "HTTP 404" "$WORK/gh.err"; then
         echo "MISSING  $REPO/$name"; drift=1
       else
@@ -308,7 +391,7 @@ if [ "$EXECUTE" = "--check" ]; then
       diff <(printf '%s\n' "$actual") <(printf '%s\n' "$want") | sed -n '1,20{s/^/    /;p;}' || true
       drift=1
     fi
-  done
+  done < <(cd "$STAGE" && find . -type f | sed 's|^\./||' | sort)
   # Distinct exit codes so a scheduled run can tell "this repo drifted" (1)
   # from "I could not find out" (2) — they need different responses.
   [ "$unknown" = 1 ] && exit 2
@@ -329,14 +412,20 @@ done
 gh repo clone "$REPO" "$WORK/clone" -- --depth 1 --quiet
 cd "$WORK/clone"
 git checkout -b "$BRANCH"
-mkdir -p .github/workflows
-cp "$STAGE"/* .github/workflows/
+# Copy the staged TREE over the clone: the stage is already repo-shaped, so
+# each file lands where the consumer keeps it (.github/workflows/, .github/,
+# or the repo root) instead of everything being dumped into one directory.
+cp -R "$STAGE"/. .
 # Files not in the stub set are intentionally left untouched (custom ci.yml,
 # deploy workflows, release workflows for custom repos). claude.yml IS in the
 # stub set as of the reusable-claude rollout — a repo's local copy is replaced,
 # which is the point: every hand-copied version checks out the default branch
 # on `issue_comment` instead of the PR, and runs for any commenter.
-git add .github/workflows
+# Add exactly the paths we rendered. `git add .` would sweep up anything else
+# in the clone, and `git add .github/workflows` can no longer see the repo-root
+# and .github/ stubs.
+while IFS= read -r f; do git add -- "$f"; done \
+  < <(cd "$STAGE" && find . -type f | sed 's|^\./||')
 if git diff --cached --quiet; then
   echo "$REPO already converted — nothing to do."
   exit 0

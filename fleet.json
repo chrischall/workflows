@@ -13,163 +13,247 @@
     "lockfix": "",
     "java_version": "21",
     "connector": "",
-    "fly_dir": ""
+    "fly_dir": "",
+    "dependabot": "npm",
+    "release_config": "mcp",
+    "release_notes": "on",
+    "package_name": "",
+    "release_type": "node",
+    "version_files": ""
   },
   "repos": [
     {
-      "repo": "chrischall/freshbooks-mcp"
+      "repo": "chrischall/freshbooks-mcp",
+      "package_name": "@chrischall/freshbooks-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/jobber-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "@chrischall/jobber-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/housecallpro-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "@chrischall/housecallpro-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/groupon-mcp"
+      "repo": "chrischall/groupon-mcp",
+      "package_name": "groupon-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/onthecheap-mcp"
+      "repo": "chrischall/onthecheap-mcp",
+      "package_name": "onthecheap-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/zola-mcp"
+      "repo": "chrischall/zola-mcp",
+      "package_name": "zola-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/artsonia-mcp"
+      "repo": "chrischall/artsonia-mcp",
+      "package_name": "artsonia-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/canvas-parent-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "canvas-parent-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/compass-mcp"
+      "repo": "chrischall/compass-mcp",
+      "package_name": "compass-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/creditkarma-mcp"
+      "repo": "chrischall/creditkarma-mcp",
+      "package_name": "creditkarma-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/gemini-mcp"
+      "repo": "chrischall/gemini-mcp",
+      "package_name": "@chrischall/gemini-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/gogcli-mcp",
       "connector": "true",
-      "fly_dir": "fly-gog-runner"
+      "fly_dir": "fly-gog-runner",
+      "dependabot": "none",
+      "release_config": "none"
     },
     {
-      "repo": "chrischall/homes-mcp"
+      "repo": "chrischall/homes-mcp",
+      "package_name": "homes-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/honeybook-mcp"
+      "repo": "chrischall/honeybook-mcp",
+      "package_name": "honeybook-mcp",
+      "version_files": "src/index.ts"
     },
     {
       "repo": "chrischall/infinitecampus-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "infinitecampus-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/musescore-mcp"
+      "repo": "chrischall/musescore-mcp",
+      "package_name": "musescore-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/onehome-mcp"
+      "repo": "chrischall/onehome-mcp",
+      "package_name": "onehome-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/opentable-mcp"
+      "repo": "chrischall/opentable-mcp",
+      "package_name": "opentable-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/redfin-mcp"
+      "repo": "chrischall/redfin-mcp",
+      "package_name": "redfin-mcp",
+      "version_files": "src/index.ts"
     },
     {
       "repo": "chrischall/resy-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "resy-mcp",
+      "version_files": "src/index.ts,src/auth-fetchproxy.ts"
     },
     {
-      "repo": "chrischall/setlist-mcp"
+      "repo": "chrischall/setlist-mcp",
+      "package_name": "setlist-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/signupgenius-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "signupgenius-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/splitwise-mcp"
+      "repo": "chrischall/splitwise-mcp",
+      "package_name": "splitwise-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/tempo-api-mcp"
+      "repo": "chrischall/tempo-api-mcp",
+      "package_name": "tempo-api-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/zillow-mcp"
+      "repo": "chrischall/zillow-mcp",
+      "package_name": "zillow-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/musicbrainz-mcp"
+      "repo": "chrischall/musicbrainz-mcp",
+      "package_name": "musicbrainz-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/myatriumhealth-mcp"
+      "repo": "chrischall/myatriumhealth-mcp",
+      "package_name": "@chrischall/myatriumhealth-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/app-store-connect-mcp",
-      "conventions_hint": "The version appears in several files and must stay in sync; JWT/auth handling and stdio logging rules are in CLAUDE.md."
+      "conventions_hint": "The version appears in several files and must stay in sync; JWT/auth handling and stdio logging rules are in CLAUDE.md.",
+      "package_name": "@chrischall/app-store-connect-mcp",
+      "version_files": "src/index.ts"
     },
     {
       "repo": "chrischall/skylight-mcp",
       "test_command": "npm run test:coverage",
-      "ci_dispatch": "true"
+      "ci_dispatch": "true",
+      "package_name": "skylight-mcp",
+      "version_files": "src/index.ts"
     },
     {
       "repo": "chrischall/evite-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "evite-mcp",
+      "version_files": "src/index.ts,src/auth.ts"
     },
     {
       "repo": "chrischall/opencode-copilot-plugin",
       "ci": "custom",
       "release": "custom",
       "rereview_on_push": "true",
-      "conventions_hint": "Reverse-engineered protocol client: AGENTS.md is the source of truth for why logic lives in the proxy rather than in opencode hooks — a change moving trimming back into an opencode hook needs evidence that hook now works. Prompt text in fenced.ts/plugin.ts must stay soft: no fake role turns, no shouted absolutes (M365's Disengaged filter tracks prompt shape). Never add code that deletes a Copilot Studio agent. Tests must never require network, credentials, or live M365. Access tokens must never be logged or echoed in an error."
+      "conventions_hint": "Reverse-engineered protocol client: AGENTS.md is the source of truth for why logic lives in the proxy rather than in opencode hooks \u2014 a change moving trimming back into an opencode hook needs evidence that hook now works. Prompt text in fenced.ts/plugin.ts must stay soft: no fake role turns, no shouted absolutes (M365's Disengaged filter tracks prompt shape). Never add code that deletes a Copilot Studio agent. Tests must never require network, credentials, or live M365. Access tokens must never be logged or echoed in an error.",
+      "release_config": "none"
     },
     {
       "repo": "chrischall/ofw-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "ofw-mcp",
+      "version_files": "src/index.ts"
     },
     {
       "repo": "chrischall/ioffice-mcp",
-      "node_version": "22"
+      "node_version": "22",
+      "package_name": "ioffice-mcp",
+      "version_files": "src/index.ts"
     },
     {
       "repo": "chrischall/mcp-utils",
-      "conventions_hint": "Shared library: README.md documents the core-vs-optional-subpath module boundary; this package handles bearer tokens — error messages must never echo a credential; public API changes need tests.",
+      "conventions_hint": "Shared library: README.md documents the core-vs-optional-subpath module boundary; this package handles bearer tokens \u2014 error messages must never echo a credential; public API changes need tests.",
       "ci": "custom",
-      "release": "custom"
+      "release": "custom",
+      "release_config": "none"
     },
     {
       "repo": "chrischall/realty-mcp",
-      "ci": "custom"
+      "ci": "custom",
+      "release_config": "none"
     },
     {
       "repo": "chrischall/fetchproxy",
       "ci": "custom",
-      "release": "custom"
+      "release": "custom",
+      "release_config": "none"
     },
     {
       "repo": "chrischall/apple-swift-mcp",
       "ci": "custom",
-      "release": "custom"
+      "release": "custom",
+      "dependabot": "actions",
+      "release_config": "none"
     },
     {
       "repo": "chrischall/outlook-to-pdf",
       "ci": "custom",
-      "release": "custom"
+      "release": "custom",
+      "dependabot": "actions",
+      "release_config": "none"
     },
     {
       "repo": "chrischall/swift-mail-automation",
       "ci": "custom",
-      "release": "custom"
+      "release": "custom",
+      "dependabot": "actions",
+      "release_config": "none"
     },
     {
       "repo": "chrischall/swift-notes-automation",
       "ci": "custom",
-      "release": "custom"
+      "release": "custom",
+      "dependabot": "actions",
+      "release_config": "none"
     },
     {
-      "repo": "chrischall/tripadvisor-mcp"
+      "repo": "chrischall/tripadvisor-mcp",
+      "package_name": "@chrischall/tripadvisor-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "nullnet-app/curtaincall",
@@ -177,171 +261,249 @@
       "ci": "custom",
       "release": "custom",
       "conventions_hint": "TDD project (behavior changes ship with tests; never weaken assertions); Hibernate Envers auditing rules; one shared test context; Flyway owns the schema. All in CLAUDE.md.",
-      "lockfix": "gradle"
+      "lockfix": "gradle",
+      "dependabot": "none",
+      "release_config": "none"
     },
     {
       "repo": "nullnet-app/encore",
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "custom",
       "release": "custom",
-      "conventions_hint": "TDD project; XcodeGen-generated project rules; setlist.fm API-terms constraints; secrets handling. All in CLAUDE.md."
+      "conventions_hint": "TDD project; XcodeGen-generated project rules; setlist.fm API-terms constraints; secrets handling. All in CLAUDE.md.",
+      "dependabot": "actions",
+      "release_config": "none"
     },
     {
       "repo": "nullnet-app/PassMint",
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "custom",
       "release": "custom",
-      "conventions_hint": "PR labeling, testing expectations, and security posture are in CLAUDE.md."
+      "conventions_hint": "PR labeling, testing expectations, and security posture are in CLAUDE.md.",
+      "dependabot": "none",
+      "release_config": "none"
     },
     {
       "repo": "nullnet-app/StoryMint",
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "custom",
-      "release": "custom"
+      "release": "custom",
+      "dependabot": "none",
+      "release_config": "none"
     },
     {
       "repo": "nullnet-app/aikidsbook-backend",
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "custom",
-      "release": "none"
+      "release": "none",
+      "dependabot": "actions",
+      "release_config": "none"
     },
     {
       "repo": "nullnet-app/nullnet",
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "none",
-      "release": "none"
+      "release": "none",
+      "dependabot": "actions",
+      "release_config": "none"
     },
     {
       "repo": "nullnet-app/aikidsbook",
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "none",
-      "release": "none"
+      "release": "none",
+      "dependabot": "actions",
+      "release_config": "none"
     },
     {
-      "repo": "chrischall/viator-mcp"
+      "repo": "chrischall/viator-mcp",
+      "package_name": "@chrischall/viator-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/tock-mcp"
+      "repo": "chrischall/tock-mcp",
+      "package_name": "tock-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/getyourguide-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "getyourguide-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/untappd-mcp",
-      "lockfix": ""
+      "lockfix": "",
+      "package_name": "untappd-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/easytable-mcp"
+      "repo": "chrischall/easytable-mcp",
+      "package_name": "easytable-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/booli-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "@chrischall/booli-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/alltrails-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "alltrails-mcp",
+      "version_files": "src/index.ts"
     },
     {
-      "repo": "chrischall/etix-mcp"
+      "repo": "chrischall/etix-mcp",
+      "package_name": "etix-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/flightaware-mcp"
+      "repo": "chrischall/flightaware-mcp",
+      "package_name": "@chrischall/flightaware-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/hemnet-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "hemnet-mcp",
+      "version_files": "src/index.ts"
     },
     {
       "repo": "chrischall/mcp-marketplace",
       "ci": "custom",
       "release": "custom",
-      "conventions_hint": "This is a Claude Code marketplace CATALOG, not application code. `.claude-plugin/marketplace.json` is GENERATED by `scripts/regen.py` and must never be hand-edited; it must stay canonically formatted (`json.dumps(indent=2)` + trailing newline — CI enforces this). Plugin `name`s must be unique across the catalog. Each plugin `source` is either `{source: github, repo}` for a repo-root plugin or `{source: git-subdir, url, path}` for a monorepo subpackage — the `github` source type has no `path` field. `metadata.version` is the catalog's own version (bumped only by release-please); per-plugin `version`s mirror their upstream source repos and are carried over by regen.py. Scrutinize any change to scripts/regen.py or scripts/validate.py, and any plugin source pointing at an unexpected repo."
+      "conventions_hint": "This is a Claude Code marketplace CATALOG, not application code. `.claude-plugin/marketplace.json` is GENERATED by `scripts/regen.py` and must never be hand-edited; it must stay canonically formatted (`json.dumps(indent=2)` + trailing newline \u2014 CI enforces this). Plugin `name`s must be unique across the catalog. Each plugin `source` is either `{source: github, repo}` for a repo-root plugin or `{source: git-subdir, url, path}` for a monorepo subpackage \u2014 the `github` source type has no `path` field. `metadata.version` is the catalog's own version (bumped only by release-please); per-plugin `version`s mirror their upstream source repos and are carried over by regen.py. Scrutinize any change to scripts/regen.py or scripts/validate.py, and any plugin source pointing at an unexpected repo.",
+      "dependabot": "actions",
+      "release_config": "none"
     },
     {
       "repo": "chrischall/mcp-connector",
       "test_command": "npm run typecheck && npm test",
-      "conventions_hint": "Shared connector harness: every hosted Cloudflare Worker connector in the fleet is built on it and pins it, so a change here is a change to all of them — see CLAUDE.md's blast-radius section. Peer deps (workers-oauth-provider, agents, @modelcontextprotocol/sdk) are provided by the consumer; bumping a peer range is a breaking change for consumers still on the old one.",
+      "conventions_hint": "Shared connector harness: every hosted Cloudflare Worker connector in the fleet is built on it and pins it, so a change here is a change to all of them \u2014 see CLAUDE.md's blast-radius section. Peer deps (workers-oauth-provider, agents, @modelcontextprotocol/sdk) are provided by the consumer; bumping a peer range is a breaking change for consumers still on the old one.",
       "ci": "standard",
-      "release": "custom"
+      "release": "custom",
+      "release_config": "none"
     },
     {
       "repo": "chrischall/swift-photos-automation",
       "ci": "custom",
-      "release": "custom"
+      "release": "custom",
+      "dependabot": "actions",
+      "release_config": "none"
     },
     {
-      "repo": "chrischall/vibo-mcp"
+      "repo": "chrischall/vibo-mcp",
+      "package_name": "vibo-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/workday-mcp"
+      "repo": "chrischall/workday-mcp",
+      "package_name": "workday-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "nullnet-app/allotmint",
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "custom",
       "release": "custom",
-      "conventions_hint": "TDD project (every behavior ships with a failing test first; never weaken assertions). Pure deterministic KMP engine in :shared/commonMain — no java.*/platform APIs and no platform RNG (seeded SplitMix64 only), except the LP solver's JVM actual. Conventional-Commit PR titles (squash-merged → release-please). Design spec: docs/superpowers/specs/2026-06-16-allotmint-engine-design.md."
+      "conventions_hint": "TDD project (every behavior ships with a failing test first; never weaken assertions). Pure deterministic KMP engine in :shared/commonMain \u2014 no java.*/platform APIs and no platform RNG (seeded SplitMix64 only), except the LP solver's JVM actual. Conventional-Commit PR titles (squash-merged \u2192 release-please). Design spec: docs/superpowers/specs/2026-06-16-allotmint-engine-design.md.",
+      "dependabot": "gradle",
+      "release_config": "none"
     },
     {
       "repo": "chrischall/sixflags-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "sixflags-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/kiaaccess-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "kiaaccess-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/simplisafe-mcp"
+      "repo": "chrischall/simplisafe-mcp",
+      "package_name": "simplisafe-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/eventbrite-mcp"
+      "repo": "chrischall/eventbrite-mcp",
+      "package_name": "@chrischall/eventbrite-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/crowntowncompost-mcp"
+      "repo": "chrischall/crowntowncompost-mcp",
+      "package_name": "crowntowncompost-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/myersparkathleticzone-mcp"
+      "repo": "chrischall/myersparkathleticzone-mcp",
+      "package_name": "myersparkathleticzone-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/maxpreps-mcp"
+      "repo": "chrischall/maxpreps-mcp",
+      "package_name": "maxpreps-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/thumbtack-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "@chrischall/thumbtack-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/angi-mcp"
+      "repo": "chrischall/angi-mcp",
+      "package_name": "@chrischall/angi-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/pickuppatrol-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "@chrischall/pickuppatrol-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/accessoticketing-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "@chrischall/accessoticketing-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/myhotlunchbox-mcp"
+      "repo": "chrischall/myhotlunchbox-mcp",
+      "package_name": "myhotlunchbox-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/schoolpass-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "schoolpass-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/simplepractice-mcp"
+      "repo": "chrischall/simplepractice-mcp",
+      "package_name": "simplepractice-mcp",
+      "version_files": "src/version.ts"
     },
     {
-      "repo": "chrischall/alphaportal-mcp"
+      "repo": "chrischall/alphaportal-mcp",
+      "package_name": "alphaportal-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/remind-mcp",
-      "test_command": "npm run test:coverage"
+      "test_command": "npm run test:coverage",
+      "package_name": "@chrischall/remind-mcp",
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/mcp-host",
       "node_version": "22",
-      "release": "custom"
+      "release": "custom",
+      "release_config": "none"
     }
   ]
 }
