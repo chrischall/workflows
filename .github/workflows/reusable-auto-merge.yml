@@ -77,9 +77,19 @@ jobs:
       #
       # Nobody can fix it at the source, either. Dependabot composes the body
       # from upstream release notes; there is no author to ask and no reviewer
-      # who can edit it. Measured over 144 merged dependabot PRs across 12
-      # repos: 2 do not parse (1 as written, 1 only once GitHub hard-wraps the
-      # body at 72 columns on merge) — 1.4%, forever, across ~81 repos.
+      # who can edit it.
+      #
+      # RARE, and the rate is worth stating honestly because it is the whole
+      # argument for leaving this off by default. Measured over 536 merged
+      # dependabot PRs, reconstructing each repo's message from ITS OWN squash
+      # settings (53 repos on COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, 32 on
+      # PR_TITLE/PR_BODY, one mixed — so "the PR title and body" is a message
+      # most of the fleet never ships, and measuring that way gave a wrong
+      # answer first time): 5 do not parse, 4 of which carry no conventional
+      # type at all and are ignored by release-please regardless. That leaves
+      # ONE real case in 536, and it is a hidden type, so nothing has actually
+      # been lost yet. What makes it worth catching is not the rate but the
+      # failure: silent, and unfixable by hand once it lands on a `fix(deps)`.
       #
       # So the message is replaced HERE, where we still own it, and only when
       # it provably would not have parsed. FAIL-SAFE BY CONSTRUCTION: every
