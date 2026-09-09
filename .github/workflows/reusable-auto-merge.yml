@@ -21,6 +21,19 @@ name: Reusable auto-merge
 
 on:
   workflow_call:
+    inputs:
+      sanitize_release_message:
+        description: >-
+          Replace a dependabot squash BODY that release-please could not parse,
+          so the bump is not silently dropped from the release. Off by default:
+          this is the fleet's merge path, every consumer pins `@main`, and there
+          is no staged rollout — so it goes behind an opt-in, gets flipped on
+          one repo, and is rolled out only once that repo has merged a
+          dependabot PR through it. The step is fail-safe when on (any
+          uncertainty arms exactly as before), and a complete no-op when off.
+        type: boolean
+        required: false
+        default: false
     secrets:
       release_pat:
         description: PAT that arms `gh pr merge --auto`
@@ -45,12 +58,150 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.user.login == 'dependabot[bot]'
     steps:
+      # WHY A BOT PR NEEDS THIS AND A HUMAN ONE DOES NOT.
+      #
+      # release-please reads the squash message with `@conventional-commits
+      # /parser`, a strict PEG grammar, and DROPS a commit it cannot parse:
+      # no changelog entry, no version bump, and a green workflow. The guard
+      # for that lives in `reusable-pr-auto-review.yml`, and the review job is
+      # gated on `user_type == 'User'` — so it never runs on a bot. Dependabot
+      # PRs go straight to CI and this arm, past the only thing that would
+      # notice.
+      #
+      # That did not matter while dependabot bumps were `chore(deps)`, a
+      # hidden type whose drop costs a line nobody reads. It matters now: the
+      # dependabot stub sets `prefix: fix` for RUNTIME dependencies precisely
+      # so a bump that changes what ships cuts a patch release and reaches
+      # consumers. A `fix(deps)` release-please silently skips is that promise
+      # quietly not kept.
+      #
+      # Nobody can fix it at the source, either. Dependabot composes the body
+      # from upstream release notes; there is no author to ask and no reviewer
+      # who can edit it. Measured over 144 merged dependabot PRs across 12
+      # repos: 2 do not parse (1 as written, 1 only once GitHub hard-wraps the
+      # body at 72 columns on merge) — 1.4%, forever, across ~81 repos.
+      #
+      # So the message is replaced HERE, where we still own it, and only when
+      # it provably would not have parsed. FAIL-SAFE BY CONSTRUCTION: every
+      # path that cannot decide — no `gh`, no node, a failed install, an
+      # unreadable PR, a replacement that itself does not parse — falls
+      # through to the arm command exactly as it was before this step existed.
+      # The worst outcome of a bug here is today's behaviour.
+      - name: Replace a dependabot squash message release-please would drop
+        id: relmsg
+        if: inputs.sanitize_release_message
+        env:
+          GH_TOKEN: ${{ secrets.release_pat }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          say() { echo "::notice::$1"; }
+          skip() { say "$1"; exit 0; }
+
+          repo_json=$(gh api "repos/$REPO" 2>/dev/null || true)
+          pr_json=$(gh api "repos/$REPO/pulls/$PR" 2>/dev/null || true)
+          commits_json=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate 2>/dev/null || true)
+          [ -n "$repo_json" ] && [ -n "$pr_json" ] && [ -n "$commits_json" ] \
+            || skip "could not read the PR or its squash settings; arming unchanged"
+
+          sq_title=$(printf '%s' "$repo_json" | jq -r '.squash_merge_commit_title // ""' 2>/dev/null || true)
+          sq_body=$(printf '%s' "$repo_json" | jq -r '.squash_merge_commit_message // ""' 2>/dev/null || true)
+          [ -n "$sq_title" ] || skip "no squash title setting; arming unchanged"
+
+          # The same reconstruction `reusable-pr-auto-review.yml` documents:
+          # the fleet is split across PR_TITLE/PR_BODY and
+          # COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, so "the PR title and body" is
+          # a message half the fleet never ships.
+          MESSAGE=$(jq -rn --argjson pr "$pr_json" --argjson commits "$commits_json" \
+            --arg sqt "$sq_title" --arg sqb "$sq_body" '
+              ($commits | map(.commit.message)) as $msgs
+              | (if $sqt == "PR_TITLE" then $pr.title
+                 elif ($msgs | length) == 1 then ($msgs[0] | split("\n")[0])
+                 else $pr.title end) as $title
+              | (if   $sqb == "PR_BODY"         then ($pr.body // "")
+                 elif $sqb == "COMMIT_MESSAGES" then ($msgs | join("\n\n"))
+                 else "" end) as $body
+              | $title + "\n\n" + $body' 2>/dev/null || true)
+          [ -n "$MESSAGE" ] || skip "could not reconstruct the squash message; arming unchanged"
+
+          SUBJECT=${MESSAGE%%$'\n'*}
+
+          PARSER_DIR="${RUNNER_TEMP:-/tmp}/relmsg-parser"
+          if [ ! -d "$PARSER_DIR/node_modules/@conventional-commits/parser" ]; then
+            mkdir -p "$PARSER_DIR" || skip "could not stage the parser; arming unchanged"
+            # `--ignore-scripts`: this runs after a checkout that persists a
+            # credential, so no package lifecycle script gets to see it.
+            (cd "$PARSER_DIR" && npm init -y >/dev/null 2>&1 \
+              && npm install --no-save --no-audit --no-fund --ignore-scripts \
+                   '@conventional-commits/parser@0.4.1' >/dev/null 2>&1) || true
+          fi
+          [ -d "$PARSER_DIR/node_modules/@conventional-commits/parser" ] \
+            || skip "could not install the parser; arming unchanged"
+
+          # Checked as written AND hard-wrapped at 72 columns, because that is
+          # what GitHub does to the body when it squashes — the wrap is what
+          # puts a newline where the grammar wanted `)`, and it is how the
+          # majority of these fail.
+          parses() {
+            printf '%s' "$1" > "$PARSER_DIR/msg.txt" || return 1
+            (cd "$PARSER_DIR" && node --input-type=module -e '
+              const { parser } = await import("@conventional-commits/parser");
+              const { readFileSync } = await import("node:fs");
+              const raw = readFileSync("msg.txt", "utf8");
+              const fold = (s) => s.split("\n").flatMap((line) => {
+                if (line.length <= 72) return [line];
+                const out = []; let cur = "";
+                for (const word of line.split(" ")) {
+                  if (cur && (cur + " " + word).length > 72) { out.push(cur); cur = word; }
+                  else cur = cur ? cur + " " + word : word;
+                }
+                if (cur) out.push(cur);
+                return out;
+              }).join("\n");
+              parser(raw); parser(fold(raw));
+            ' >/dev/null 2>&1)
+          }
+
+          if parses "$MESSAGE"; then
+            exit 0
+          fi
+
+          # It would have been dropped. Replace the BODY only — the subject is
+          # the release decision and is left byte for byte. The notice carries
+          # no parenthesis of its own and is verified below rather than
+          # assumed, because a replacement that also failed to parse would be
+          # this step causing the very loss it exists to prevent.
+          NOTICE="Body omitted by the merge automation: as written it is not parseable as a conventional commit, and release-please would have dropped this bump from the release. The full text is on $PR_URL"
+          if parses "$SUBJECT"$'\n\n'"$NOTICE"; then
+            BODY="$NOTICE"
+          elif parses "$SUBJECT"; then
+            BODY=""
+          else
+            skip "even the subject alone does not parse; arming unchanged and leaving it to be seen"
+          fi
+
+          {
+            echo "override=true"
+            echo "subject<<RELMSG_EOF"; echo "$SUBJECT"; echo "RELMSG_EOF"
+            echo "body<<RELMSG_EOF"; echo "$BODY"; echo "RELMSG_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "::warning::This dependabot PR's squash body would not parse, so release-please would have dropped the bump entirely. Merging with the body replaced by a pointer to the PR; the subject is untouched. See chrischall/workflows#266."
+
       - name: Arm auto-merge for dependabot
         env:
           GH_TOKEN: ${{ secrets.release_pat }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          OVERRIDE: ${{ steps.relmsg.outputs.override }}
+          SUBJECT: ${{ steps.relmsg.outputs.subject }}
+          BODY: ${{ steps.relmsg.outputs.body }}
         run: |
-          if gh pr merge --auto --squash "$PR_URL"; then exit 0; fi
+          # Unchanged for every PR the previous step did not override, which is
+          # ~98.6% of them — same command, same flags, same idempotence.
+          if [ "${OVERRIDE:-}" = "true" ]; then
+            if gh pr merge --auto --squash --subject "$SUBJECT" --body "$BODY" "$PR_URL"; then exit 0; fi
+          elif gh pr merge --auto --squash "$PR_URL"; then exit 0; fi
           state="$(gh pr view "$PR_URL" --json state --jq .state 2>/dev/null || echo UNKNOWN)"
           if [ "$state" = "MERGED" ]; then
             echo "PR already merged (instant-merge race) — treating as success."
