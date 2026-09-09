@@ -7,8 +7,28 @@
       #    not compatible with the 'org.jetbrains.kotlin.multiplatform' plugin
       #    since AGP 9.0."
       #
-      # This is a KMP project, so AGP 9 is unavailable — and two other bumps
-      # turn out to depend on it:
+      # This is NOT "wait for upstream". JetBrains ships a supported migration:
+      # https://kotlinlang.org/docs/multiplatform/multiplatform-project-agp-9-migration.html
+      #
+      # shared/build.gradle.kts applies BOTH kotlin.multiplatform and
+      # android.library — the exact pair AGP 9 rejects. The migration swaps
+      # android.library for `com.android.kotlin.multiplatform.library` and
+      # replaces the module's `android {}` block with `kotlin.androidLibrary {}`.
+      # The android/ app module keeps com.android.application; it is not a KMP
+      # module. AGP 9 also wants Gradle 9.1+, which is why these ceilings move
+      # as a set.
+      #
+      # So this is SCHEDULED WORK, not a blocked upgrade — lift the whole
+      # fragment when that migration is done rather than waiting for an
+      # upstream event that has already happened. Two unknowns to check first:
+      # SKIE's AGP 9 support (shared/ depends on it) and whether the migration
+      # disturbs the iOS framework output.
+      #
+      # `android.enableLegacyVariantApi=true` in gradle.properties is a
+      # documented short-term escape hatch, but it is removed in AGP 10, so it
+      # buys time rather than solving anything.
+      #
+      # Two other bumps depend on the same migration:
       #
       #   Gradle >= 9.6  AGP 8.x uses org.gradle.api.problems.internal.
       #                  InternalProblems, removed in 9.6.0. Gradle itself

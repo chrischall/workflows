@@ -180,6 +180,17 @@ its coverage provider peer-depend at an exact version, neither half installs.
 That deadlocked 19 repos on 2026-09-07. Listing the exact name scores 1000 and
 pins it. **Wildcards are for reach, exact names are for guarantees.**
 
+**Check whether a "blocked" upgrade is actually scheduled work.** encore's AGP 9
+hold was written as "AGP 9 is incompatible with Kotlin Multiplatform", which is
+true and led to the wrong conclusion — that the ceiling waits on upstream.
+JetBrains ships a
+[documented migration](https://kotlinlang.org/docs/multiplatform/multiplatform-project-agp-9-migration.html):
+swap `com.android.library` for `com.android.kotlin.multiplatform.library` in the
+KMP module and replace its `android {}` block with `kotlin.androidLibrary {}`.
+The error message names the incompatibility, not the remedy, so a hold written
+straight from CI output will understate what is possible. Record the migration
+in the hold, or it reads as indefinite.
+
 **A peer-locked pair must travel together, and a hold is the honest answer when
 it cannot.** Where an upstream constraint makes a bump impossible rather than
 merely undone, record it as a `dependabot_ignore` fragment with the reasoning,
