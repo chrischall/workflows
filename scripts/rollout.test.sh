@@ -856,6 +856,25 @@ done
 # Unset is not neutral either — dependabot INFERS a prefix from recent commit
 # history, which is how this fleet ended up with `chore(deps)`, `build(deps-dev)`
 # and `fix(deps)` simultaneously, with no config anywhere.
+# FAKE/a renders dependabot-actions.yml — the actions-ONLY template, which has
+# no runtime ecosystem at all. Without it the `prefix: "ci"` block in that file
+# is the one copy nothing asserts, and an actions-only repo would be the one
+# place a stray `fix` could cut releases unnoticed.
+DIR="$TMP/actions-only"
+bash "$ROLLOUT" FAKE/a --render "$DIR" --only dependabot >/dev/null 2>&1
+if ruby -ryaml -e '
+    d = YAML.safe_load(File.read(ARGV[0]))
+    u = d["updates"] || []
+    abort "expected only github-actions, got #{u.map { |x| x["package-ecosystem"] }.inspect}" \
+      unless u.map { |x| x["package-ecosystem"] } == ["github-actions"]
+    cm = u[0]["commit-message"] or abort "no commit-message"
+    abort "prefix is #{cm["prefix"].inspect} — that would cut a release" unless cm["prefix"] == "ci"
+  ' "$DIR/.github/dependabot.yml" 2>"$TMP/dd3.err"; then
+  ok "DD: the actions-only template keeps bumps hidden (ci)"
+else
+  bad "DD: actions-only" "$(cat "$TMP/dd3.err")"
+fi
+
 for spec in "paths:npm" "gradle:gradle"; do
   dir="${spec%%:*}"; eco="${spec##*:}"
   f="$TMP/$dir/.github/dependabot.yml"
