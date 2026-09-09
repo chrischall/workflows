@@ -32,7 +32,14 @@
       - dependency-name: com.android.library
         update-types:
           - version-update:semver-major
-      - dependency-name: gradle
+      # `gradle-wrapper`, NOT `gradle`. Dependabot names the wrapper by that
+      # exact string — its branch is dependabot/gradle/gradle-wrapper-9.7.1 —
+      # and a `gradle` rule matches nothing, which is silent: the config is
+      # valid and the ignore simply never fires. Proven the hard way: the first
+      # version of this fragment used `gradle`, and while the AGP and
+      # compose-bom rules closed encore#160 and #159 immediately, #158 stayed
+      # open.
+      - dependency-name: gradle-wrapper
         versions:
           - ">=9.6"
       - dependency-name: androidx.compose:compose-bom
