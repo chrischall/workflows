@@ -277,6 +277,91 @@ jobs:
           node-version: ${{ inputs.node-version }}
           cache: npm
 
+      # release-please parses the WHOLE squash message with a strict PEG
+      # parser, and a squash message is this PR's title plus its body. When the
+      # parser throws, the commit is dropped from the release outright: no
+      # changelog entry, no version bump, and a run that says `No commits for
+      # path` about a range that plainly has one. The trigger is usually an
+      # unclosed `(` on a body line — markdown backticks do not protect it,
+      # because the parser does not know what markdown is.
+      #
+      # WARN ONLY, deliberately (workflows#266). A failure here is never a
+      # false positive: it means release-please WILL drop the commit. But
+      # dependabot bodies are generated from upstream release notes, carry
+      # unbalanced parens routinely, and nobody can edit them — and the
+      # dependabot config now sets `prefix: fix` for runtime bumps, which puts
+      # those generated bodies into the set a blocking check would stop. So
+      # this reports and never blocks until that is handled.
+      #
+      # The parser is pinned to the version release-please itself depends on,
+      # so the verdict matches the tool that will read the commit. Every
+      # failure path here exits 0: this step may never be the reason CI is red.
+      - name: Commit message parses the way release-please will read it
+        if: needs.gate.outputs.run == 'true' && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          # Via env, never `${{ }}` inside `run:` — a PR title is attacker-controlled.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -uo pipefail
+          # Only types release-please ACTS on are worth a warning. A subject it
+          # does not recognise is ignored by it anyway, so there is nothing to
+          # lose; a hidden type loses only a line nobody reads.
+          case "$PR_TITLE" in
+            feat*|fix*|perf*|refactor*|docs*|revert*) visible=yes ;;
+            build*|ci*|chore*|test*|style*) visible=no ;;
+            *) echo "not a conventional subject — release-please ignores it either way"; exit 0 ;;
+          esac
+          work="$(mktemp -d)" || exit 0
+          printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$work/msg.txt" || exit 0
+          (
+            cd "$work" \
+              && npm init -y >/dev/null 2>&1 \
+              && npm i --no-save --no-audit --no-fund --silent '@conventional-commits/parser@0.4.1' >/dev/null 2>&1
+          ) || { echo "::notice::commit-message parse check skipped (parser install failed)"; exit 0; }
+          err="$(cd "$work" && node --input-type=module -e '
+            const { parser } = await import("@conventional-commits/parser");
+            const { readFileSync } = await import("node:fs");
+            try { parser(readFileSync("msg.txt", "utf8")); }
+            catch (e) {
+              // Collapse whitespace rather than split on newline: the parser
+              // puts a literal newline INSIDE its message when the offending
+              // token is one, so splitting there throws away the line:column
+              // and the expected-token list, which are the only two parts a
+              // person can act on. NOTE: no apostrophe may appear anywhere in
+              // this script — the whole of it is a shell single-quoted string.
+              process.stdout.write(String(e.message).replace(/\s+/g, " ").trim().slice(0, 300));
+            }
+          ' 2>/dev/null)" || exit 0
+          if [ -z "$err" ]; then
+            echo "commit message parses"
+            exit 0
+          fi
+          if [ "$visible" = yes ]; then
+            echo "::warning::This PR's squash message does not parse, so release-please will DROP it: no changelog entry and no version bump. Parser said: $err. Usually an unclosed '(' on a body line. See chrischall/workflows#266."
+          else
+            echo "::notice::This PR's squash message does not parse ($err), so release-please will drop it. The type is hidden, so nothing ships differently. See chrischall/workflows#266."
+          fi
+          {
+            echo "### Squash message will not parse"
+            echo
+            echo "release-please reads the squash message with \`@conventional-commits/parser\`, and it throws:"
+            echo
+            echo '```'
+            echo "$err"
+            echo '```'
+            echo
+            if [ "$visible" = yes ]; then
+              echo "**This commit will be dropped from the release** — no changelog entry, no version bump."
+            else
+              echo "The type is hidden, so the drop costs nothing this time."
+            fi
+            echo
+            echo "Most often an unclosed \`(\` on a line of the PR body. Balance it or reword. Details: chrischall/workflows#266."
+          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          exit 0
+
       - if: needs.gate.outputs.run == 'true'
         run: npm ci
 
