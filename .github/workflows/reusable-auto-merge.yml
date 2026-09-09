@@ -85,11 +85,20 @@ jobs:
       # settings (53 repos on COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, 32 on
       # PR_TITLE/PR_BODY, one mixed — so "the PR title and body" is a message
       # most of the fleet never ships, and measuring that way gave a wrong
-      # answer first time): 5 do not parse, 4 of which carry no conventional
-      # type at all and are ignored by release-please regardless. That leaves
-      # ONE real case in 536, and it is a hidden type, so nothing has actually
-      # been lost yet. What makes it worth catching is not the rate but the
-      # failure: silent, and unfixable by hand once it lands on a `fix(deps)`.
+      # answer first time): 5 of the 536 do not parse.
+      #
+      # Of those 5, four carry no conventional type at all. release-please
+      # ignores those whatever their body does, so rewriting one would change
+      # a commit message and nothing else. The fifth is `build(deps-dev)`, a
+      # hidden type, which loses a changelog line nobody reads.
+      #
+      # So the step is gated on the TYPE as well as on the parse, using the
+      # same classification `reusable-pr-auto-review.yml` blocks on — a type
+      # release-please acts on, or a `!` whatever the type. On the 536
+      # measured that gate fires ZERO times, and saying so is the point: this
+      # exists for the `fix(deps)` case the `prefix: fix` rollout is about to
+      # create, not for a backlog. What makes it worth having is not the rate
+      # but the failure — silent, and unfixable by hand once it lands.
       #
       # So the message is replaced HERE, where we still own it, and only when
       # it provably would not have parsed. FAIL-SAFE BY CONSTRUCTION: every
@@ -141,6 +150,29 @@ jobs:
           [ -n "$MESSAGE" ] || skip "could not reconstruct the squash message; arming unchanged"
 
           SUBJECT=${MESSAGE%%$'\n'*}
+
+          # Only a type release-please ACTS on is worth rewriting a commit
+          # body for. A subject it does not recognise is ignored whatever the
+          # body does, and a hidden type loses a line nobody reads — in both
+          # cases an override would change the git log and buy nothing.
+          #
+          # The same classification `reusable-pr-auto-review.yml` blocks on,
+          # deliberately, so the two cannot drift into disagreeing about which
+          # commits matter. Nested `if`s rather than `grep -q … && VAR=1` for
+          # its stated reason: a failing `grep` ends an `&&` list non-zero.
+          ACTS_ON=0
+          if printf '%s' "$SUBJECT" | grep -qE '^[a-z]+(\([^)]*\))?!?:'; then
+            if printf '%s' "$SUBJECT" | grep -qE '^[a-z]+(\([^)]*\))?!:'; then
+              ACTS_ON=1                        # breaking, whatever the type
+            else
+              case "$SUBJECT" in
+                feat*|fix*|perf*|revert*|refactor*|docs*) ACTS_ON=1 ;;
+              esac
+            fi
+          fi
+          if [ "$ACTS_ON" -eq 0 ]; then
+            exit 0
+          fi
 
           PARSER_DIR="${RUNNER_TEMP:-/tmp}/relmsg-parser"
           if [ ! -d "$PARSER_DIR/node_modules/@conventional-commits/parser" ]; then
@@ -211,10 +243,10 @@ jobs:
           SUBJECT: ${{ steps.relmsg.outputs.subject }}
           BODY: ${{ steps.relmsg.outputs.body }}
         run: |
-          # Unchanged for every PR the previous step did not override, which
-          # on the measurement above is all but one in 536 — same command, same
-          # flags, same idempotence. The override is the exception, and the
-          # `elif` is the path that has always existed.
+          # Unchanged for every PR the previous step did not override — all
+          # 536 of the measured corpus, since the type gate excludes every one
+          # of the five that did not parse. Same command, same flags, same
+          # idempotence; the `elif` is the path that has always existed.
           if [ "${OVERRIDE:-}" = "true" ]; then
             if gh pr merge --auto --squash --subject "$SUBJECT" --body "$BODY" "$PR_URL"; then exit 0; fi
           elif gh pr merge --auto --squash "$PR_URL"; then exit 0; fi
