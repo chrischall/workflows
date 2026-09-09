@@ -1,0 +1,40 @@
+    ignore:
+      # One root cause, four dependabot PRs, all permanently red:
+      #
+      #   AGP 9 is incompatible with org.jetbrains.kotlin.multiplatform.
+      #
+      #   "The 'com.android.library' (or 'com.android.application') plugin is
+      #    not compatible with the 'org.jetbrains.kotlin.multiplatform' plugin
+      #    since AGP 9.0."
+      #
+      # This is a KMP project, so AGP 9 is unavailable — and two other bumps
+      # turn out to depend on it:
+      #
+      #   Gradle >= 9.6  AGP 8.x uses org.gradle.api.problems.internal.
+      #                  InternalProblems, removed in 9.6.0. Gradle itself
+      #                  says "update the plugin ... or use Gradle 9.5".
+      #   Compose 1.12   androidx.compose.ui:ui-android:1.12.0 and its
+      #                  siblings "require Android Gradle plugin 9.1.0 or
+      #                  higher". That is compose-bom 2026.x.
+      #
+      # So the ceiling on all three is the same event: AGP shipping KMP
+      # support. Each was proven separately on encore#161 — four CI runs,
+      # each one peeling back a constraint the previous run revealed.
+      #
+      # Lift ALL THREE together at that point. Raising any one alone just
+      # moves the failure: Gradle 9.7 fails on AGP 8, and compose-bom 2026
+      # fails on AGP 8 too.
+      #
+      # Minors and patches inside the current majors keep flowing.
+      - dependency-name: com.android.application
+        update-types:
+          - version-update:semver-major
+      - dependency-name: com.android.library
+        update-types:
+          - version-update:semver-major
+      - dependency-name: gradle
+        versions:
+          - ">=9.6"
+      - dependency-name: androidx.compose:compose-bom
+        versions:
+          - ">=2026.0"
