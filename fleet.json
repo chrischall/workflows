@@ -293,8 +293,7 @@
       "release": "custom",
       "conventions_hint": "TDD project; XcodeGen-generated project rules; setlist.fm API-terms constraints; secrets handling. All in CLAUDE.md.",
       "dependabot": "gradle",
-      "release_config": "none",
-      "dependabot_ignore": "agp-kmp"
+      "release_config": "none"
     },
     {
       "repo": "nullnet-app/PassMint",
