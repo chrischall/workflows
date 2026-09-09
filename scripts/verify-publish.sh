@@ -14,7 +14,9 @@
 #
 # This is the check that would have caught it, and it is cheap: one registry
 # read per repo.
-set -uo pipefail
+set -uo pipefail   # no -e: this script READS failures (a missing package.json,
+                   # an unpublished version) and turns them into its 0/1/2 exit
+                   # codes; -e would abort on the first one instead of reporting.
 
 REPO="${1:?usage: verify-publish.sh <owner/repo>}"
 

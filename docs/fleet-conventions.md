@@ -195,9 +195,15 @@ in the hold, or it reads as indefinite.
 it cannot.** Where an upstream constraint makes a bump impossible rather than
 merely undone, record it as a `dependabot_ignore` fragment with the reasoning,
 not as a PR left red. A weekly unmergeable PR trains people to ignore red.
-Live examples: `@cloudflare/vitest-pool-workers` pins `peer vitest@^4.1.0`;
-AGP 9 is incompatible with Kotlin Multiplatform, which transitively bars
-Gradle >= 9.6 and Compose 1.12 too.
+Live example: `@cloudflare/vitest-pool-workers` pins `peer vitest@^4.1.0`.
+
+The AGP 9 / Kotlin Multiplatform case used to sit in that list and did not
+belong there, which is the trap the paragraph above describes. It was never an
+upstream constraint — a documented migration existed the whole time. It was
+carried out (encore#168), the fragment was deleted (#264), and the three bumps
+it transitively barred — Gradle >= 9.6, Compose 1.12, `androidx.core` >= 1.19 —
+all flow again. A hold that reads as permanent deserves a second look before it
+earns a place here.
 
 **Pushing a fix onto a dependabot PR loses the release.** A squash merge takes
 the PR TITLE, and dependabot titles are `build(deps-dev):` — a hidden type. A

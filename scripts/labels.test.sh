@@ -8,7 +8,7 @@
 # Neither shows up as a red check anywhere.
 #
 # `gh` is stubbed, so this exercises the shipped script with no network.
-set -uo pipefail
+set -uo pipefail   # no -e: assertions need to observe failures
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
