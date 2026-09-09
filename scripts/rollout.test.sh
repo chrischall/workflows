@@ -845,5 +845,57 @@ for spelling in ci ci.yml release-please-config release-please-config.json; do
   else bad "CC: --only $spelling" "did not resolve"; fi
 done
 
+
+# --- DD: dependabot's commit prefixes decide whether a bump ever ships ------
+# release-please reads the SQUASH SUBJECT, which on a dependabot PR is its
+# title, which comes from `commit-message.prefix`. Get it wrong and the failure
+# is silent in the worst way: the bump merges, main is correct, and the fix
+# never reaches a consumer because no release was cut. That is exactly how a
+# widened peer range sat unpublished while four repos waited on it.
+#
+# Unset is not neutral either — dependabot INFERS a prefix from recent commit
+# history, which is how this fleet ended up with `chore(deps)`, `build(deps-dev)`
+# and `fix(deps)` simultaneously, with no config anywhere.
+for spec in "paths:npm" "gradle:gradle"; do
+  dir="${spec%%:*}"; eco="${spec##*:}"
+  f="$TMP/$dir/.github/dependabot.yml"
+  [ -f "$f" ] || { bad "DD: $eco" "no rendered dependabot.yml at $f"; continue; }
+  if ruby -ryaml -e '
+      d = YAML.safe_load(File.read(ARGV[0]))
+      u = (d["updates"] || []).find { |x| x["package-ecosystem"] == ARGV[1] } or abort "no #{ARGV[1]} entry"
+      cm = u["commit-message"] or abort "no commit-message"
+      abort "runtime prefix is #{cm["prefix"].inspect}, want fix" unless cm["prefix"] == "fix"
+      abort "dev prefix is #{cm["prefix-development"].inspect}, want chore" unless cm["prefix-development"] == "chore"
+      abort "no scope" unless cm["include"] == "scope"
+    ' "$f" "$eco" 2>"$TMP/dd.err"; then
+    ok "DD: $eco runtime bumps use fix (a patch release), dev bumps chore (hidden)"
+  else
+    bad "DD: $eco" "$(cat "$TMP/dd.err")"
+  fi
+
+  # The actions entry must NOT release: an action version ships nothing.
+  if ruby -ryaml -e '
+      d = YAML.safe_load(File.read(ARGV[0]))
+      u = (d["updates"] || []).find { |x| x["package-ecosystem"] == "github-actions" } or abort "no actions entry"
+      cm = u["commit-message"] or abort "actions entry has no commit-message"
+      abort "actions prefix is #{cm["prefix"].inspect} — that would cut a release" unless cm["prefix"] == "ci"
+    ' "$f" 2>"$TMP/dd2.err"; then
+    ok "DD: $dir github-actions bumps stay hidden (ci)"
+  else
+    bad "DD: $dir actions" "$(cat "$TMP/dd2.err")"
+  fi
+done
+
+# Whatever prefixes are chosen must be types release-please actually knows,
+# or the commit is invisible to it rather than merely hidden.
+if ruby -ryaml -rjson -e '
+    types = JSON.parse(File.read(ARGV[0]))["packages"]["."]["changelog-sections"].map { |x| x["type"] }
+    %w[fix chore ci].each { |t| abort "#{t} is not a changelog-sections type" unless types.include?(t) }
+  ' "$HERE/templates/release-please-config.json" 2>/dev/null; then
+  ok "DD: fix/chore/ci are all types release-please-config declares"
+else
+  bad "DD: contract" "a prefix was chosen that release-please-config.json does not declare"
+fi
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
