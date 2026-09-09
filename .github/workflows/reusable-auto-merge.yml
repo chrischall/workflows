@@ -113,8 +113,12 @@ jobs:
           repo_json=$(gh api "repos/$REPO" 2>/dev/null || true)
           pr_json=$(gh api "repos/$REPO/pulls/$PR" 2>/dev/null || true)
           commits_json=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate 2>/dev/null || true)
-          [ -n "$repo_json" ] && [ -n "$pr_json" ] && [ -n "$commits_json" ] \
-            || skip "could not read the PR or its squash settings; arming unchanged"
+          # An explicit `if`, not `A && B || C`: shellcheck rightly refuses to
+          # read that as if-then-else, and here it would be a lie in the other
+          # direction too — a false test is exactly when `skip` must run.
+          if [ -z "$repo_json" ] || [ -z "$pr_json" ] || [ -z "$commits_json" ]; then
+            skip "could not read the PR or its squash settings; arming unchanged"
+          fi
 
           sq_title=$(printf '%s' "$repo_json" | jq -r '.squash_merge_commit_title // ""' 2>/dev/null || true)
           sq_body=$(printf '%s' "$repo_json" | jq -r '.squash_merge_commit_message // ""' 2>/dev/null || true)
@@ -207,8 +211,10 @@ jobs:
           SUBJECT: ${{ steps.relmsg.outputs.subject }}
           BODY: ${{ steps.relmsg.outputs.body }}
         run: |
-          # Unchanged for every PR the previous step did not override, which is
-          # ~98.6% of them — same command, same flags, same idempotence.
+          # Unchanged for every PR the previous step did not override, which
+          # on the measurement above is all but one in 536 — same command, same
+          # flags, same idempotence. The override is the exception, and the
+          # `elif` is the path that has always existed.
           if [ "${OVERRIDE:-}" = "true" ]; then
             if gh pr merge --auto --squash --subject "$SUBJECT" --body "$BODY" "$PR_URL"; then exit 0; fi
           elif gh pr merge --auto --squash "$PR_URL"; then exit 0; fi
