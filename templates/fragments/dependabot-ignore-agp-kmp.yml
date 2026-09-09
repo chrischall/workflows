@@ -45,3 +45,22 @@
       - dependency-name: androidx.compose:compose-bom
         versions:
           - ">=2026.0"
+      # androidx.core 1.19.0 carries the same AGP 9.1 floor as Compose 1.12:
+      #
+      #   Dependency 'androidx.core:core-ktx:1.19.0' requires Android Gradle
+      #   plugin 9.1.0 or higher.
+      #
+      # Found on encore#163, a 17-update group where this was the ONLY blocked
+      # member — agp 8.13.2, kotlin 2.4.10, coroutines, serialization, ktor and
+      # skie were all fine. Hence a ceiling on this artifact rather than a hold
+      # on the group: blocking all of it to stop one library would strand six
+      # good bumps.
+      #
+      # EXPECT THIS TO RECUR. androidx is adopting the AGP 9.1 floor library by
+      # library, so more entries belong here over time — each one identified the
+      # same way, by a `requires Android Gradle plugin 9.1.0 or higher` line
+      # naming the artifact. They all lift together with the rest of this
+      # fragment when AGP 9 supports KMP.
+      - dependency-name: androidx.core:*
+        versions:
+          - ">=1.19.0"
