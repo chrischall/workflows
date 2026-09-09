@@ -79,6 +79,17 @@ jobs:
         # ofw-mcp#283 — the PR that prompted it.
         run: bash scripts/relmsg.test.sh
 
+      - name: release-message drift tripwire
+        # The same two pieces of knowledge — which text GitHub commits, and
+        # which commit types matter — exist in BOTH reusable-pr-auto-review.yml
+        # (which blocks a human PR) and reusable-auto-merge.yml (which replaces
+        # a bot's body, because the review job never runs on a bot). Factoring
+        # them into one action would touch the copy currently protecting the
+        # fleet, so the copies stay and this stops them drifting. Drift here is
+        # silent: each file keeps working while the two disagree about which
+        # commits are at risk.
+        run: bash scripts/relmsg-drift.test.sh
+
       - name: verdict + arm-policy unit tests
         # This suite shipped without ever being wired in, so the no-verdict
         # diagnosis it guards was unguarded in CI. It also pins the arming
