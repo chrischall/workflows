@@ -149,6 +149,64 @@ fix; that was the bug.)
 repo's own file — a version bump here doesn't reach the marketplace until that
 regen runs. Plugin `name`s must be unique across the whole catalog.
 
+## Dependabot
+
+**Find a dependency's name from its BRANCH, never from intuition.** An `ignore`
+rule naming a dependency that does not exist is valid config that silently
+never fires, and dependabot's names do not follow one convention:
+
+    dependabot/gradle/gradle-wrapper-9.7.1            -> `gradle-wrapper`, not `gradle`
+    dependabot/gradle/org.springframework.boot-4.2.0  -> bare plugin id, no `:artifact`
+    dependabot/npm_and_yarn/vitest/coverage-v8-5.0.0  -> `@vitest/coverage-v8`
+
+A `gradle` rule was written for encore and matched nothing; it was only caught
+because two sibling rules in the same fragment DID fire, so one PR survived. A
+fragment where every rule was wrong would have looked exactly like one that
+worked. An auto-review nit separately argued the bare `org.springframework.boot`
+form was invalid Gradle syntax — it is correct, and the branch name proved it.
+
+**Groups are scored by specificity, not listed order.** `PatternSpecificityCalculator`
+gives a dependency to the HIGHEST-scoring matching group:
+
+    exact `pattern == name`          1000
+    group with NO `patterns` key      500
+    pattern with no wildcard          500
+    wildcard  100 - 10*wildcards + max(len-5, 0)
+
+So `"@vitest/*"` scores 94 and loses `@vitest/coverage-v8` to a pattern-less
+`dev-dependencies` group scoring 500. On a major that group cannot take it
+either (minor/patch only), so it escapes into its own PR — and since vitest and
+its coverage provider peer-depend at an exact version, neither half installs.
+That deadlocked 19 repos on 2026-09-07. Listing the exact name scores 1000 and
+pins it. **Wildcards are for reach, exact names are for guarantees.**
+
+**A peer-locked pair must travel together, and a hold is the honest answer when
+it cannot.** Where an upstream constraint makes a bump impossible rather than
+merely undone, record it as a `dependabot_ignore` fragment with the reasoning,
+not as a PR left red. A weekly unmergeable PR trains people to ignore red.
+Live examples: `@cloudflare/vitest-pool-workers` pins `peer vitest@^4.1.0`;
+AGP 9 is incompatible with Kotlin Multiplatform, which transitively bars
+Gradle >= 9.6 and Compose 1.12 too.
+
+**Pushing a fix onto a dependabot PR loses the release.** A squash merge takes
+the PR TITLE, and dependabot titles are `build(deps-dev):` — a hidden type. A
+`fix(deps):` commit inside such a PR lands on main and release-please cuts
+nothing, so the fix never publishes. Retitle the PR, or force a release
+afterwards with an empty `fix` commit. This stranded a widened peer range that
+four other repos were waiting on.
+
+**`pull_request` CI builds the MERGE commit, not the branch head.** A dependabot
+PR left open while siblings merge goes stale against the base, and the error
+names a package unrelated to its own diff — `Missing: tinyexec@1.3.0` on a PR
+that never touched vitest, because main had moved to vitest 5 while the branch's
+lock still had 4. `npm ci` on the head passes; only the merge fails. Rebase.
+
+**`npm install --package-lock-only` will not upgrade a dependency that still
+satisfies its range.** After publishing a fix upstream, a consumer's lock keeps
+the old version until `npm update <pkg>` is run explicitly. Publishing does not
+reach a lockfile on its own.
+
+
 ## Versioning
 
 release-please owns every version. Never hand-bump, never hand-tag.
