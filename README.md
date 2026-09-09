@@ -255,6 +255,20 @@ there sees a diff and no reason for it),
 issue, so a hand-edited stub or unrolled template change surfaces the day it
 happens instead of during the next sweep.
 
+### Verifying a publish
+
+`scripts/verify-publish.sh <repo>` compares a repo's `.release-please-manifest.json`
+version to what is actually on npm (exit 1 tagged-but-not-published, 2 unknown,
+0 in sync or nothing to check).
+
+**A green tag is not a green publish.** release-please cuts the tag and creates
+the GitHub Release in one job; npm publish is a separate one. When it fails the
+repo looks released from every angle except the only one a consumer sees —
+`ofw-mcp` shipped v2.6.0, v2.6.1 and v2.6.2 that way with npm sitting on 2.5.0,
+and nothing was red.
+
+Not yet on a schedule — see the note under Labels.
+
 ### Labels
 
 `labels.json` is the fleet's canonical label set and `scripts/ensure-labels.sh
@@ -287,6 +301,15 @@ and `fbca04` and rewriting 71 repos to change nothing is not drift.
 `feature`/`fix` were dropped from `release.yml`: they were aliases for
 `enhancement`/`bug` and existed in 2 of 81 repos, so the categories they fed
 matched almost nothing.
+
+**Neither `ensure-labels.sh --check` nor `verify-publish.sh` runs on a
+schedule yet.** `fleet-drift.yml` sweeps `rollout.sh --check` only, so a repo
+whose stubs match `fleet.json` is reported healthy however wrong its labels or
+its published version are. Wiring both into that sweep was attempted and
+reverted: the added checkers need an exit-code escalation (1 beats 2; a MISSING
+checker exiting 127 must read as unchecked, never healthy) and the first
+attempt broke four existing cases in `fleet-drift.test.sh` for a cause not yet
+found. Both scripts work standalone in the meantime.
 
 `scripts/labels.test.sh` pins the contract nothing else checks — **every label
 `release.yml` categorises by must exist in `labels.json`**. If they drift
