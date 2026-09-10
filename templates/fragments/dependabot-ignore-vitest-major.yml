@@ -1,22 +1,28 @@
     ignore:
-      # VITEST IS ONE VERSION ACROSS THE REPO, AND THE POOL PICKS IT.
+      # VITEST IS ONE VERSION ACROSS THIS REPO, AND THE POOL PICKS IT.
       #
-      # `@cloudflare/vitest-pool-workers` peers on `^4.1.0`. The gateway suite
-      # runs inside workerd through that pool, so a vitest major it does not
-      # support is not a slow migration — the suite does not start. Bumping to
-      # 5.0.0 gave 100+ `jsg.SyntaxError: Unexpected identifier 'file'` out of
-      # workerd before a single gateway assertion ran (mcp-host#716).
+      # `@cloudflare/vitest-pool-workers` (in `packages/gateway`) pins
+      # `peer vitest@"^4.1.0"`. The gateway suite runs inside workerd through
+      # that pool, so a vitest major it does not support is not a slow
+      # migration — the suite does not start. Bumping to 5.0.0 gave 100+
+      # `jsg.SyntaxError: Unexpected identifier 'file'` out of workerd before a
+      # single gateway assertion ran (mcp-host#716).
       #
-      # And it cannot be taken in one workspace at a time. Dependabot treats
+      # And it cannot be taken one workspace at a time. Dependabot treats
       # vitest as ONE repo-wide version: a split that put four workspaces on 5
-      # and left the gateway on 4 was flattened by the next ordinary patch bump,
-      # which is why the repo's CLAUDE.md says all five move together or none do.
+      # and left the gateway on 4 was flattened by the next ordinary patch
+      # bump, which is why that repo's CLAUDE.md says all five move together
+      # or none do.
       #
-      # So majors are ignored until the pool supports one. This is a CEILING,
-      # not a freeze: 4.x patches and minors flow normally, which is where the
-      # security fixes are. Lift it in the same pass that bumps the pool — the
-      # pool's peer range is the thing to read, not vitest's changelog.
-      - dependency-name: "vitest"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@vitest/*"
-        update-types: ["version-update:semver-major"]
+      # THE SECOND REPO HELD BACK FOR THIS REASON — `gogcli-peers` carries the
+      # same ceiling for the same peer, and the two are the fleet's only
+      # pool-workers consumers. Lift them in the same pass: the thing to read
+      # is the pool's peer range, not vitest's changelog.
+      #
+      # A ceiling, not a freeze. 4.x minors and patches flow normally, which is
+      # where the security fixes are. Only `vitest` is named: this repo declares
+      # no `@vitest/*` package of its own — they arrive transitively under the
+      # pool, and dependabot proposes bumps only for what is declared.
+      - dependency-name: vitest
+        versions:
+          - ">=5.0.0"
