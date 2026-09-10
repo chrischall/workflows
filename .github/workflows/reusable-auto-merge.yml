@@ -112,6 +112,13 @@ jobs:
       - name: Replace a dependabot squash message release-please would drop
         id: relmsg
         if: inputs.sanitize_release_message
+        # A BELT, because this sits on the merge path. Every branch inside
+        # already ends in `exit 0`, so the step should never fail — but "should
+        # never" is not a property GitHub enforces, and the failure mode if it
+        # is wrong is that dependabot stops merging in whatever repo turned the
+        # flag on. `continue-on-error` makes the arm step below run regardless,
+        # so the worst case is the behaviour this input did not exist to change.
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.release_pat }}
           PR_URL: ${{ github.event.pull_request.html_url }}
