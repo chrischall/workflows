@@ -56,7 +56,8 @@
       "package_name": "groupon-mcp",
       "version_files": "src/version.ts",
       "bump_minor_pre_major": "true",
-      "initial_version": "0.1.0"
+      "initial_version": "0.1.0",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/onthecheap-mcp",
@@ -68,7 +69,8 @@
     {
       "repo": "chrischall/zola-mcp",
       "package_name": "zola-mcp",
-      "version_files": "src/index.ts"
+      "version_files": "src/index.ts",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/artsonia-mcp",
@@ -90,7 +92,8 @@
     {
       "repo": "chrischall/creditkarma-mcp",
       "package_name": "creditkarma-mcp",
-      "version_files": "src/index.ts"
+      "version_files": "src/index.ts",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/gemini-mcp",
@@ -113,13 +116,15 @@
     {
       "repo": "chrischall/honeybook-mcp",
       "package_name": "honeybook-mcp",
-      "version_files": "src/index.ts"
+      "version_files": "src/index.ts",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/infinitecampus-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "infinitecampus-mcp",
-      "version_files": "src/index.ts"
+      "version_files": "src/index.ts",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/musescore-mcp",
@@ -150,13 +155,15 @@
     {
       "repo": "chrischall/setlist-mcp",
       "package_name": "setlist-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/signupgenius-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "signupgenius-mcp",
-      "version_files": "src/index.ts"
+      "version_files": "src/index.ts",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/splitwise-mcp",
@@ -202,7 +209,8 @@
       "repo": "chrischall/evite-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "evite-mcp",
-      "version_files": "src/index.ts,src/auth.ts"
+      "version_files": "src/index.ts,src/auth.ts",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/opencode-copilot-plugin",
@@ -210,13 +218,15 @@
       "release": "custom",
       "rereview_on_push": "true",
       "conventions_hint": "Reverse-engineered protocol client: AGENTS.md is the source of truth for why logic lives in the proxy rather than in opencode hooks \u2014 a change moving trimming back into an opencode hook needs evidence that hook now works. Prompt text in fenced.ts/plugin.ts must stay soft: no fake role turns, no shouted absolutes (M365's Disengaged filter tracks prompt shape). Never add code that deletes a Copilot Studio agent. Tests must never require network, credentials, or live M365. Access tokens must never be logged or echoed in an error.",
-      "release_config": "none"
+      "release_config": "none",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/ofw-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "ofw-mcp",
-      "version_files": "src/index.ts"
+      "version_files": "src/index.ts",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/ioffice-mcp",
@@ -419,7 +429,8 @@
     {
       "repo": "chrischall/vibo-mcp",
       "package_name": "vibo-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/workday-mcp",
@@ -542,7 +553,8 @@
       "package_name": "alphaportal-mcp",
       "version_files": "src/version.ts",
       "bump_minor_pre_major": "true",
-      "initial_version": "0.1.0"
+      "initial_version": "0.1.0",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/remind-mcp",
