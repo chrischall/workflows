@@ -176,6 +176,7 @@ render() { # render <template> <repo-relative dest>
       -e "s|__SKILL_PATH__|$(sed_escape "$SKILL_PATH")|g" \
       -e "s|__FLY_DIR__|$(sed_escape "$FLY_DIR")|g" \
       -e "s|__REREVIEW_ON_PUSH__|$(sed_escape "$REREVIEW_ON_PUSH")|g" \
+      -e "s|__SANITIZE_RELEASE_MESSAGE__|$(sed_escape "$SANITIZE_RELEASE_MESSAGE")|g" \
       -e "s|__PACKAGE_NAME__|$(sed_escape "$PACKAGE_NAME")|g" \
       -e "s|__RELEASE_TYPE__|$(sed_escape "$RELEASE_TYPE")|g" \
       "$HERE/templates/$1" > "$dest"
@@ -208,6 +209,21 @@ render() { # render <template> <repo-relative dest>
                "$dest" && rm -f "$dest.bak"
   fi
   sed -i.bak -e '/^[[:space:]]*rereview_on_push:[[:space:]]*$/d' "$dest" && rm -f "$dest.bak"
+  # sanitize_release_message is rereview_on_push's shape with one extra
+  # problem: auto-merge.yml has no other `with:` input, so dropping the value
+  # line alone would leave a bare `with:` — an empty mapping GitHub refuses,
+  # on the merge path, in all 80 repos that did not opt in. So the whole block
+  # goes, comment and all.
+  #
+  # Guarded and scoped for the reason the two ranges above are: an
+  # unterminated sed range runs to end of file, and here that would eat the
+  # `secrets:` block that arms the merge. Anchored on `with:` and closed on
+  # the value line matching EMPTY only, so a repo that opted in keeps
+  # everything.
+  if [ "$1" = "auto-merge.yml" ] && [ -z "$SANITIZE_RELEASE_MESSAGE" ]; then
+    sed -i.bak -e '/^[[:space:]]*with:[[:space:]]*$/,/^[[:space:]]*sanitize_release_message:[[:space:]]*$/d' \
+               "$dest" && rm -f "$dest.bak"
+  fi
   # Same guarded-range shape as skill-path above, and guarded for the same
   # reason: an unterminated sed range runs to end of file. Scoped to ci.yml so
   # the anchors cannot match anything in another template.
@@ -233,6 +249,11 @@ REREVIEW_ON_PUSH="$(cfg rereview_on_push)"
 # stub — a hand-edit is silently reverted by the next `--execute` (issue #76),
 # which is precisely what was about to happen to skylight-mcp's.
 CI_DISPATCH="$(cfg ci_dispatch)"
+# Replace a dependabot squash body release-please could not parse, so the
+# bump is not silently dropped (#266). Off unless a repo asks: it is the
+# merge path, every consumer pins `@main`, and there is no staged rollout —
+# so it is canaried on one repo before the fleet is asked to trust it.
+SANITIZE_RELEASE_MESSAGE="$(cfg sanitize_release_message)"
 
 STAGE="$WORK/stage"; mkdir -p "$STAGE"
 WF=".github/workflows"
