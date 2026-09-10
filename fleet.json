@@ -558,7 +558,8 @@
       "repo": "chrischall/mcp-host",
       "node_version": "22",
       "release": "custom",
-      "release_config": "none"
+      "release_config": "none",
+      "dependabot_ignore": "vitest-major"
     }
   ]
 }
