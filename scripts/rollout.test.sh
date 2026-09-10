@@ -36,6 +36,12 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # be pinned — an always-on trigger would silently drift all 60 standard-CI
 # repos, and an always-off one would silently drop the escape hatch the repo
 # that opted in is relying on.
+# FAKE/s opts into sanitize_release_message, which is the only way to pin the
+# render in BOTH directions. The off path deletes a sed RANGE — `with:`
+# through the value line — and an unterminated range runs to end of file,
+# which here would eat the `secrets:` block that arms every merge in 80
+# repos. The on path has to keep the whole block. Neither is observable
+# from the other.
 # FAKE/g is a gradle repo: its dependabot config must watch gradle, never npm.
 # FAKE/n opts out of both repo-config templates, which is the only way to prove
 # an opt-out renders NOTHING rather than an empty file.
@@ -48,6 +54,8 @@ jq '{defaults: .defaults,
      repos: [{repo: "FAKE/x", connector: "true", package_name: "fake-x",
               version_files: "src/version.ts"},
              {repo: "FAKE/y", ci_dispatch: "true", package_name: "fake-y"},
+             {repo: "FAKE/s", sanitize_release_message: "true", ci: "none",
+              release: "none", package_name: "fake-s"},
              {repo: "FAKE/z", ci: "none", package_name: "fake-z"},
              {repo: "FAKE/g", dependabot: "gradle", ci: "none", release: "none",
               package_name: "fake-g"},
@@ -281,6 +289,46 @@ assert_has   F3 "## Why this change"
 assert_has   F3 "Fleet-wide template correction."
 assert_has   F3 "- pr-auto-review: reusable"
 assert_has   F3 "After this PR is open, run"
+
+# --- S: sanitize_release_message, and the sed range that removes it --------
+# The dependabot squash-body fix (#266) is opt-in per repo. Both directions
+# need pinning, and the OFF one is the dangerous half: `auto-merge.yml` has no
+# other `with:` input, so the render deletes the whole block by sed RANGE. An
+# unterminated range runs to end of file, and what follows here is the
+# `secrets:` block that arms the merge — get it wrong and 80 repos stop
+# merging anything, on the path nobody watches until it is quiet.
+S_OFF="$TMP/s-off"; bash "$ROLLOUT" FAKE/x --render "$S_OFF" >/dev/null
+S_OFF_FILE="$S_OFF/.github/workflows/auto-merge.yml"
+if grep -q 'sanitize_release_message' "$S_OFF_FILE"; then
+  bad "S: unset" "auto-merge.yml carries the input without opting in"
+else ok "S: unset drops the input"; fi
+if grep -q '^    with:$' "$S_OFF_FILE"; then
+  bad "S: unset" "a bare 'with:' was left behind — GitHub refuses an empty mapping"
+else ok "S: unset drops the whole with: block, not just the value line"; fi
+# THE RANGE MUST NOT OVERRUN. This is the assertion the others are decoration
+# for: everything after the deleted block has to survive.
+if grep -q '^    secrets:$' "$S_OFF_FILE" && grep -q 'release_pat:' "$S_OFF_FILE"; then
+  ok "S: unset leaves the secrets block intact"
+else bad "S: unset" "the sed range ate the secrets block:$(printf '\n')$(cat "$S_OFF_FILE")"; fi
+# And the comment goes with the line it explains, the way ci_dispatch's does.
+if grep -q 'Empty renders as false' "$S_OFF_FILE"; then
+  bad "S: unset" "the rationale comment was left behind without its input"
+else ok "S: unset drops the rationale comment too"; fi
+
+S_ON="$TMP/s-on"; bash "$ROLLOUT" FAKE/s --render "$S_ON" >/dev/null
+S_ON_FILE="$S_ON/.github/workflows/auto-merge.yml"
+if grep -q '^      sanitize_release_message: true$' "$S_ON_FILE"; then
+  ok "S: sanitize_release_message=true renders the input"
+else bad "S: opted in" "the input is missing:$(printf '\n')$(cat "$S_ON_FILE")"; fi
+if grep -q '^    with:$' "$S_ON_FILE" && grep -q '^    secrets:$' "$S_ON_FILE"; then
+  ok "S: opted in keeps both with: and secrets:"
+else bad "S: opted in" "with:/secrets: not both present:$(printf '\n')$(cat "$S_ON_FILE")"; fi
+# An empty value is NOT the same as `false` to a typed boolean input, which is
+# why the line is deleted rather than rendered blank. Nothing else may render
+# it blank either.
+if grep -qE '^      sanitize_release_message:[[:space:]]*$' "$S_ON_FILE" "$S_OFF_FILE"; then
+  bad "S" "a bare 'sanitize_release_message:' rendered — that passes an explicit null"
+else ok "S: neither render leaves a bare key passing null"; fi
 
 # --- G: ci_dispatch renders the manual trigger, and only when opted in -----
 G="$TMP/g-off"; bash "$ROLLOUT" FAKE/x --render "$G" >/dev/null
