@@ -79,7 +79,8 @@
       "repo": "chrischall/canvas-parent-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "canvas-parent-mcp",
-      "version_files": "src/index.ts"
+      "version_files": "src/index.ts",
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/compass-mcp",
