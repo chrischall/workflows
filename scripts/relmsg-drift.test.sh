@@ -8,7 +8,7 @@
 # same two pieces of knowledge:
 #
 #   1. WHICH TEXT GitHub will actually commit. Not one thing across the fleet —
-#      of the 81 repos in fleet.json, 42 squash with
+#      of the 82 repos in fleet.json, 43 squash with
 #      COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, 38 with PR_TITLE/PR_BODY and one
 #      with a mixed PR_TITLE/COMMIT_MESSAGES — so "the PR title and body" is a
 #      message most of the fleet never ships. Measuring it that way once

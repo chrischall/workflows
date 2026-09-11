@@ -503,7 +503,7 @@ jobs:
           fi
 
           # Reconstruct what GitHub will actually commit. This is NOT one thing
-          # across the fleet — of the 81 repos in fleet.json, 42 are on
+          # across the fleet — of the 82 repos in fleet.json, 43 are on
           # COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, 38 on PR_TITLE/PR_BODY and one
           # on the mixed PR_TITLE/COMMIT_MESSAGES — so checking "the PR
           # title and body" would read a message half the fleet never ships,
