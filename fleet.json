@@ -572,6 +572,13 @@
       "release": "custom",
       "release_config": "none",
       "dependabot_ignore": "vitest-major"
+    },
+    {
+      "repo": "chrischall/skill-mcp",
+      "package_name": "@chrischall/skill-mcp",
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     }
   ]
 }
