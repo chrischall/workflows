@@ -968,7 +968,7 @@ else
   bad "DD: contract" "a prefix was chosen that release-please-config.json does not declare"
 fi
 
-# --- R: reusable_release renders the reusable release stub, and only then ----
+# --- EE: reusable_release renders the reusable release stub, and only then ----
 # chrischall/workflows#283. The opt-in moves release-please into
 # reusable-release-please.yml and adds the `republish_tag` escape hatch; the
 # publish job stays in the stub so the npm/mcp-publisher OIDC identity does not
@@ -983,8 +983,8 @@ R_ON="$TMP/r-on";   bash "$ROLLOUT" FAKE/r  --render "$R_ON"  >/dev/null
 R_PIN="$TMP/r-pin"; bash "$ROLLOUT" FAKE/rs --render "$R_PIN" >/dev/null
 
 if grep -qE 'reusable-release-please|republish_tag' "$R_OFF/.github/workflows/release-please.yml"; then
-  bad "R: unset" "release-please.yml changed for a repo that did not opt in"
-else ok "R: unset renders the existing stub"; fi
+  bad "EE: unset" "release-please.yml changed for a repo that did not opt in"
+else ok "EE: unset renders the existing stub"; fi
 
 cat > "$TMP/r-check.rb" <<'RUBY'
 require 'yaml'
@@ -1024,15 +1024,15 @@ RUBY
 if ruby "$TMP/r-check.rb" "$R_ON/.github/workflows/release-please.yml" \
      "$HERE/.github/workflows/reusable-release-please.yml" \
      "$R_PIN/.github/workflows/release-please.yml" 2>"$TMP/r-check.err"; then
-  ok "R: opted-in stub calls the reusable, forwards republish_tag, publishes the resolved tag, keeps fragments and pins"
-else bad "R: opted in" "$(cat "$TMP/r-check.err")"; fi
+  ok "EE: opted-in stub calls the reusable, forwards republish_tag, publishes the resolved tag, keeps fragments and pins"
+else bad "EE: opted in" "$(cat "$TMP/r-check.err")"; fi
 
 # The drift detector renders through the same branch: an opted-in repo holding
 # exactly its rendered stubs is clean, not reported as drifted.
 OUT="$TMP/out.txt"; ERR="$TMP/err.txt"
 GH_FIXTURES="$R_ON" bash "$ROLLOUT" FAKE/r --check > "$OUT" 2> "$ERR"; CODE=$?
-assert_has  R "OK       FAKE/r"
-assert_code R 0
+assert_has  EE "OK       FAKE/r"
+assert_code EE 0
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

@@ -254,6 +254,11 @@ CI_DISPATCH="$(cfg ci_dispatch)"
 # merge path, every consumer pins `@main`, and there is no staged rollout —
 # so it is canaried on one repo before the fleet is asked to trust it.
 SANITIZE_RELEASE_MESSAGE="$(cfg sanitize_release_message)"
+# Render the release stub that calls reusable-release-please.yml and carries
+# the `republish_tag` escape hatch (#283). Read here with the other opt-ins
+# because it decides two things — which template renders, and what the PR body
+# says it did — and those must not read the key twice and disagree.
+REUSABLE_RELEASE="$(cfg reusable_release)"
 
 STAGE="$WORK/stage"; mkdir -p "$STAGE"
 WF=".github/workflows"
@@ -272,7 +277,7 @@ if [ "$RELEASE_MODE" = "mcp" ]; then
   # rather than a sed range over this one, for the reason the ranges above keep
   # documenting: an unterminated range runs to end of file, and this is the
   # publish path. Opt-in until a canary has proven a real release through it.
-  if [ -n "$(cfg reusable_release)" ]; then
+  if [ -n "$REUSABLE_RELEASE" ]; then
     render release-please-reusable.yml "$WF/release-please.yml"
   else
     render release-please.yml "$WF/release-please.yml"
@@ -437,7 +442,7 @@ pr_body() {
     echo "- pr-auto-review: reusable (forced verdict + fail-loud + pass-only arming)"
     echo "- auto-merge: reusable (dependabot + ready-to-merge label arms)"
     [ "$CI_MODE" = "standard" ] && echo "- ci: reusable node CI (deferred gate) — required check becomes \`ci / ci\`"
-    if [ "$RELEASE_MODE" = "mcp" ] && [ -n "$(cfg reusable_release)" ]; then
+    if [ "$RELEASE_MODE" = "mcp" ] && [ -n "$REUSABLE_RELEASE" ]; then
       echo "- release-please: reusable release-please (with a \`republish_tag\` dispatch) + publish job kept in the stub (OIDC identity preserved)"
     elif [ "$RELEASE_MODE" = "mcp" ]; then
       echo "- release-please: thin stub + mcp-publish composite action (OIDC identity preserved)"
