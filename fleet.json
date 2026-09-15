@@ -107,7 +107,8 @@
       "fly_dir": "fly-gog-runner",
       "release_config": "none",
       "release_notes": "none",
-      "dependabot_ignore": "gogcli-peers"
+      "dependabot_ignore": "gogcli-peers",
+      "reusable_release": "true"
     },
     {
       "repo": "chrischall/homes-mcp",
@@ -142,7 +143,8 @@
     {
       "repo": "chrischall/opentable-mcp",
       "package_name": "opentable-mcp",
-      "version_files": "src/index.ts"
+      "version_files": "src/index.ts",
+      "reusable_release": "true"
     },
     {
       "repo": "chrischall/redfin-mcp",
@@ -181,7 +183,8 @@
     {
       "repo": "chrischall/zillow-mcp",
       "package_name": "zillow-mcp",
-      "version_files": "src/index.ts"
+      "version_files": "src/index.ts",
+      "reusable_release": "true"
     },
     {
       "repo": "chrischall/musicbrainz-mcp",
@@ -359,7 +362,8 @@
     {
       "repo": "chrischall/tock-mcp",
       "package_name": "tock-mcp",
-      "version_files": "src/version.ts"
+      "version_files": "src/version.ts",
+      "reusable_release": "true"
     },
     {
       "repo": "chrischall/getyourguide-mcp",
@@ -388,7 +392,8 @@
       "repo": "chrischall/alltrails-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "alltrails-mcp",
-      "version_files": "src/index.ts"
+      "version_files": "src/index.ts",
+      "reusable_release": "true"
     },
     {
       "repo": "chrischall/etix-mcp",
