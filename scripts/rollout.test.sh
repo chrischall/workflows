@@ -51,7 +51,7 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # (Keep prose OUT of the jq program: jq eats `#` to end-of-line, and an
 # apostrophe there closes the surrounding shell quote.)
 jq '{defaults: .defaults,
-     repos: [{repo: "FAKE/x", connector: "true", package_name: "fake-x",
+     repos: [{repo: "FAKE/x", connector: "true", package_name: "fake-x", reusable_release: "",
               version_files: "src/version.ts"},
              {repo: "FAKE/y", ci_dispatch: "true", package_name: "fake-y"},
              {repo: "FAKE/s", sanitize_release_message: "true", ci: "none",

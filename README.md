@@ -13,7 +13,7 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 | `.github/workflows/reusable-mcp-connector-deploy.yml` | reusable workflow | MCP repos with a hosted connector (plain `wrangler deploy`) |
 | `.github/workflows/reusable-fly-deploy.yml` | reusable workflow | repos with a Fly.io backend |
 | `.github/workflows/reusable-dependabot-lockfix.yml` | reusable workflow | repos with derived lockfiles dependabot can't refresh |
-| `.github/workflows/reusable-release-please.yml` | reusable workflow | MCP repos with `reusable_release` set in `fleet.json` (via `templates/release-please-reusable.yml`) |
+| `.github/workflows/reusable-release-please.yml` | reusable workflow | MCP repos by default (via `templates/release-please-reusable.yml`; `reusable_release: ""` opts out) |
 | `.github/actions/arm-gate` | composite action | bespoke-CI repos (gradle, swift) |
 | `templates/ci-gradle.yml` | starter template | Gradle/KMP repos |
 | `templates/dependabot-lockfix-{npm,gradle}.yml` | stub templates | repos with `lockfix` set in `fleet.json` |
@@ -173,16 +173,16 @@ every repo at once, which is a separate decision from having the input.
 npm trusted publishing and mcp-publisher validate the OIDC token's workflow
 identity, which must remain the consuming repo's own `release-please.yml`.
 
-The release-please half is moving the other way (#283). With
-`"reusable_release": "true"` in `fleet.json`, a repo's stub calls
+The release-please half went the other way (#283). By default a repo's stub
+calls
 `reusable-release-please.yml`, which runs release-please, credits contributors
 and resolves **whether and what to publish** — one derivation of tag and
 version for both the fresh-release path and a `republish_tag` dispatch, the
 escape hatch for a release whose tag and GitHub Release were cut but whose
 publish never ran (creditkarma-mcp, homes-mcp and onehome-mcp, 2026-09-14).
 The publish job itself stays in the stub, so the OIDC identity above does not
-move. It is opt-in, with creditkarma-mcp as the canary, until a real release
-has gone end to end through it; `scripts/release-ref.test.sh` pins the
+move. It became the default after real releases in eight canary repos;
+`"reusable_release": ""` in `fleet.json` keeps a repo on the inline stub, and `scripts/release-ref.test.sh` pins the
 resolver.
 
 Its publish steps are **idempotent and independently gated**, because the

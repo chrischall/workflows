@@ -24,7 +24,8 @@
     "initial_version": "",
     "include_v_in_tag": "true",
     "include_component_in_tag": "false",
-    "dependabot_ignore": ""
+    "dependabot_ignore": "",
+    "reusable_release": "true"
   },
   "repos": [
     {
@@ -93,8 +94,7 @@
       "repo": "chrischall/creditkarma-mcp",
       "package_name": "creditkarma-mcp",
       "version_files": "src/index.ts",
-      "sanitize_release_message": "true",
-      "reusable_release": "true"
+      "sanitize_release_message": "true"
     },
     {
       "repo": "chrischall/gemini-mcp",
@@ -107,14 +107,12 @@
       "fly_dir": "fly-gog-runner",
       "release_config": "none",
       "release_notes": "none",
-      "dependabot_ignore": "gogcli-peers",
-      "reusable_release": "true"
+      "dependabot_ignore": "gogcli-peers"
     },
     {
       "repo": "chrischall/homes-mcp",
       "package_name": "homes-mcp",
-      "version_files": "src/index.ts",
-      "reusable_release": "true"
+      "version_files": "src/index.ts"
     },
     {
       "repo": "chrischall/honeybook-mcp",
@@ -137,14 +135,12 @@
     {
       "repo": "chrischall/onehome-mcp",
       "package_name": "onehome-mcp",
-      "version_files": "src/index.ts",
-      "reusable_release": "true"
+      "version_files": "src/index.ts"
     },
     {
       "repo": "chrischall/opentable-mcp",
       "package_name": "opentable-mcp",
-      "version_files": "src/index.ts",
-      "reusable_release": "true"
+      "version_files": "src/index.ts"
     },
     {
       "repo": "chrischall/redfin-mcp",
@@ -183,8 +179,7 @@
     {
       "repo": "chrischall/zillow-mcp",
       "package_name": "zillow-mcp",
-      "version_files": "src/index.ts",
-      "reusable_release": "true"
+      "version_files": "src/index.ts"
     },
     {
       "repo": "chrischall/musicbrainz-mcp",
@@ -362,8 +357,7 @@
     {
       "repo": "chrischall/tock-mcp",
       "package_name": "tock-mcp",
-      "version_files": "src/version.ts",
-      "reusable_release": "true"
+      "version_files": "src/version.ts"
     },
     {
       "repo": "chrischall/getyourguide-mcp",
@@ -392,8 +386,7 @@
       "repo": "chrischall/alltrails-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "alltrails-mcp",
-      "version_files": "src/index.ts",
-      "reusable_release": "true"
+      "version_files": "src/index.ts"
     },
     {
       "repo": "chrischall/etix-mcp",
