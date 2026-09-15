@@ -276,7 +276,8 @@ if [ "$RELEASE_MODE" = "mcp" ]; then
   # and carries the `republish_tag` escape hatch (#283). A separate template
   # rather than a sed range over this one, for the reason the ranges above keep
   # documenting: an unterminated range runs to end of file, and this is the
-  # publish path. Opt-in until a canary has proven a real release through it.
+  # publish path. The default since #283's canaries shipped real releases through
+  # it; `reusable_release: ""` in fleet.json keeps a repo on the inline stub.
   if [ -n "$REUSABLE_RELEASE" ]; then
     render release-please-reusable.yml "$WF/release-please.yml"
   else
