@@ -112,7 +112,8 @@
     {
       "repo": "chrischall/homes-mcp",
       "package_name": "homes-mcp",
-      "version_files": "src/index.ts"
+      "version_files": "src/index.ts",
+      "reusable_release": "true"
     },
     {
       "repo": "chrischall/honeybook-mcp",
@@ -135,7 +136,8 @@
     {
       "repo": "chrischall/onehome-mcp",
       "package_name": "onehome-mcp",
-      "version_files": "src/index.ts"
+      "version_files": "src/index.ts",
+      "reusable_release": "true"
     },
     {
       "repo": "chrischall/opentable-mcp",
