@@ -140,6 +140,14 @@ jobs:
         # pins that duplicates must not mask a genuine failure.
         run: bash scripts/mcp-registry-publish.test.sh
 
+      - name: release-ref resolver unit tests
+        # Decides whether a release publishes and as what, on both the fresh
+        # release path and the `republish_tag` escape hatch (#283). Its
+        # failures are a version string of `v1.2.3`, a dispatch input that
+        # defines a second output, or a publish of a tag that does not exist —
+        # none of which fail loudly on their own.
+        run: bash scripts/release-ref.test.sh
+
       - name: rollout.sh unit tests
         # --check is what the daily drift sweep runs, and its failure mode is
         # silent under-reporting rather than a crash — nothing downstream would

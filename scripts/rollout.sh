@@ -267,7 +267,16 @@ render claude.yml "$WF/claude.yml"
 # workflow by name, so it is meaningless where that stub is not installed.
 [ "$CI_MODE" = "standard" ] && render ci-fork-status.yml "$WF/ci-fork-status.yml"
 if [ "$RELEASE_MODE" = "mcp" ]; then
-  render release-please.yml "$WF/release-please.yml"
+  # `reusable_release` renders the stub that calls reusable-release-please.yml
+  # and carries the `republish_tag` escape hatch (#283). A separate template
+  # rather than a sed range over this one, for the reason the ranges above keep
+  # documenting: an unterminated range runs to end of file, and this is the
+  # publish path. Opt-in until a canary has proven a real release through it.
+  if [ -n "$(cfg reusable_release)" ]; then
+    render release-please-reusable.yml "$WF/release-please.yml"
+  else
+    render release-please.yml "$WF/release-please.yml"
+  fi
   # Deploy jobs are APPENDED to the release stub rather than living in a
   # separate workflow, because they must gate on release-please's
   # `release_created` output — which only exists inside this workflow.
@@ -428,7 +437,11 @@ pr_body() {
     echo "- pr-auto-review: reusable (forced verdict + fail-loud + pass-only arming)"
     echo "- auto-merge: reusable (dependabot + ready-to-merge label arms)"
     [ "$CI_MODE" = "standard" ] && echo "- ci: reusable node CI (deferred gate) — required check becomes \`ci / ci\`"
-    [ "$RELEASE_MODE" = "mcp" ] && echo "- release-please: thin stub + mcp-publish composite action (OIDC identity preserved)"
+    if [ "$RELEASE_MODE" = "mcp" ] && [ -n "$(cfg reusable_release)" ]; then
+      echo "- release-please: reusable release-please (with a \`republish_tag\` dispatch) + publish job kept in the stub (OIDC identity preserved)"
+    elif [ "$RELEASE_MODE" = "mcp" ]; then
+      echo "- release-please: thin stub + mcp-publish composite action (OIDC identity preserved)"
+    fi
     [ -n "$LOCKFIX" ] && echo "- dependabot-lockfix: reusable ($LOCKFIX — regenerates derived lockfiles dependabot can't refresh)"
     [ -n "$CONNECTOR" ] && echo "- deploy-connector: Worker deployed on release (reusable) + workflow_dispatch stub"
     [ -n "$FLY_DIR" ] && echo "- deploy-runner: Fly backend in \`$FLY_DIR\` deployed on release, before the Worker"

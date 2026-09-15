@@ -93,7 +93,8 @@
       "repo": "chrischall/creditkarma-mcp",
       "package_name": "creditkarma-mcp",
       "version_files": "src/index.ts",
-      "sanitize_release_message": "true"
+      "sanitize_release_message": "true",
+      "reusable_release": "true"
     },
     {
       "repo": "chrischall/gemini-mcp",
