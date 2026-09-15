@@ -70,7 +70,11 @@ jq '{defaults: .defaults,
               initial_version: "0.1.0", include_v_in_tag: "",
               include_component_in_tag: ""},
              {repo: "FAKE/n", dependabot: "none", release_config: "none",
-              release_notes: "none"}]}' \
+              release_notes: "none"},
+             {repo: "FAKE/r", reusable_release: "true", connector: "true",
+              package_name: "fake-r"},
+             {repo: "FAKE/rs", reusable_release: "true", ci: "none",
+              package_name: "fake-rs", skill_path: "skills/one/SKILL.md"}]}' \
   "$HERE/fleet.json" > "$ROOT/fleet.json"
 ROLLOUT="$ROOT/scripts/rollout.sh"
 
@@ -963,6 +967,72 @@ if ruby -ryaml -rjson -e '
 else
   bad "DD: contract" "a prefix was chosen that release-please-config.json does not declare"
 fi
+
+# --- R: reusable_release renders the reusable release stub, and only then ----
+# chrischall/workflows#283. The opt-in moves release-please into
+# reusable-release-please.yml and adds the `republish_tag` escape hatch; the
+# publish job stays in the stub so the npm/mcp-publisher OIDC identity does not
+# move. Opt-in first because this is the merge-and-publish path for the whole
+# fleet: a canary has to prove a real release through it before anyone else
+# renders it. FAKE/x is the unopted control, FAKE/r the opted repo with a
+# connector (deploy fragments read the stub's release-please outputs, so every
+# output they name must be one the reusable workflow declares), and FAKE/rs a
+# pinned skill, whose sed range has to work in the new template too.
+R_OFF="$TMP/r-off"; bash "$ROLLOUT" FAKE/x  --render "$R_OFF" >/dev/null
+R_ON="$TMP/r-on";   bash "$ROLLOUT" FAKE/r  --render "$R_ON"  >/dev/null
+R_PIN="$TMP/r-pin"; bash "$ROLLOUT" FAKE/rs --render "$R_PIN" >/dev/null
+
+if grep -qE 'reusable-release-please|republish_tag' "$R_OFF/.github/workflows/release-please.yml"; then
+  bad "R: unset" "release-please.yml changed for a repo that did not opt in"
+else ok "R: unset renders the existing stub"; fi
+
+cat > "$TMP/r-check.rb" <<'RUBY'
+require 'yaml'
+stub_path, reusable_path, pinned_path = ARGV
+src  = File.read(stub_path)
+stub = YAML.load(src)
+on   = stub['on'] || stub[true]
+errs = []
+rp   = stub.dig('jobs', 'release-please') || {}
+errs << "release-please job does not call the reusable (#{rp['uses'].inspect})" unless rp['uses'] == 'chrischall/workflows/.github/workflows/reusable-release-please.yml@main'
+errs << "republish_tag not forwarded (#{rp.dig('with', 'republish_tag').inspect})" unless rp.dig('with', 'republish_tag') == '${{ inputs.republish_tag }}'
+errs << "release_pat not passed from the PAT secret (#{rp.dig('secrets', 'release_pat').inspect})" unless rp.dig('secrets', 'release_pat') == '${{ secrets.RELEASE_PAT }}'
+errs << 'workflow_dispatch has no republish_tag input' unless on.dig('workflow_dispatch', 'inputs', 'republish_tag')
+pub = stub.dig('jobs', 'publish') || {}
+errs << "publish is not gated on the resolved publish output (#{pub['if'].inspect})" unless pub['if'].to_s.include?("needs.release-please.outputs.publish == 'true'")
+steps = pub['steps'] || []
+co = steps.find { |s| s['uses'].to_s.start_with?('actions/checkout') } || {}
+errs << "checkout ref is not the resolved tag (#{co.dig('with', 'ref').inspect})" unless co.dig('with', 'ref') == '${{ needs.release-please.outputs.tag }}'
+mp = steps.find { |s| s['uses'].to_s.include?('mcp-publish') } || {}
+errs << "mcp-publish version is not the resolved version (#{mp.dig('with', 'version').inspect})" unless mp.dig('with', 'version') == '${{ needs.release-please.outputs.version }}'
+errs << "mcp-publish tag-name is not the resolved tag (#{mp.dig('with', 'tag-name').inspect})" unless mp.dig('with', 'tag-name') == '${{ needs.release-please.outputs.tag }}'
+errs << 'deploy-connector fragment not appended' unless stub.dig('jobs', 'deploy-connector')
+errs << 'unpinned repo renders a skill-path line or its comment' if src =~ /skill-path/
+stub['jobs'].each { |n, j| (j['steps'] || []).each { |s| errs << "job #{n}: ${{ inside a run: body" if s['run'].to_s.include?('${{') } }
+
+reusable = YAML.load_file(reusable_path)
+declared = ((reusable['on'] || reusable[true]).dig('workflow_call', 'outputs') || {}).keys
+used = src.scan(/needs\.release-please\.outputs\.([A-Za-z_]+)/).flatten.uniq
+(used - declared).each { |o| errs << "stub reads needs.release-please.outputs.#{o}, which the reusable does not declare" }
+
+pinned = YAML.load_file(pinned_path)
+pmp = (pinned.dig('jobs', 'publish', 'steps') || []).find { |s| s['uses'].to_s.include?('mcp-publish') } || {}
+errs << "pinned skill-path not inside mcp-publish with: (#{pmp.dig('with', 'skill-path').inspect})" unless pmp.dig('with', 'skill-path') == 'skills/one/SKILL.md'
+
+abort(errs.join("\n")) unless errs.empty?
+RUBY
+if ruby "$TMP/r-check.rb" "$R_ON/.github/workflows/release-please.yml" \
+     "$HERE/.github/workflows/reusable-release-please.yml" \
+     "$R_PIN/.github/workflows/release-please.yml" 2>"$TMP/r-check.err"; then
+  ok "R: opted-in stub calls the reusable, forwards republish_tag, publishes the resolved tag, keeps fragments and pins"
+else bad "R: opted in" "$(cat "$TMP/r-check.err")"; fi
+
+# The drift detector renders through the same branch: an opted-in repo holding
+# exactly its rendered stubs is clean, not reported as drifted.
+OUT="$TMP/out.txt"; ERR="$TMP/err.txt"
+GH_FIXTURES="$R_ON" bash "$ROLLOUT" FAKE/r --check > "$OUT" 2> "$ERR"; CODE=$?
+assert_has  R "OK       FAKE/r"
+assert_code R 0
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

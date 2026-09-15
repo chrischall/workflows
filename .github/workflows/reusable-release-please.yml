@@ -1,0 +1,197 @@
+name: Reusable release-please
+
+# The release-please half of an MCP repo's release pipeline, called from the
+# repo's own `release-please.yml` stub (templates/release-please-reusable.yml).
+# Opt-in per repo through fleet.json `reusable_release` (chrischall/workflows#283).
+#
+# WHY IT EXISTS
+#   `release-please.yml` was copied into every repo, so a fix to release
+#   behaviour was a fleet sweep. On 2026-09-14 a transient GitHub API error hit
+#   release-please AFTER it had cut the tag and the GitHub Release in
+#   creditkarma-mcp, homes-mcp and onehome-mcp. The run lost `release_created`,
+#   the publish job is gated on it, so it skipped — tag, Release and changelog
+#   written, nothing on npm — and re-running could never finish it, because
+#   release-please then correctly reports the release as existing and sets the
+#   flag false again. fetchproxy had carried a `republish_tag` escape hatch for
+#   that since its own publish failures; the copies did not.
+#
+# WHAT STAYS IN THE STUB, AND WHY
+#   The PUBLISH job. npm trusted publishing validates the caller's workflow
+#   file, but `mcp-publisher login github-oidc` has never been proven from
+#   inside a called workflow, and a publish path that fails auth fails at the
+#   one moment nobody is watching. The composite `mcp-publish` action runs in
+#   the stub's own job, so its OIDC identity is byte-identical to before. This
+#   workflow decides WHETHER to publish and WHAT; the stub does the publishing.
+#   The `workflow_dispatch` input lives in the stub too, because a called
+#   workflow cannot declare the caller's triggers.
+#
+# OUTPUTS
+#   publish          'true' when the stub should run its publish job
+#   tag, version     what to publish — resolved ONCE for both paths below
+#   release_created  release-please's raw flag (deploy fragments gate on it,
+#   tag_name         and on this, so a republish never redeploys)
+#   pr               release-please's PR output (JSON), when a PR was touched
+
+on:
+  workflow_call:
+    inputs:
+      republish_tag:
+        description: >-
+          An EXISTING tag to publish again (e.g. v1.2.3), for a release whose
+          publish never ran. Blank on every ordinary run.
+        type: string
+        required: false
+        default: ""
+    secrets:
+      release_pat:
+        description: >-
+          PAT for release-please and the contributor-credit amend. Not
+          GITHUB_TOKEN: events a GITHUB_TOKEN causes do not trigger workflows,
+          so the release PR would never get CI or a review.
+        required: true
+    outputs:
+      publish:
+        description: "'true' when the caller should publish"
+        value: ${{ jobs.release-please.outputs.publish }}
+      tag:
+        description: The tag to check out and publish
+        value: ${{ jobs.release-please.outputs.tag }}
+      version:
+        description: The bare version to publish, derived from the tag
+        value: ${{ jobs.release-please.outputs.version }}
+      release_created:
+        description: release-please's own flag — true only on a fresh release
+        value: ${{ jobs.release-please.outputs.release_created }}
+      tag_name:
+        description: release-please's own tag output — empty on a republish
+        value: ${{ jobs.release-please.outputs.tag_name }}
+      pr:
+        description: release-please's PR output
+        value: ${{ jobs.release-please.outputs.pr }}
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      pr: ${{ steps.release.outputs.pr }}
+      publish: ${{ steps.resolve.outputs.publish }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      # Skipped on a republish. The dispatch is the escape hatch for a
+      # release-please run that already went wrong; making it depend on the
+      # next release-please run going right would hand the outage its own fix.
+      - uses: googleapis/release-please-action@v5
+        id: release
+        if: inputs.republish_tag == ''
+        with:
+          token: ${{ secrets.release_pat }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # A changelog line names the change and the PR, never the person. This
+      # amends BOTH the release PR's CHANGELOG and its own description, so a
+      # contribution from outside the org reads "(thanks @user)" everywhere a
+      # person actually looks — the release PR, and the GitHub Release notes
+      # cut from it. Re-applied every run, because release-please regenerates
+      # the changelog and force-pushes its branch each time.
+      - uses: actions/checkout@v7
+        if: steps.release.outputs.pr != ''
+        with:
+          token: ${{ secrets.release_pat }}
+          fetch-depth: 0
+
+      - uses: chrischall/workflows/.github/actions/credit-contributors@main
+        if: steps.release.outputs.pr != ''
+        with:
+          token: ${{ secrets.release_pat }}
+          pr: ${{ steps.release.outputs.pr }}
+
+      # ONE derivation for both paths, because they disagree about shape:
+      # release-please emits `version` bare (1.2.3) and `tag_name` prefixed
+      # (v1.2.3, or <component>-v1.2.3), while a dispatch supplies only a TAG.
+      # Passing a tag through as the version publishes `v1.2.3` as a version
+      # string (caught in review on onehome-mcp#187).
+      #
+      # Every input arrives through env:, never `${{ }}` in the script — a
+      # dispatch input is caller-supplied text, and an expression is
+      # substituted before the shell parses anything. env: alone is only half
+      # of it: the values are written to $GITHUB_OUTPUT, which is line-
+      # oriented, so a tag carrying a newline could define a second output the
+      # publish job trusts. Anything that is not a release tag is refused
+      # BEFORE a byte is written. scripts/release-ref.test.sh pins all of this
+      # against the shipped script.
+      - name: Resolve the release to publish
+        id: resolve
+        env:
+          REPUBLISH_TAG: ${{ inputs.republish_tag }}
+          RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
+          RP_TAG: ${{ steps.release.outputs.tag_name }}
+          RP_VERSION: ${{ steps.release.outputs.version }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -n "$REPUBLISH_TAG" ]; then
+            TAG="$REPUBLISH_TAG"; SOURCE="republish_tag"
+          elif [ "$RELEASE_CREATED" = "true" ]; then
+            TAG="$RP_TAG"; SOURCE="release-please"
+            if [ -z "$TAG" ]; then
+              echo "::error::release-please reported release_created but no tag_name; refusing to guess what to publish" >&2
+              exit 1
+            fi
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "No release this run and no republish_tag: nothing to publish."
+            exit 0
+          fi
+
+          # Two patterns, tried in order, NOT one with an optional component
+          # group: POSIX gives the leftmost group the longest match, so
+          # `([A-Za-z0-9._-]+-)?v?SEMVER` reads the valid prerelease
+          # `v2.0.0-0.3.7` as component `v2.0.0-` and version `0.3.7`. A bare
+          # tag wins outright; a component tag is only `<component>-v<version>`,
+          # the shape release-please writes.
+          semver='([0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?)'
+          bare="^v?${semver}\$"
+          component="^[A-Za-z0-9._-]+-v${semver}\$"
+          if [[ "$TAG" =~ $bare ]] || [[ "$TAG" =~ $component ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+          else
+            echo "::error::${SOURCE} '${TAG}' is not a release tag: expected v?MAJOR.MINOR.PATCH[-suffix] or <component>-vMAJOR.MINOR.PATCH[-suffix]" >&2
+            exit 1
+          fi
+
+          if [ "$SOURCE" = "release-please" ] && [ -n "$RP_VERSION" ] && [ "$RP_VERSION" != "$VERSION" ]; then
+            echo "::error::release-please's version ${RP_VERSION} disagrees with its own tag ${TAG}; refusing to publish either" >&2
+            exit 1
+          fi
+
+          # A republish names a tag that must already exist — that is the whole
+          # contract. Checked here so a typo fails with its name rather than as
+          # an unexplained checkout error in the caller's publish job.
+          # Only a 404 means "no such tag"; a 5xx or a rate limit says so
+          # rather than sending someone to look for a typo that is not there.
+          if [ "$SOURCE" = "republish_tag" ]; then
+            if ! err=$(gh api "repos/${REPO}/git/ref/tags/${TAG}" --silent 2>&1); then
+              case "$err" in
+                *"HTTP 404"*)
+                  echo "::error::republish_tag ${TAG} does not exist in ${REPO}; a republish only finishes a release that was already tagged" >&2 ;;
+                *)
+                  echo "::error::could not check whether ${TAG} exists in ${REPO} (${err}); dispatch again" >&2 ;;
+              esac
+              exit 1
+            fi
+          fi
+
+          {
+            echo "publish=true"
+            echo "tag=${TAG}"
+            echo "version=${VERSION}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publishing ${TAG} as version ${VERSION} (from ${SOURCE})."
