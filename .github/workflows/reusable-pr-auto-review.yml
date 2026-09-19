@@ -833,7 +833,7 @@ jobs:
         # down at once because @v1 is a floating tag — last good run 22:07:24Z,
         # first failure 22:19:42Z, with no change on our side in between.
         # Lift back to @v1 once a release past 1.0.218 fixes the binary path.
-        uses: anthropics/claude-code-action@v1.0.217
+        uses: anthropics/claude-code-action@v1.0.226
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
           # No `github_token:` — the installed Claude App authors comments

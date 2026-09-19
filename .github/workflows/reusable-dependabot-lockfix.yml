@@ -101,7 +101,7 @@ jobs:
           distribution: temurin
           java-version: ${{ inputs.java-version }}
 
-      - uses: gradle/actions/setup-gradle@v6.2.0
+      - uses: gradle/actions/setup-gradle@v6.3.0
         if: inputs.java-version != ''
         with:
           cache-read-only: true
