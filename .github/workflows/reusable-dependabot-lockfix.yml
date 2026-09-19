@@ -89,7 +89,7 @@ jobs:
           # build code and must not be able to read credentials.
           persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         if: inputs.node-version != ''
         with:
           node-version: ${{ inputs.node-version }}
