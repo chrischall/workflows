@@ -1,0 +1,38 @@
+# This repo's OWN dependabot config — not a template, and not rendered by
+# scripts/rollout.sh (the fleet's copy for member repos is
+# templates/dependabot-actions.yml).
+#
+# WHY IT EXISTS: the reusable workflows here run third-party actions on behalf
+# of every caller, so a pin in this repo is a pin for the fleet — and a pin
+# with nothing raising its bump is a pin that rots. The case that forced it:
+# `reusable-release-please.yml` holds `release_pat` and its output decides
+# whether a caller publishes to npm and whether a release deploys, so its
+# `googleapis/release-please-action` step is SHA-pinned. Before this file, a
+# converted repo's own github-actions ecosystem could no longer see that
+# action — it names the reusable workflow, not the action inside it — so
+# nothing in EITHER repo would have raised the bump
+# (chrischall/workflows#283, mcp-host's beta review M5).
+#
+# Scope: `directory: /` is the github-actions ecosystem's way of saying
+# `.github/workflows`. The composite actions under `.github/actions/*` are NOT
+# covered by it; add an entry per action directory if one of their pins ever
+# becomes load-bearing the way the release-please pin is.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # `ci`, not `fix`: an action version ships nothing to a consumer, so it
+    # belongs in the hidden CI section rather than cutting a patch release.
+    # (This repo cuts no releases at all; the prefix keeps the fleet's one
+    # convention for what an action bump is.)
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch
