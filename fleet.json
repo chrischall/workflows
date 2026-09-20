@@ -61,6 +61,12 @@
       "sanitize_release_message": "true"
     },
     {
+      "repo": "chrischall/office-outlook-mcp",
+      "test_command": "npm run test:coverage",
+      "package_name": "office-outlook-mcp",
+      "version_files": "src/version.ts"
+    },
+    {
       "repo": "chrischall/onthecheap-mcp",
       "package_name": "onthecheap-mcp",
       "version_files": "src/version.ts",
