@@ -7,7 +7,8 @@
 # with nothing raising its bump is a pin that rots. The case that forced it:
 # `reusable-release-please.yml` holds `release_pat` and its output decides
 # whether a caller publishes to npm and whether a release deploys, so its
-# `googleapis/release-please-action` step is SHA-pinned. Before this file, a
+# `googleapis/release-please-action` step is pinned to an exact release tag
+# (never a commit SHA). Before this file, a
 # converted repo's own github-actions ecosystem could no longer see that
 # action — it names the reusable workflow, not the action inside it — so
 # nothing in EITHER repo would have raised the bump
