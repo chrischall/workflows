@@ -163,9 +163,9 @@ jobs:
             || { echo "::error::Decoded key is not valid JSON — is the secret base64 of key.json?"; exit 1; }
 
       - name: Publish to Play
-        # Pinned to the v1.1.5 commit: this step receives the service account
-        # key, so a moving tag would be an unreviewed change with access to it.
-        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5
+        # An exact release tag, not the floating `@v1`: this step receives the
+        # service account key, so it moves only when a reviewed bump moves it.
+        uses: r0adkll/upload-google-play@v1.1.5
         with:
           serviceAccountJson: ${{ runner.temp }}/play-sa.json
           packageName: app.nullnet.encore

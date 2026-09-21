@@ -79,6 +79,12 @@ jobs:
         # ofw-mcp#283 — the PR that prompted it.
         run: bash scripts/relmsg.test.sh
 
+      - name: action pin policy
+        # Third-party actions ride release tags, never a commit SHA. #290
+        # SHA-pinned release-please-action in the reusable release and merged,
+        # because nothing here said no.
+        run: bash scripts/action-pins.test.sh
+
       - name: release-message drift tripwire
         # The same two pieces of knowledge — which text GitHub commits, and
         # which commit types matter — exist in BOTH reusable-pr-auto-review.yml

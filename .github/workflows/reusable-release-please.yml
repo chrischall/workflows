@@ -87,19 +87,15 @@ jobs:
       # release-please run that already went wrong; making it depend on the
       # next release-please run going right would hand the outage its own fix.
       #
-      # SHA-pinned, not `@v5`, and the pin is now a FLEET property rather than
-      # each repo's: this is the one step holding `release_pat`, and its output
-      # decides whether a caller publishes to npm and — in the repos whose
-      # stubs carry deploy jobs — whether a release deploys. So it moves when
-      # somebody bumps it and not when a `googleapis` major tag moves. The SHA
-      # is v5.0.0, which is also what `v5` dereferenced to when this was
-      # pinned, so no caller's behaviour changes today. mcp-host had pinned
-      # `@v5.0.0` in its own copy and lost that by converting to this workflow
-      # (its beta review's M5 wanted the SHA); the pin lives here now, and
-      # THIS repo's .github/dependabot.yml is what raises the bump — without
-      # it the float had nowhere left to be noticed, since a caller's
-      # github-actions ecosystem cannot see an action it no longer names.
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+      # An exact release tag, not the floating `@v5`, and the pin is a FLEET
+      # property rather than each repo's: this is the one step holding
+      # `release_pat`, and its output decides whether a caller publishes to npm
+      # and whether a release deploys. So it moves when this repo's
+      # .github/dependabot.yml raises the bump, not when a `googleapis` major
+      # tag moves. A caller's github-actions ecosystem cannot see an action it
+      # no longer names, so that file is the only thing that will. Never a
+      # commit SHA (scripts/action-pins.test.sh).
+      - uses: googleapis/release-please-action@v5.0.0
         id: release
         if: inputs.republish_tag == ''
         with:
