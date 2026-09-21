@@ -135,7 +135,7 @@ VERSION_FILES=$(cfg version_files)
 #   bump-minor-pre-major  whether a breaking change on 0.x bumps the minor or
 #                         cuts 1.0.0. Which one is a per-repo choice, so it
 #                         must never flip as a side effect of a sync: adding
-#                         it holds back a major the repo chose (21 repos
+#                         it holds back a major the repo chose (22 repos
 #                         dropped it on 2026-09-20 for exactly that, #294);
 #                         dropping it ships one nobody chose (encore-ios #39).
 #   initial-version       only affects a repo's first release, but dropping a
