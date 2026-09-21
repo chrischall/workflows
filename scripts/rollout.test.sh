@@ -720,10 +720,10 @@ done
 # --- W: optional release-please keys — empty means ABSENT, not defaulted ----
 # The regression this whole PR exists to prevent, and it had no test.
 #
-# 21 repos set `bump-minor-pre-major: true` and every one of them is still
-# pre-1.0. A template that does not carry the key drops it, and the next
-# breaking change in those repos bumps 0.x straight to 1.0.0 instead of the
-# minor — a major nobody chose, 21 times over. The same shape applies to
+# `bump-minor-pre-major` is a per-repo choice. A template that does not carry
+# the key drops it from every repo that set it, and the next breaking change
+# there bumps 0.x straight to 1.0.0 instead of the minor — a major nobody
+# chose, once per repo (encore-ios #39). The same shape applies to
 # include-*-in-tag: three repos leave them unset and two of those tag as
 # <name>-v<version>, and release-please finds the previous release BY TAG.
 #

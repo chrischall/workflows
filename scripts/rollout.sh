@@ -132,10 +132,12 @@ VERSION_FILES=$(cfg version_files)
 # means the key is absent from the rendered config, not defaulted — the
 # distinction is load-bearing:
 #
-#   bump-minor-pre-major  21 repos set it and every one of them is still
-#                         pre-1.0. Dropping it makes the next breaking change
-#                         bump 0.x straight to 1.0.0 instead of the minor —
-#                         the encore-ios #39 failure, fleet-wide.
+#   bump-minor-pre-major  whether a breaking change on 0.x bumps the minor or
+#                         cuts 1.0.0. Which one is a per-repo choice, so it
+#                         must never flip as a side effect of a sync: adding
+#                         it holds back a major the repo chose (21 repos
+#                         dropped it on 2026-09-20 for exactly that, #294);
+#                         dropping it ships one nobody chose (encore-ios #39).
 #   initial-version       only affects a repo's first release, but dropping a
 #                         recorded value is still an unasked-for change.
 #   include-*-in-tag      three repos leave these unset, and two of them tag as
