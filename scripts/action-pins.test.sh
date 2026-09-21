@@ -7,7 +7,7 @@
 # #290 SHA-pinned release-please-action in the reusable release and it merged,
 # because nothing here said no. This scans every workflow, template, fragment
 # and skill reference the fleet copies from.
-set -uo pipefail
+set -uo pipefail   # no -e: assertions need to observe failures
 cd "$(dirname "$0")/.."
 
 pass=0; fail=0

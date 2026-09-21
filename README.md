@@ -369,9 +369,10 @@ invisible: the config is valid and dependabot simply watches nothing.
 
 **An empty optional release-please key means the key is ABSENT from the
 rendered config, not defaulted.** That distinction is load-bearing:
-`bump-minor-pre-major` is set in 21 repos and every one of them is still
-pre-1.0, so dropping it would make their next breaking change bump 0.x
-straight to 1.0.0 — a major nobody chose, fleet-wide. Three repos leave
+`bump-minor-pre-major` is a per-repo choice, so a sync must never flip it:
+dropping it from a pre-1.0 repo makes its next breaking change bump 0.x
+straight to 1.0.0, a major nobody chose (encore-ios #39), and adding it holds
+back a major the repo chose (22 repos dropped it on 2026-09-20, #294). Three repos leave
 `include-*-in-tag` unset and two of those tag as `<name>-v<version>`; writing
 an explicit value where there was none could change the tag scheme, and
 release-please finds the previous release *by tag*.

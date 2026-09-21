@@ -884,7 +884,8 @@ jobs:
               - Formatting taste a formatter would own: comment length, single- vs multi-line comments, blank lines, line breaks, import order not enforced by a config.
               - Rephrasing comments/identifiers that are already clear.
               - Anything you cannot ground in the docs, a repo config, or adjacent-code style.
-              - Pinning a `chrischall/workflows/*` reusable workflow to `@main` instead of a commit SHA. This is the owner's deliberate convention for the fleet's OWN self-controlled reusable-workflow repo (improvements propagate without per-repo SHA bumps); the exposure is self-owned, not a third-party supply-chain risk. Do NOT flag it — this exemption is ONLY for `chrischall/workflows` refs, not third-party actions/workflows.
+              - How an action or reusable workflow is pinned, when it follows the owner's fleet policy: third-party actions on a release TAG (`@v5.0.0`, `@v1`, `@1.6`), `chrischall/workflows/*` on `@main`. Never ask for a commit SHA instead — the owner has ruled SHA pins out for every action, third-party included, secret-bearing steps included, and a tag pin is the policy, not a supply-chain gap.
+            The one pin that IS a finding: a NEW `uses: …@<40-hex commit SHA>` introduced by this PR (🟡 Nit; say to use the release tag the SHA names). Removing a SHA pin in favour of a tag is correct and never a finding.
             If your only findings are out-of-scope, the verdict is `pass`.
 
             OUTPUT:
