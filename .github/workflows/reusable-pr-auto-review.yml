@@ -788,7 +788,24 @@ jobs:
           # label forces Opus. Never the [1m] context variant.
           # Fleet-wide single source of truth for review models — every repo
           # consumes this workflow via @main, so model bumps land here only.
-          CHANGED=$(gh api "/repos/${REPO}/pulls/${PR}" --jq '.additions + .deletions')
+          # Retried: a burst of reviews (arming 71 release PRs at once,
+          # 2026-09-23) got a non-JSON error page back from the API here —
+          # `invalid character 'U' looking for beginning of value` — and with
+          # no retry the step died, so the PR got no verdict at all
+          # (getyourguide-mcp#102, housecallpro-mcp#66, easytable-mcp#88).
+          # Only a number is accepted; if every attempt fails, fail loudly
+          # rather than guess a model tier.
+          CHANGED=""
+          for delay in 5 10 20 40 0; do
+            CHANGED=$(gh api "/repos/${REPO}/pulls/${PR}" --jq '.additions + .deletions' 2>/dev/null || true)
+            [[ "$CHANGED" =~ ^[0-9]+$ ]] && break
+            CHANGED=""
+            [ "$delay" -gt 0 ] && { echo "PR size lookup failed; retrying in ${delay}s"; sleep "$delay"; }
+          done
+          if [ -z "$CHANGED" ]; then
+            echo "::error::could not read PR #${PR}'s size from the GitHub API after 5 attempts"
+            exit 1
+          fi
           if [ "$HAS_OPUS_LABEL" = "true" ]; then
             MODEL="claude-opus-5-5"
             REASON="\`review-with-opus\` label (forced)"
