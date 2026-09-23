@@ -141,21 +141,49 @@ jobs:
           if [ "$USER_TYPE" != "User" ]; then run_ci "bot PR → run CI"; fi
 
 
-          case ",$LABELS," in
-            *,ready-to-merge,*)
-              # Already armed. In status mode, suppress the duplicate run a
-              # non-arming label would trigger — the SHA's ci-gated status is
-              # already set and stays untouched (on a fork it was deliberately
-              # never posted, so skipping leaves the merge blocked either way).
-              # Unsafe in fail mode (a green job here would overwrite a red
-              # `ci / ci` on the same SHA).
-              if [ "$MODE" = "status" ] && [ "$EVENT_ACTION" = "labeled" ] && [ "$EVENT_LABEL" != "ready-to-merge" ]; then
-                echo "already armed; label '$EVENT_LABEL' is not an arming event → skip duplicate CI (ci-gated status unchanged)"
-                echo "run=false" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-              run_ci "PR armed (ready-to-merge) → run CI" ;;
-          esac
+          ARMED=false
+          case ",$LABELS," in *,ready-to-merge,*) ARMED=true ;; esac
+
+          # A FORK is armed for one commit, not by the label (fleet-audit#283).
+          # The label stays on the PR when the fork pushes again — a fork run's
+          # token cannot remove it, and no review runs on a fork push — so a
+          # label check alone built every later commit unreviewed. Auto-review
+          # records the commit it passed as an `auto-review/armed` status on
+          # that SHA; only a head carrying it builds. Anything else takes the
+          # un-armed fork path below. A lookup that fails cannot say which, so
+          # the gate errors: a green run that built nothing would be mirrored
+          # into a green `ci-gated` by ci-fork-status.
+          #
+          # And no duplicate-run suppression for a fork: ci-fork-status can see
+          # when a run was created, not whether it built, so every run created
+          # after the arming has to build.
+          #
+          # KEEP IN SYNC with .github/actions/arm-gate/action.yml.
+          if [ "$ARMED" = "true" ] && [ -n "$PR_HEAD_REPO" ] && [ "$PR_HEAD_REPO" != "$REPO" ]; then
+            if ! REVIEWED_AT="$(gh api "repos/$REPO/commits/$HEAD_SHA/statuses?per_page=100" \
+                  --jq 'map(select(.context=="auto-review/armed")) | .[0] | select(.state=="success") | .created_at')"; then
+              echo "::error::could not read whether auto-review passed $HEAD_SHA (the auto-review/armed status) — failing rather than guess. Re-run this job."
+              exit 1
+            fi
+            if [ -n "$REVIEWED_AT" ]; then
+              run_ci "fork PR armed for this exact commit (auto-review passed $HEAD_SHA at $REVIEWED_AT) → run CI"
+            fi
+            echo "fork PR carries ready-to-merge, but auto-review did not pass $HEAD_SHA (new commits since the review) → treated as un-armed; comment /auto-review to review this commit"
+            ARMED=false
+          fi
+
+          if [ "$ARMED" = "true" ]; then
+            # Already armed. In status mode, suppress the duplicate run a
+            # non-arming label would trigger — the SHA's ci-gated status is
+            # already set and stays untouched. Unsafe in fail mode (a green job
+            # here would overwrite a red `ci / ci` on the same SHA).
+            if [ "$MODE" = "status" ] && [ "$EVENT_ACTION" = "labeled" ] && [ "$EVENT_LABEL" != "ready-to-merge" ]; then
+              echo "already armed; label '$EVENT_LABEL' is not an arming event → skip duplicate CI (ci-gated status unchanged)"
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            run_ci "PR armed (ready-to-merge) → run CI"
+          fi
 
           # Fork PR in status mode: a read-only token makes the ci-gated POST
           # below impossible (403 → this job fails → every build step is
@@ -175,12 +203,11 @@ jobs:
           # most of the fleet would keep the old behaviour while the rest
           # changed — scripts/gate.test.sh exercises BOTH.
           #
-          # Deliberately AFTER the armed case: an already-armed fork PR must
-          # take the armed path (and its duplicate-run suppression), or it
-          # rebuilds on every relabel where a same-repo PR is skipped (#113).
+          # Deliberately AFTER the armed case: an armed fork PR must take the
+          # armed path above.
           if [ "$MODE" = "status" ] && [ -n "$PR_HEAD_REPO" ] && [ "$PR_HEAD_REPO" != "$REPO" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "fork PR ($PR_HEAD_REPO) is un-armed → CI deferred until a maintainer arms it (comment /auto-review, or add ready-to-merge); posting no ci-gated status (fork tokens are read-only)"
+            echo "fork PR ($PR_HEAD_REPO) is un-armed → CI deferred until a maintainer comments /auto-review and the review passes this commit; posting no ci-gated status (fork tokens are read-only)"
             exit 0
           fi
 

@@ -73,7 +73,8 @@ An UN-ARMED fork does not build at all. It used to — on the reasoning that the
 unreported `ci-gated` context blocked the merge anyway — but `ci-fork-status.yml`
 now reports that context, and running unreviewed fork code before a maintainer
 has looked is the thing worth not doing. A fork waits for `ready-to-merge`
-exactly as a same-repo PR does. The decision lives in TWO places that must stay
+exactly as a same-repo PR does — plus, being a fork, the reviewed-commit status
+described under "Reviewing a fork PR" below. The decision lives in TWO places that must stay
 in step: `.github/actions/arm-gate/action.yml` and the inlined copy in
 `.github/workflows/reusable-mcp-ci.yml`; `scripts/gate.test.sh` exercises both.
 
@@ -94,7 +95,12 @@ unlike the same-repo path, no event starts a fork review on its own.
 A fork verdict ARMS on `pass`/`warn`, exactly as a same-repo one does — the
 command is the human gate, and a fork reaches the review no other way. Arming
 is what starts a fork's CI: the arm-gate stops deferring, the real build runs,
-and `ci-fork-status` posts the true `ci-gated`. It does not start a merge —
+and `ci-fork-status` posts the true `ci-gated`. It arms ONE commit: the review
+also posts an `auto-review/armed` status on the SHA it passed, and the gate and
+`ci-fork-status` build and report only a head that carries it. The label stays
+on when the fork pushes again (a fork run cannot remove it), so a new commit
+stays deferred until `/auto-review` passes it too. The status is posted with
+the release PAT, which therefore needs commit-status write. It does not start a merge —
 auto-merge excludes forks by head repo, so a fork PR still waits for a human to
 press merge.
 
@@ -107,9 +113,12 @@ hand-post a status.
 That was a deliberate weakening of a fail-safe — previously the fork path could
 only ever leave the gate closed. Two human gates remain and it rests on them:
 GitHub holds fork runs at `action_required` until a maintainer approves them
-(so CI never runs on unreviewed external code, and the reporter only mirrors an
-approved run), and a fork is armed only when a maintainer types `/auto-review`
-on it — never by an event, and only from an author_association the repo trusts.
+(for a first-time contributor, under the default setting), and a fork is armed
+only when a maintainer types `/auto-review` on it — never by an event, only from
+an author_association the repo trusts, and only for the commit that review
+passed. The reporter mirrors a run only if the PR is labelled, its head carries
+that commit's `auto-review/armed` status, and the run was created after it —
+a run created earlier deferred its build and concluded `success` anyway.
 Auto-merge excludes forks regardless, so what arming a fork buys is CI, not a
 merge.
 

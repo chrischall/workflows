@@ -114,6 +114,14 @@ jobs:
         # the job `if:` and the step's whole-command match.
         run: bash scripts/command.test.sh
 
+      - name: review-model tool sandbox unit tests
+        # The review model reads a stranger's fork once a maintainer comments
+        # /auto-review, so what it may run has to hold up under injected
+        # instructions (fleet-audit#282). Pins the allow/deny rules, the env
+        # scrub, user-only settings, the symlink removal before the model runs,
+        # and that commit subjects cannot break out of their prompt fence.
+        run: bash scripts/review-sandbox.test.sh
+
       - name: arm / de-arm policy unit tests
         # #209 shipped scripts/arm.test.sh and never wired it in, so the guard
         # it added ran in CI exactly zero times — the same failure its
