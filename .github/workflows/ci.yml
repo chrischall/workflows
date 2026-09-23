@@ -80,9 +80,12 @@ jobs:
         run: bash scripts/relmsg.test.sh
 
       - name: action pin policy
-        # Third-party actions ride release tags, never a commit SHA. #290
-        # SHA-pinned release-please-action in the reusable release and merged,
-        # because nothing here said no.
+        # Third-party actions ride release tags, never a commit SHA or a
+        # branch. #290 SHA-pinned release-please-action in the reusable release
+        # and merged, because nothing here said no; setup-flyctl rode @master
+        # ahead of the FLY_API_TOKEN step (fleet-audit#286). npx inside the
+        # composite actions runs in the id-token: write publish job, so it
+        # must name an exact version (fleet-audit#285).
         run: bash scripts/action-pins.test.sh
 
       - name: release-message drift tripwire
@@ -103,6 +106,13 @@ jobs:
         # for policy, and the only thing deciding whether a maintainer's
         # `/auto-review` starts a fork PR's CI.
         run: bash scripts/verdict.test.sh
+
+      - name: /auto-review command-match unit tests
+        # The maintainer's `/auto-review` is the one human act the fork trust
+        # model rests on. It was a substring match, so "don't /auto-review
+        # this yet" reviewed, armed and built a fork (fleet-audit#284). Pins
+        # the job `if:` and the step's whole-command match.
+        run: bash scripts/command.test.sh
 
       - name: arm / de-arm policy unit tests
         # #209 shipped scripts/arm.test.sh and never wired it in, so the guard
@@ -154,12 +164,28 @@ jobs:
         # none of which fail loudly on their own.
         run: bash scripts/release-ref.test.sh
 
+      - name: dependabot lockfix isolation unit tests
+        # The lockfix command may run PR-controlled code (gradle), and it used
+        # to share a job with the PAT-bearing push, so that code could plant
+        # a git hook the push ran with the PAT in env (fleet-audit#281). Pins
+        # the two-job split and the push job's refusal of any patch outside
+        # the declared lockfiles.
+        run: bash scripts/lockfix.test.sh
+
       - name: rollout.sh unit tests
         # --check is what the daily drift sweep runs, and its failure mode is
         # silent under-reporting rather than a crash — nothing downstream would
         # notice. These stub `gh` and assert the whole report, not just the
         # first line.
         run: bash scripts/rollout.test.sh
+
+      - name: update-ruleset unit tests
+        # The gate-mode flip must swap only the gate context. It used to
+        # rewrite the required checks to the single new one, silently
+        # dropping every other required check and its integration_id binding
+        # (fleet-audit#280); a repo keeps merging without them and nothing
+        # notices.
+        run: bash scripts/update-ruleset.test.sh
 
       - name: label contract unit tests
         # Both halves of the label story fail QUIETLY. A missing pipeline label
