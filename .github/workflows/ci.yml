@@ -164,6 +164,14 @@ jobs:
         # none of which fail loudly on their own.
         run: bash scripts/release-ref.test.sh
 
+      - name: dependabot lockfix isolation unit tests
+        # The lockfix command may run PR-controlled code (gradle), and it used
+        # to share a job with the PAT-bearing push, so that code could plant
+        # a git hook the push ran with the PAT in env (fleet-audit#281). Pins
+        # the two-job split and the push job's refusal of any patch outside
+        # the declared lockfiles.
+        run: bash scripts/lockfix.test.sh
+
       - name: rollout.sh unit tests
         # --check is what the daily drift sweep runs, and its failure mode is
         # silent under-reporting rather than a crash — nothing downstream would

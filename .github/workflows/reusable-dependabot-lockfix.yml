@@ -26,8 +26,16 @@ name: Reusable dependabot lockfix
 #     dependabot[bot]; nobody else can open or push to dependabot/* branches
 #     without write access, and dependabot itself only ever changes
 #     manifests/lockfiles;
-#   - checkout uses `persist-credentials: false` and the PAT is injected only
-#     into the final push step's env, so the lockfix command never sees it;
+#   - the lockfix command runs in its OWN job (`lockfix`) that holds no
+#     secret and a read-only token, and hands over only a patch artifact.
+#     Steps of one job share a runner, user and workspace, so PR code run by
+#     the lockfix could otherwise plant .git/hooks, poison $GITHUB_ENV /
+#     $GITHUB_PATH, or leave a daemon reading a later step's environment —
+#     and a later step held the PAT (fleet-audit#281);
+#   - the `push` job holds the PAT and runs NO PR code: a fresh checkout
+#     without persisted credentials, the patch treated as untrusted data
+#     (size-capped, regular files only, confined to `commit-paths`), and
+#     commit/push with hooks disabled;
 #   - after our push the next `synchronize` actor is the PAT owner, not
 #     dependabot[bot], so the guard breaks the retrigger loop.
 #
@@ -78,13 +86,18 @@ jobs:
     runs-on: ubuntu-latest
     # pull_request_target grants a read/write github.token by default; this
     # job runs PR-controlled code, so keep the token to the read access
-    # checkout needs and nothing more (the push uses the PAT, not the token).
+    # checkout needs and nothing more. It holds NO secret: everything it
+    # produces is untrusted input to the `push` job below.
     permissions:
       contents: read
+    outputs:
+      changed: ${{ steps.drift.outputs.changed }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          # The exact head this run was triggered for; `push` checks out the
+          # same SHA, so the patch applies to the tree it was made from.
+          ref: ${{ github.event.pull_request.head.sha }}
           # No token in the tree: the lockfix command may run PR-controlled
           # build code and must not be able to read credentials.
           persist-credentials: false
@@ -109,13 +122,11 @@ jobs:
       - name: Regenerate lockfiles
         run: ${{ inputs.lockfix-command }}
 
-      - name: Commit and push drift
+      - name: Package lockfile drift
+        id: drift
         env:
-          PAT: ${{ secrets.release_pat }}
           PATHS: ${{ inputs.commit-paths }}
-          MESSAGE: ${{ inputs.commit-message }}
-          BRANCH: ${{ github.event.pull_request.head.ref }}
-          REPO: ${{ github.repository }}
+          PATCH: ${{ runner.temp }}/lockfix.patch
         run: |
           read -ra pathspecs <<< "$PATHS"
           # `git status --porcelain`, not `git diff`: a lockfix that CREATES
@@ -130,10 +141,81 @@ jobs:
           done
           if [ "${#changed[@]}" -eq 0 ]; then
             echo "lockfiles already in sync — nothing to push"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git add -- "${changed[@]}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "$MESSAGE"
-          git push "https://x-access-token:${PAT}@github.com/${REPO}.git" "HEAD:${BRANCH}"
+          # Intent-to-add makes a newly created lockfile show up in the diff.
+          git add -N -- "${changed[@]}"
+          git diff --binary -- "${changed[@]}" > "$PATCH"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        if: steps.drift.outputs.changed == 'true'
+        with:
+          name: lockfix-patch
+          path: ${{ runner.temp }}/lockfix.patch
+          retention-days: 1
+          if-no-files-found: error
+
+  push:
+    needs: lockfix
+    if: needs.lockfix.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    # Read access for the checkout; the push itself uses the PAT.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: lockfix-patch
+          path: ${{ runner.temp }}/lockfix
+
+      - name: Commit and push drift
+        env:
+          PAT: ${{ secrets.release_pat }}
+          PATHS: ${{ inputs.commit-paths }}
+          PATCH: ${{ runner.temp }}/lockfix/lockfix.patch
+          MESSAGE: ${{ inputs.commit-message }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          read -ra pathspecs <<< "$PATHS"
+          # The patch came out of a job that ran PR-controlled code, so it is
+          # attacker-shaped data until proven otherwise. Cap it, apply it to
+          # the index (git apply refuses paths outside the tree), then accept
+          # it only if every path it touched is a declared lockfile and every
+          # result is a regular file or a deletion — no workflow edits, no
+          # symlinks, no executables.
+          max=$((50 * 1024 * 1024))
+          size=$(wc -c < "$PATCH")
+          if [ "$size" -gt "$max" ]; then
+            echo "::error::lockfix patch too large ($size bytes > $max) — refusing"
+            exit 1
+          fi
+          git apply --index "$PATCH"
+          all=$(git diff --cached --name-only --no-renames | sort)
+          allowed=$(git diff --cached --name-only --no-renames -- "${pathspecs[@]}" | sort)
+          if [ -z "$all" ] || [ "$all" != "$allowed" ]; then
+            echo "::error::lockfix patch touches paths outside commit-paths — refusing"
+            printf '%s\n' "$all"
+            exit 1
+          fi
+          bad_mode=$(git diff --cached --raw --no-renames | awk '$2 != "100644" && $2 != "000000" {print $NF}')
+          if [ -n "$bad_mode" ]; then
+            echo "::error::lockfix patch creates a non-regular file — refusing"
+            printf '%s\n' "$bad_mode"
+            exit 1
+          fi
+          # Hooks off for commit AND push: this job runs no PR code, but a
+          # hook is the classic way to run code next to a secret.
+          git -c core.hooksPath=/dev/null \
+              -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "$MESSAGE"
+          git -c core.hooksPath=/dev/null push "https://x-access-token:${PAT}@github.com/${REPO}.git" "HEAD:${BRANCH}"
