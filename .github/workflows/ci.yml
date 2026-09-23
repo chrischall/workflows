@@ -105,6 +105,13 @@ jobs:
         # `/auto-review` starts a fork PR's CI.
         run: bash scripts/verdict.test.sh
 
+      - name: /auto-review command-match unit tests
+        # The maintainer's `/auto-review` is the one human act the fork trust
+        # model rests on. It was a substring match, so "don't /auto-review
+        # this yet" reviewed, armed and built a fork (fleet-audit#284). Pins
+        # the job `if:` and the step's whole-command match.
+        run: bash scripts/command.test.sh
+
       - name: arm / de-arm policy unit tests
         # #209 shipped scripts/arm.test.sh and never wired it in, so the guard
         # it added ran in CI exactly zero times — the same failure its

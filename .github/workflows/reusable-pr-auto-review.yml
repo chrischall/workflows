@@ -128,7 +128,7 @@ jobs:
             || contains(github.event.pull_request.labels.*.name, 'release-ready')))
       || (github.event_name == 'issue_comment'
         && github.event.issue.pull_request
-        && contains(github.event.comment.body, '/auto-review')
+        && startsWith(github.event.comment.body, '/auto-review')
         && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     outputs:
@@ -175,10 +175,14 @@ jobs:
           # The fork path is HUMAN-GATED and that gate is here: a maintainer has
           # to type the command, and `author_association` has to be one the repo
           # trusts. A fork review never starts on its own.
+          # The command must OPEN the comment, as a whole word. A substring
+          # match let any maintainer comment that merely mentioned it ("don't
+          # /auto-review this yet", a quoted reply) review, arm and build a
+          # fork (fleet-audit#284). Keep in step with the job `if:` above.
           if [ "$EVENT" = "issue_comment" ]; then
-            case "$COMMENT_BODY" in *"/auto-review"*) ;; *)
-              echo "eligible=false" >> "$GITHUB_OUTPUT"; echo "no /auto-review command"; exit 0 ;;
-            esac
+            if ! printf '%s\n' "$COMMENT_BODY" | head -n 1 | grep -Eq '^/auto-review([[:space:]]|$)'; then
+              echo "eligible=false" >> "$GITHUB_OUTPUT"; echo "no /auto-review command"; exit 0
+            fi
             case "$COMMENT_ASSOC" in OWNER|MEMBER|COLLABORATOR) ;; *)
               echo "eligible=false" >> "$GITHUB_OUTPUT"
               echo "::notice::/auto-review ignored — comment author_association is '$COMMENT_ASSOC', not a maintainer of this repo."
