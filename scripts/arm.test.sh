@@ -87,16 +87,21 @@ NOLABEL_PR='{"state":"OPEN","labels":[{"name":"bug"}],"autoMergeRequest":{"enabl
 MERGED_PR='{"state":"MERGED","labels":[{"name":"ready-to-merge"}],"autoMergeRequest":null}'
 
 # run_case <name> <verdict> <recorded comment> <pr state json>
-# Exports CALLS for the assertions that follow each case.
+# Sets CALLS (the stub-call log) for the assertions that follow each case.
 run_case() {
   local name="$1" verdict="$2" recorded="${3:-}" state="${4:-$CLEAN_PR}"
   local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
-  export CALLS="$dir/calls"; : > "$CALLS"
-  export GH_TOKEN=x PR=274 REPO=chrischall/fetchproxy VERDICT="$verdict" \
-         RECORDED_VERDICT="$recorded" PR_STATE="$state" \
-         IS_FORK="${IS_FORK:-false}" REVIEWED_SHA="${REVIEWED_SHA-cafe1234cafe1234cafe1234cafe1234cafe1234}" \
-         RUN_URL=https://example.invalid/run/1
-  bash -e "$TMP/arm.sh" >"$dir/log" 2>&1
+  CALLS="$dir/calls"; : > "$CALLS"
+  # Handed to the step as a prefix, NOT exported: a case such as
+  # `REVIEWED_SHA="" fork_case ...` prefixes these onto the call, and on bash
+  # <= 5.2 (ubuntu-latest) exporting a prefixed variable inside the function
+  # makes it outlive the call — the next case then ran as a fork with no
+  # reviewed commit. bash 5.3 drops it, so the suite passed on a Mac only.
+  GH_TOKEN=x PR=274 REPO=chrischall/fetchproxy VERDICT="$verdict" \
+    RECORDED_VERDICT="$recorded" PR_STATE="$state" CALLS="$CALLS" \
+    IS_FORK="${IS_FORK:-false}" REVIEWED_SHA="${REVIEWED_SHA-cafe1234cafe1234cafe1234cafe1234cafe1234}" \
+    RUN_URL=https://example.invalid/run/1 \
+    bash -e "$TMP/arm.sh" >"$dir/log" 2>&1
   RC=$?
   CASE="$name"; LOG="$dir/log"
 }
