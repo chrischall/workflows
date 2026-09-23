@@ -86,6 +86,39 @@ else
   bad "third-party actions on a branch ref (use a release tag, e.g. @v5.0.0)" "$branch_hits"
 fi
 
+# npx in the composite actions (fleet-audit#285). They run inside the publish
+# job, which holds id-token: write (npm trusted publishing, MCP Registry OIDC)
+# and a contents: write token, so `npx <pkg>` at whatever is latest on npm lets
+# a compromised release of that package publish as the fleet. Every npx there
+# must name an exact version, bumped through a reviewed change here.
+unpinned_npx() {
+  printf '%s\n' "$1" | grep -Eo 'npx([[:space:]]+-[-a-z]+)*[[:space:]]+[^[:space:]]+' \
+    | awk '{print $NF}' | grep -Ev '^@?[^@[:space:]]+@[0-9]+\.[0-9]+\.[0-9]+$' || true
+}
+for line in \
+  'if ! npx @anthropic-ai/mcpb pack; then' \
+  'npx --yes clawhub login --no-browser' \
+  'npx --yes clawhub@latest publish "$DIR"' \
+  'npx clawhub@0 publish'; do
+  if [ -n "$(unpinned_npx "$line")" ]; then ok "npx check catches: $line"
+  else bad "npx check misses an unpinned package" "$line"; fi
+done
+for line in \
+  'if ! npx --yes @anthropic-ai/mcpb@2.1.2 pack; then' \
+  'npx --yes clawhub@0.23.3 publish "$SKILL_DIR"'; do
+  if [ -n "$(unpinned_npx "$line")" ]; then bad "npx check flags an exact pin" "$line"
+  else ok "npx check allows: $line"; fi
+done
+npx_hits=$(grep -rEn 'npx[[:space:]]' .github/actions 2>/dev/null | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#' \
+  | while IFS= read -r hit; do
+      [ -n "$(unpinned_npx "${hit#*:*:}")" ] && printf '%s\n' "$hit"
+    done)
+if [ -z "$npx_hits" ]; then
+  ok "every npx in a composite action names an exact version"
+else
+  bad "unpinned npx in a composite action (pin an exact version, e.g. pkg@1.2.3)" "$npx_hits"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

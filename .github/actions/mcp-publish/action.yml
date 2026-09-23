@@ -270,7 +270,10 @@ runs:
             # went on to fail with "cannot stat ''" and the unconditional echo
             # below reported a bundle that was never built, over a green job.
             # remind-mcp and angi-mcp each shipped releases with no .mcpb that way.
-            if ! npx @anthropic-ai/mcpb pack; then
+            # Exact version, like mcp-publisher: this job holds id-token: write,
+            # so whatever npm serves as `latest` would run with the power to
+            # publish as this repo (fleet-audit#285). Bump deliberately.
+            if ! npx @anthropic-ai/mcpb@2.1.2 pack; then
               echo "::error title=mcpb pack failed::$dir — manifest invalid or pack errored"
               exit 1
             fi
@@ -476,7 +479,11 @@ runs:
           echo "No SKILL.md found — skipping ClawHub publish."
           exit 0
         fi
-        npx --yes clawhub login --token "$CLAWHUB_TOKEN" --no-browser
+        # clawhub is pinned for the same reason as mcpb above: this step shares
+        # the publish job's id-token: write (fleet-audit#285). Bump deliberately.
+        # The token stays on argv because clawhub 0.23.3 reads it from nowhere
+        # else (no env var; its hidden prompt returns "" without a TTY).
+        npx --yes clawhub@0.23.3 login --token "$CLAWHUB_TOKEN" --no-browser
         # ClawHub `publish` rejects plugin-shaped folders; publish each SKILL.md
         # from a clean temp dir as a standalone skill, under its own slug —
         # reusing one slug would have each skill overwrite the last.
@@ -500,7 +507,7 @@ runs:
           # `clawhub publish --dry-run --json`: no --name gives
           # "displayName": "Tmp.X3JS6uYyx7"; with it, the slug.
           echo "Publishing $SLUG to ClawHub..."
-          npx --yes clawhub publish "$SKILL_DIR" --version "${VERSION}" --slug "${SLUG}" --name "${SLUG}" || {
+          npx --yes clawhub@0.23.3 publish "$SKILL_DIR" --version "${VERSION}" --slug "${SLUG}" --name "${SLUG}" || {
             echo "::warning title=ClawHub publish failed::$SLUG did not publish"
             FAILED=1
           }

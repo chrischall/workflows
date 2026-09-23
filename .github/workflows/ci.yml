@@ -83,7 +83,9 @@ jobs:
         # Third-party actions ride release tags, never a commit SHA or a
         # branch. #290 SHA-pinned release-please-action in the reusable release
         # and merged, because nothing here said no; setup-flyctl rode @master
-        # ahead of the FLY_API_TOKEN step (fleet-audit#286).
+        # ahead of the FLY_API_TOKEN step (fleet-audit#286). npx inside the
+        # composite actions runs in the id-token: write publish job, so it
+        # must name an exact version (fleet-audit#285).
         run: bash scripts/action-pins.test.sh
 
       - name: release-message drift tripwire
