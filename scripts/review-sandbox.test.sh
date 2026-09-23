@@ -95,6 +95,17 @@ if grep -qxE "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB='?1'?" "$TMP/env.txt"; then
   ok "review job sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1"
 else bad "review job sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1" "job env: $(tr '\n' ' ' < "$TMP/env.txt")"; fi
 
+# On Linux the scrub is enforced with bubblewrap, which ubuntu-latest lacks:
+# without it Claude Code exits 1 before reviewing ("bubblewrap is required for
+# subprocess env scrubbing"), so every PR in the fleet goes unreviewed.
+WF_FILE="$(dirname "$0")/../.github/workflows/reusable-pr-auto-review.yml"
+if grep -qE 'apt-get install [^#]*bubblewrap' "$WF_FILE"; then
+  ok "review job installs bubblewrap for the env scrub"
+else bad "review job installs bubblewrap for the env scrub" "no apt-get install bubblewrap in $WF_FILE"; fi
+if grep -qF 'kernel.apparmor_restrict_unprivileged_userns=0' "$WF_FILE"; then
+  ok "review job lets bwrap create its user namespace (ubuntu 24.04 AppArmor)"
+else bad "review job lets bwrap create its user namespace (ubuntu 24.04 AppArmor)" "no sysctl for apparmor_restrict_unprivileged_userns"; fi
+
 echo "── prompt matches the allowlist ──"
 if grep -qF '`find`' "$TMP/prompt.txt"; then bad "prompt no longer tells the model to use find" "still mentions \`find\`"
 else ok "prompt no longer tells the model to use find"; fi
