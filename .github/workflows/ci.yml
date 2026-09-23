@@ -162,6 +162,14 @@ jobs:
         # first line.
         run: bash scripts/rollout.test.sh
 
+      - name: update-ruleset unit tests
+        # The gate-mode flip must swap only the gate context. It used to
+        # rewrite the required checks to the single new one, silently
+        # dropping every other required check and its integration_id binding
+        # (fleet-audit#280); a repo keeps merging without them and nothing
+        # notices.
+        run: bash scripts/update-ruleset.test.sh
+
       - name: label contract unit tests
         # Both halves of the label story fail QUIETLY. A missing pipeline label
         # does not error — the workflow that wanted it just does not find it.

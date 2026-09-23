@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Set a repo's required-status-check context (default `ci / ci`), or create
-# the ruleset if the repo has none (nullnet-app, now on Team plan).
+# Set a repo's gate required-status-check context (default `ci / ci`), or
+# create the ruleset if the repo has none (nullnet-app, now on Team plan).
+# Only the gate context (`ci / ci` / `ci-gated`) is replaced; any other
+# required check on the ruleset is kept.
 #
 # Status-mode gate migration: after a repo's CI stub switches to
 # `gate-mode: status` (node) / `mode: status` (arm-gate), flip its required
@@ -48,15 +50,28 @@ for id in $(gh api "repos/$REPO/rulesets" --jq '.[] | select(.target=="branch") 
   fi
 done
 
+# Only the GATE context is swapped. The two gate modes require `ci / ci` or
+# `ci-gated`; every other required check (CodeQL, a platform build, ...) and
+# its integration_id binding must survive the flip. Rewriting the list to the
+# single new context silently dropped them (fleet-audit#280). An entry that
+# already names the new context is kept as-is, binding included.
+GATE_CONTEXTS='["ci / ci","ci-gated"]'
+MIGRATE='def migrate($ctx; $gates):
+  if any(.[]; .context == $ctx)
+  then map(select(.context == $ctx or (.context | IN($gates[]) | not)))
+  else map(select(.context | IN($gates[]) | not)) + [{context: $ctx}] end;'
+
 if [ -n "$RID" ]; then
-  CURRENT=$(gh api "repos/$REPO/rulesets/$RID" --jq \
-    '[.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context] | join(",")')
-  echo "$REPO ruleset $RID currently requires: ${CURRENT:-<none>} -> $NEW_CONTEXT"
-  [ "$EXECUTE" = "--execute" ] || { echo "(dry run)"; exit 0; }
   FULL=$(gh api "repos/$REPO/rulesets/$RID")
-  echo "$FULL" | jq --arg ctx "$NEW_CONTEXT" '
+  CHECKS=$(echo "$FULL" | jq -c '[.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[]]')
+  AFTER=$(echo "$CHECKS" | jq -c --arg ctx "$NEW_CONTEXT" --argjson gates "$GATE_CONTEXTS" "$MIGRATE migrate(\$ctx; \$gates)")
+  echo "$REPO ruleset $RID required checks:"
+  echo "  before: $(echo "$CHECKS" | jq -r 'map(.context) | join(", ") | if . == "" then "<none>" else . end')"
+  echo "  after:  $(echo "$AFTER" | jq -r 'map(.context) | join(", ")')"
+  [ "$EXECUTE" = "--execute" ] || { echo "(dry run)"; exit 0; }
+  echo "$FULL" | jq --arg ctx "$NEW_CONTEXT" --argjson gates "$GATE_CONTEXTS" "$MIGRATE"'
     .rules = [.rules[] | if .type=="required_status_checks"
-      then .parameters.required_status_checks = [{context: $ctx}] else . end]
+      then .parameters.required_status_checks |= migrate($ctx; $gates) else . end]
     | {name, target, enforcement, conditions, rules}' \
   | gh api -X PUT "repos/$REPO/rulesets/$RID" --input - >/dev/null
   echo "Updated."
