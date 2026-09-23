@@ -790,7 +790,7 @@ jobs:
           # consumes this workflow via @main, so model bumps land here only.
           CHANGED=$(gh api "/repos/${REPO}/pulls/${PR}" --jq '.additions + .deletions')
           if [ "$HAS_OPUS_LABEL" = "true" ]; then
-            MODEL="claude-opus-5"
+            MODEL="claude-opus-5-5"
             REASON="\`review-with-opus\` label (forced)"
           elif [ "$CHANGED" -le 50 ]; then
             MODEL="claude-haiku-4-5"
@@ -799,10 +799,10 @@ jobs:
             MODEL="claude-sonnet-5"
             REASON="${CHANGED} lines (51-500)"
           elif [ "$CHANGED" -le 10000 ]; then
-            MODEL="claude-opus-5"
+            MODEL="claude-opus-5-5"
             REASON="${CHANGED} lines (501-10000, complex)"
           else
-            MODEL="claude-fable-5"
+            MODEL="claude-fable-5-1"
             REASON="${CHANGED} lines (>10000, frontier)"
           fi
           # Release PRs never get the smallest tier. All three fabricated
@@ -818,6 +818,22 @@ jobs:
           echo "Selected ${MODEL} — ${REASON}"
           echo "**Model:** \`${MODEL}\` — ${REASON}" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Install pinned Claude Code (for Opus 5.5 / Fable 5.1)
+        id: claude_code
+        if: ${{ steps.ancestry.outputs.violations == '' && steps.relmsg.outputs.unparseable == '' }}
+        # claude-code-action@v1.0.230 bundles claude-agent-sdk 0.3.277 (Claude Code
+        # 2.1.277); the newest action, v1.0.231, bundles 0.3.278. Claude Opus 5.5
+        # is refused by every Claude Code below 2.1.280 (`400
+        # claude_code_version_too_old`), which would leave the PR un-reviewed.
+        # Verified locally 2026-09-23: agent-sdk 0.3.278 driving this exact CLI
+        # returns a schema-valid verdict on opus-5-5, fable-5-1, sonnet-5 and
+        # haiku-4-5. Drop this step (and `path_to_claude_code_executable`) once
+        # an action release bundles claude-agent-sdk >= 0.3.280 (tracked in #303).
+        run: |
+          npm install --prefix "$RUNNER_TEMP/claude-code" --no-audit --no-fund @anthropic-ai/claude-code@2.1.280
+          path="$RUNNER_TEMP/claude-code/node_modules/.bin/claude"
+          "$path" --version
+          echo "path=$path" >> "$GITHUB_OUTPUT"
       - name: Claude review with structured verdict
         id: review
         # A deterministic ancestry violation IS the verdict — running a model
@@ -835,6 +851,7 @@ jobs:
         # Lift back to @v1 once a release past 1.0.218 fixes the binary path.
         uses: anthropics/claude-code-action@v1.0.230
         with:
+          path_to_claude_code_executable: ${{ steps.claude_code.outputs.path }}
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
           # No `github_token:` — the installed Claude App authors comments
           # as claude[bot] via OIDC.
