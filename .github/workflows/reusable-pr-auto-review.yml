@@ -43,7 +43,10 @@ name: Reusable PR auto-review
 # review job no other way. What arming buys a fork is CI — the arm-gate stops
 # deferring and the real build runs, then ci-fork-status posts the true
 # `ci-gated`. It does not buy a merge: `reusable-auto-merge.yml` excludes forks
-# by head repo, so a fork PR still waits for a human to press merge.
+# by head repo, so a fork PR still waits for a human to press merge. And it
+# buys CI for the reviewed commit only: arming also posts an
+# `auto-review/armed` status on that SHA, and a later push by the fork — which
+# keeps the label — builds nothing until /auto-review passes it too.
 #
 # Bot PRs (dependabot etc.) skip review entirely (user.type filter) and go
 # straight to CI + auto-merge. PRs already labeled `ready-to-merge` skip
@@ -458,6 +461,14 @@ jobs:
           # depth-1 clone has no main history, producing false "broken link"
           # fails on release PRs whose CHANGELOG references older commits.
           fetch-depth: 0
+
+      # The exact commit this run reviews. The checkout resolved
+      # refs/pull/N/head when it ran, which can be newer than the head_sha
+      # `context` read earlier — so the arm step records THIS, not that.
+      # A fork's arming is tied to it (fleet-audit#283).
+      - name: Record the reviewed commit
+        id: reviewed
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # A PR can commit a symlink that points out of the checkout — `p -> /proc`,
       # `x -> /home/runner` — and the review model's search tools follow it:
@@ -1439,9 +1450,10 @@ jobs:
         #
         # What arming a fork actually does: the CI arm-gate takes the armed
         # path and runs the real build, and ci-fork-status mirrors the true
-        # conclusion into `ci-gated`. It does NOT start a merge —
-        # `reusable-auto-merge.yml` excludes forks by head repo, so no fork
-        # ever auto-merges. Arming a fork buys it CI, not a merge.
+        # conclusion into `ci-gated` — for the reviewed commit only, which the
+        # run script below records (fleet-audit#283). It does NOT start a
+        # merge — `reusable-auto-merge.yml` excludes forks by head repo, so no
+        # fork ever auto-merges. Arming a fork buys it CI, not a merge.
         if: ${{ !cancelled() && (needs.context.outputs.is_fork == 'false' || github.event_name == 'issue_comment') }}
         env:
           GH_TOKEN: ${{ secrets.release_pat }}
@@ -1449,7 +1461,29 @@ jobs:
           REPO: ${{ github.repository }}
           # Empty if the verdict step failed before exporting — never arms.
           VERDICT: ${{ steps.verdict.outputs.verdict }}
+          IS_FORK: ${{ needs.context.outputs.is_fork }}
+          REVIEWED_SHA: ${{ steps.reviewed.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # A fork's arming is tied to the commit this run reviewed
+          # (fleet-audit#283). `ready-to-merge` alone outlived it: the fork
+          # could push again, keep the label — its own token cannot remove it,
+          # and no review runs on a fork push — and the arm gate built the new
+          # commit, which ci-fork-status then reported green. So arming a fork
+          # also posts an `auto-review/armed` status on the reviewed SHA, and
+          # the arm gate and ci-fork-status build and report only a head that
+          # carries it. A new push is a new SHA with no such status.
+          #
+          # Posted with the PAT: the review job's GITHUB_TOKEN has no
+          # `statuses: write`, and granting it would mean a new permission in
+          # every consumer stub. The PAT needs commit-status write — classic
+          # `repo` scope, or "Commit statuses: write" on a fine-grained token.
+          mark_reviewed() { # mark_reviewed <success|failure> <description>
+            gh api "repos/$REPO/statuses/$REVIEWED_SHA" \
+              -f state="$1" -f context=auto-review/armed \
+              -f description="$2" -f target_url="$RUN_URL" --silent
+          }
+
           # Undo an arming another run already did. Declining to arm is a no-op
           # against a PR that is ALREADY armed, which is the state a losing
           # `fail` run finds: on chrischall/fetchproxy#274 the winning `pass`
@@ -1498,6 +1532,13 @@ jobs:
           # flaky structured-output run into a silent merge block.
           if [ "$VERDICT" = "fail" ]; then
             dearm "this review failed"
+            # A fork: also mark this commit failed, so a success an earlier
+            # review left on the same SHA cannot re-arm it. Best effort — the
+            # label is already off, and the gate needs both.
+            if [ "$IS_FORK" = "true" ] && [ -n "$REVIEWED_SHA" ]; then
+              mark_reviewed failure "Auto-review failed this commit" \
+                || echo "::warning::could not mark $REVIEWED_SHA failed (auto-review/armed)"
+            fi
             exit 0
           fi
 
@@ -1527,5 +1568,23 @@ jobs:
             exit 0
           fi
 
+          if [ "$IS_FORK" = "true" ]; then
+            if [ -z "$REVIEWED_SHA" ]; then
+              echo "::error::no reviewed commit recorded — not arming this fork PR; a fork is armed only for the exact commit auto-review passed."
+              exit 1
+            fi
+            # Record the commit FIRST: the label starts CI, and the gate of the
+            # run it starts looks for this status.
+            if ! mark_reviewed success "Auto-review passed this commit; CI may build it"; then
+              echo "::error::could not post auto-review/armed on $REVIEWED_SHA — not arming. The release PAT needs commit-status write (classic repo scope, or fine-grained Commit statuses: write)."
+              exit 1
+            fi
+            # An earlier commit's review may have left the label on. Re-adding
+            # a label that is present fires no `labeled` event, so CI would
+            # never start for this commit: take it off first.
+            gh pr edit "$PR" --repo "$REPO" --remove-label ready-to-merge >/dev/null 2>&1 || true
+          fi
+
           gh pr edit "$PR" --repo "$REPO" --add-label ready-to-merge
           echo "Verdict=$VERDICT — added ready-to-merge to arm auto-merge."
+          if [ "$IS_FORK" = "true" ]; then echo "Fork PR: armed for commit $REVIEWED_SHA only."; fi

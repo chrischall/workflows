@@ -96,6 +96,13 @@ case "$*" in
       { head: { sha: env.HEAD_SHA },
         labels: (env.LABELS | if . == "" then [] else split(",") end
                  | map({name: .})) }' ;;
+  # fleet-audit#283: a fork is armed for ONE commit — the one auto-review
+  # passed, recorded as an `auto-review/armed` status on that SHA. Answer the
+  # lookup with that status's created_at, or nothing when the commit was never
+  # reviewed.
+  *"/commits/"*"/statuses"*"auto-review/armed"*)
+    [ "${ARMED_READ_FAILS:-}" = "1" ] && exit 1
+    printf '%s\n' "${ARMED_AT-}" ;;
   *"/commits/"*"/statuses"*)
     [ "${CI_GATED_READ_FAILS:-}" = "1" ] && exit 1
     printf '%s\n' "${EXISTING_CI_GATED-}" ;;
@@ -106,6 +113,11 @@ chmod +x "$TMP/bin/gh"
 export PATH="$TMP/bin:$PATH"
 
 BASE=chrischall/example-mcp
+# When auto-review recorded the reviewed commit (the `auto-review/armed`
+# status), and CI-run creation times either side of it.
+REVIEWED=2026-09-23T10:00:00Z
+AFTER=2026-09-23T10:05:00Z
+BEFORE=2026-09-23T09:59:59Z
 
 # posted_state — the `state=` of the ci-gated POST, or "none".
 posted_state() {
@@ -125,7 +137,7 @@ gate_case() {
   export GITHUB_OUTPUT="$dir/out" GH_CALLS="$dir/gh"; : > "$GITHUB_OUTPUT"; : > "$GH_CALLS"
   # Baseline: same-repo, un-armed, human PR, status mode, no ci-gated on the
   # SHA yet. These two are per-case knobs, so clear them or they leak forward.
-  unset EXISTING_CI_GATED CI_GATED_READ_FAILS
+  unset EXISTING_CI_GATED CI_GATED_READ_FAILS ARMED_AT ARMED_READ_FAILS
   export GH_TOKEN=x MODE=status EVENT_NAME=pull_request EVENT_ACTION=synchronize \
          EVENT_LABEL="" USER_TYPE=User HEAD_REF=feature HEAD_SHA=deadbeef \
          PR_HEAD_REPO="$BASE" LABELS="" REPO="$BASE"
@@ -184,13 +196,27 @@ echo "── Arm gate, fork PRs (status mode) ──"
 # looked is the thing worth not doing. A fork now waits for `ready-to-merge`
 # exactly as a same-repo PR does.
 gate_case "fork un-armed → NO run, post nothing"     false none    PR_HEAD_REPO=someone/example-mcp
-gate_case "fork armed → run, post nothing"           true  none    PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge
+gate_case "fork armed → run, post nothing"           true  none    PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge ARMED_AT=$REVIEWED
 gate_case "fork un-armed, release-please ref → none" false none    PR_HEAD_REPO=someone/example-mcp HEAD_REF=release-please--x
-# #113: the fork short-circuit used to run BEFORE the armed case, pre-empting
-# the duplicate-run suppression, so an already-armed fork PR rebuilt on every
-# relabel where a same-repo PR was skipped. Same expectation as same-repo now.
-gate_case "fork armed + non-arming label → no dup" false none    PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=documentation
-gate_case "fork armed + ready-to-merge label → run" true none    PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=ready-to-merge
+# fleet-audit#283: on a fork the LABEL is not the arming — it stays on the PR
+# when the fork pushes again, and the fork's read-only token cannot remove it.
+# The arming is the `auto-review/armed` status auto-review posts on the exact
+# commit it passed. A later push is a commit nobody reviewed: no build.
+gate_case "fork labelled, head never reviewed → NO run" false none PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge
+gate_case "fork labelled, ready-to-merge event, head never reviewed → NO run" false none PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=ready-to-merge
+# Cannot tell whether this commit was reviewed: fail the gate rather than
+# conclude `success` having built nothing — ci-fork-status would mirror that
+# success into a green ci-gated.
+gate_case "fork labelled, reviewed-commit read fails → gate errors" '(none)' none PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge ARMED_READ_FAILS=1
+# A same-repo PR never consults it: its label IS tied to the diff (a push
+# re-reviews or keeps the standing verdict, per rereview_on_push).
+gate_case "same-repo armed ignores the reviewed-commit status" true none LABELS=ready-to-merge ARMED_READ_FAILS=1
+# #113 suppressed the duplicate build a relabel triggers on an armed fork. Not
+# any more: ci-fork-status cannot see which runs built, only when each was
+# created, so every run created after the arming must build or its skipped
+# `success` would be mirrored green — over a real failure, if CI had failed.
+gate_case "fork armed + non-arming label → rebuilds" true none    PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=documentation ARMED_AT=$REVIEWED
+gate_case "fork armed + ready-to-merge label → run" true none    PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=ready-to-merge ARMED_AT=$REVIEWED
 
 echo "── Arm gate, fail mode (legacy — must be untouched by the fork path) ──"
 # In fail mode the un-armed block IS a red `ci / ci`. Arming a fork here would
@@ -198,7 +224,8 @@ echo "── Arm gate, fail mode (legacy — must be untouched by the fork path)
 gate_case "same-repo un-armed → no run, no post"     false none    MODE=fail
 gate_case "same-repo armed → run"                    true  none    MODE=fail LABELS=ready-to-merge
 gate_case "fork un-armed → still blocked red"        false none    MODE=fail PR_HEAD_REPO=someone/example-mcp
-gate_case "fork armed → run"                         true  none    MODE=fail PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge
+gate_case "fork armed → run"                         true  none    MODE=fail PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge ARMED_AT=$REVIEWED
+gate_case "fork labelled, head never reviewed → blocked" false none MODE=fail PR_HEAD_REPO=someone/example-mcp LABELS=ready-to-merge
 
 echo "── Arm gate, stale/duplicate delivery must not clobber a terminal ci-gated ──"
 # honeybook-mcp#160. `ci-gated` is a mutable commit status keyed only by its
@@ -238,14 +265,19 @@ gate_case "bot PR → always run"                      true  none    USER_TYPE=B
 gate_case "release-please un-armed → pending"        false pending HEAD_REF=release-please--branches--main
 gate_case "push event → run"                         true  none    EVENT_NAME=push PR_HEAD_REPO=""
 gate_case "fork un-armed → NO run, post nothing"     false none    PR_HEAD_REPO=someone/example
-gate_case "fork armed → run, post nothing"           true  none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge
+gate_case "fork armed → run, post nothing"           true  none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge ARMED_AT=$REVIEWED
 gate_case "fork un-armed, release-please ref → none" false none    PR_HEAD_REPO=someone/example HEAD_REF=release-please--x
-gate_case "fork armed + non-arming label → no dup"   false none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=documentation
-gate_case "fork armed + ready-to-merge label → run"  true  none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=ready-to-merge
+gate_case "fork labelled, head never reviewed → NO run" false none PR_HEAD_REPO=someone/example LABELS=ready-to-merge
+gate_case "fork labelled, ready-to-merge event, head never reviewed → NO run" false none PR_HEAD_REPO=someone/example LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=ready-to-merge
+gate_case "fork labelled, reviewed-commit read fails → gate errors" '(none)' none PR_HEAD_REPO=someone/example LABELS=ready-to-merge ARMED_READ_FAILS=1
+gate_case "same-repo armed ignores the reviewed-commit status" true none LABELS=ready-to-merge ARMED_READ_FAILS=1
+gate_case "fork armed + non-arming label → rebuilds" true  none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=documentation ARMED_AT=$REVIEWED
+gate_case "fork armed + ready-to-merge label → run"  true  none    PR_HEAD_REPO=someone/example LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=ready-to-merge ARMED_AT=$REVIEWED
 gate_case "fail mode: same-repo un-armed → no run"   false none    MODE=fail
 gate_case "fail mode: same-repo armed → run"         true  none    MODE=fail LABELS=ready-to-merge
 gate_case "fail mode: fork un-armed stays blocked"   false none    MODE=fail PR_HEAD_REPO=someone/example
-gate_case "fail mode: fork armed → run"              true  none    MODE=fail PR_HEAD_REPO=someone/example LABELS=ready-to-merge
+gate_case "fail mode: fork armed → run"              true  none    MODE=fail PR_HEAD_REPO=someone/example LABELS=ready-to-merge ARMED_AT=$REVIEWED
+gate_case "fail mode: fork labelled, head never reviewed → blocked" false none MODE=fail PR_HEAD_REPO=someone/example LABELS=ready-to-merge
 # Same clobber guard as the reusable workflow above — keep the rows in lockstep.
 gate_case "un-armed, ci-gated success → leave it"    false none    EXISTING_CI_GATED=success
 gate_case "un-armed, ci-gated failure → leave it"    false none    EXISTING_CI_GATED=failure
@@ -304,9 +336,12 @@ fork_case() {
   local name="$1" want_post="$2"; shift 2
   local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
   export GH_CALLS="$dir/gh"; : > "$GH_CALLS"
-  unset EXISTING_CI_GATED CI_GATED_READ_FAILS PR_LOOKUP_FAILS PR_ABSENT
-  # Baseline: un-armed fork whose run went green because CI never ran.
-  export GH_TOKEN=x REPO="$BASE" SHA=deadbeef CONCLUSION=success RUN_URL="" PR_LABELS=""
+  unset EXISTING_CI_GATED CI_GATED_READ_FAILS PR_LOOKUP_FAILS PR_ABSENT ARMED_AT ARMED_READ_FAILS
+  # Baseline: un-armed fork whose run went green because CI never ran. The run
+  # was created five minutes after the reviewed-commit status an armed case
+  # sets with ARMED_AT="$REVIEWED".
+  export GH_TOKEN=x REPO="$BASE" SHA=deadbeef CONCLUSION=success RUN_URL="" PR_LABELS="" \
+         RUN_CREATED_AT="$AFTER"
   local kv; for kv in "$@"; do export "${kv?}"; done
 
   bash -eo pipefail "$TMP/fork.sh" >"$dir/log" 2>&1
@@ -329,8 +364,9 @@ fork_desc_case() {
   local negate=""; case "$want" in "!"*) negate=1; want="${want#!}" ;; esac
   local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
   export GH_CALLS="$dir/gh"; : > "$GH_CALLS"
-  unset EXISTING_CI_GATED CI_GATED_READ_FAILS PR_LOOKUP_FAILS PR_ABSENT
-  export GH_TOKEN=x REPO="$BASE" SHA=deadbeef CONCLUSION=success RUN_URL="" PR_LABELS=""
+  unset EXISTING_CI_GATED CI_GATED_READ_FAILS PR_LOOKUP_FAILS PR_ABSENT ARMED_AT ARMED_READ_FAILS
+  export GH_TOKEN=x REPO="$BASE" SHA=deadbeef CONCLUSION=success RUN_URL="" PR_LABELS="" \
+         RUN_CREATED_AT="$AFTER"
   local kv; for kv in "$@"; do export "${kv?}"; done
 
   bash -eo pipefail "$TMP/fork.sh" >"$dir/log" 2>&1
@@ -349,20 +385,37 @@ fork_case "un-armed, run failure → pending"             pending CONCLUSION=fai
 fork_case "un-armed, other labels only → pending"       pending PR_LABELS=documentation,bug
 
 # Armed: CI really ran, so mirror it. This is the only path that may go green.
-fork_case "armed, run success → success"                success PR_LABELS=ready-to-merge
-fork_case "armed + other labels → success"              success PR_LABELS=bug,ready-to-merge,documentation
-fork_case "armed, run failure → failure"                failure PR_LABELS=ready-to-merge CONCLUSION=failure
-fork_case "armed, run cancelled → failure"              failure PR_LABELS=ready-to-merge CONCLUSION=cancelled
-fork_case "armed, run timed_out → failure"              failure PR_LABELS=ready-to-merge CONCLUSION=timed_out
+fork_case "armed, run success → success"                success PR_LABELS=ready-to-merge ARMED_AT=$REVIEWED
+fork_case "armed + other labels → success"              success PR_LABELS=bug,ready-to-merge,documentation ARMED_AT=$REVIEWED
+fork_case "armed, run failure → failure"                failure PR_LABELS=ready-to-merge CONCLUSION=failure ARMED_AT=$REVIEWED
+fork_case "armed, run cancelled → failure"              failure PR_LABELS=ready-to-merge CONCLUSION=cancelled ARMED_AT=$REVIEWED
+fork_case "armed, run timed_out → failure"              failure PR_LABELS=ready-to-merge CONCLUSION=timed_out ARMED_AT=$REVIEWED
 # A skipped/neutral RUN built nothing either — the second instance of the same
 # bug, which mapped both to success.
-fork_case "armed, run skipped → pending not success"    pending PR_LABELS=ready-to-merge CONCLUSION=skipped
-fork_case "armed, run neutral → pending not success"    pending PR_LABELS=ready-to-merge CONCLUSION=neutral
+fork_case "armed, run skipped → pending not success"    pending PR_LABELS=ready-to-merge CONCLUSION=skipped ARMED_AT=$REVIEWED
+fork_case "armed, run neutral → pending not success"    pending PR_LABELS=ready-to-merge CONCLUSION=neutral ARMED_AT=$REVIEWED
+
+# fleet-audit#283, the SHA half: the label outlives the commit it was granted
+# for. A fork that pushes after its /auto-review keeps `ready-to-merge`, and a
+# label check alone reported the new, unreviewed commit green.
+fork_case "labelled, this commit never reviewed → pending" pending PR_LABELS=ready-to-merge
+fork_case "labelled, reviewed-commit read fails → pending" pending PR_LABELS=ready-to-merge ARMED_READ_FAILS=1
+# The timing half: armed-ness is decided when the run is REPORTED, but the gate
+# decided whether to build when the run was CREATED. A run created before the
+# arming deferred its build and concluded success; reported after the arming it
+# went green (or overwrote a real failure). Only a run created at or after the
+# arming built.
+fork_case "run created before the arming → pending"      pending PR_LABELS=ready-to-merge ARMED_AT=$REVIEWED RUN_CREATED_AT=$BEFORE
+fork_case "run created before the arming keeps a failure" none  PR_LABELS=ready-to-merge ARMED_AT=$REVIEWED RUN_CREATED_AT=$BEFORE EXISTING_CI_GATED=failure
+fork_case "run created the second of the arming → mirrors" success PR_LABELS=ready-to-merge ARMED_AT=$REVIEWED RUN_CREATED_AT=$REVIEWED
+fork_case "run creation time unknown → pending"          pending PR_LABELS=ready-to-merge ARMED_AT=$REVIEWED RUN_CREATED_AT=
+# Still needs the label: a /auto-review that later came back `fail` de-armed.
+fork_case "reviewed commit but label removed → pending"  pending PR_LABELS=bug ARMED_AT=$REVIEWED
 
 # Fail-safe: an undecidable arming state must block, never satisfy. Same
 # direction the gate takes when its own status read fails.
-fork_case "PR lookup fails → pending"                   pending PR_LOOKUP_FAILS=1 PR_LABELS=ready-to-merge
-fork_case "no PR for the sha → pending"                 pending PR_ABSENT=1 PR_LABELS=ready-to-merge
+fork_case "PR lookup fails → pending"                   pending PR_LOOKUP_FAILS=1 PR_LABELS=ready-to-merge ARMED_AT=$REVIEWED
+fork_case "no PR for the sha → pending"                 pending PR_ABSENT=1 PR_LABELS=ready-to-merge ARMED_AT=$REVIEWED
 fork_case "PR found with no labels at all → pending"    pending PR_LABELS=""
 
 # No-clobber, same rule as the gate (honeybook-mcp#160): a TERMINAL ci-gated
@@ -373,8 +426,8 @@ fork_case "un-armed, ci-gated failure → leave it"       none    EXISTING_CI_GA
 fork_case "un-armed, ci-gated error → leave it"         none    EXISTING_CI_GATED=error
 fork_case "un-armed, ci-gated pending → re-post"        pending EXISTING_CI_GATED=pending
 # A real armed result still overwrites whatever is there, green or red.
-fork_case "armed success over stale pending → success"  success PR_LABELS=ready-to-merge EXISTING_CI_GATED=pending
-fork_case "armed failure over success → failure"        failure PR_LABELS=ready-to-merge CONCLUSION=failure EXISTING_CI_GATED=success
+fork_case "armed success over stale pending → success"  success PR_LABELS=ready-to-merge ARMED_AT=$REVIEWED EXISTING_CI_GATED=pending
+fork_case "armed failure over success → failure"        failure PR_LABELS=ready-to-merge ARMED_AT=$REVIEWED CONCLUSION=failure EXISTING_CI_GATED=success
 
 # #196: THREE causes now post `pending`, so the description is the ONLY thing
 # that tells them apart. Reported identically, a maintainer staring at an
@@ -401,6 +454,14 @@ fork_desc_case "genuinely un-armed does not say no open PR" "!no open PR"       
 fork_desc_case "no open PR names that cause"             "no open PR"           PR_ABSENT=1 PR_LABELS=ready-to-merge
 fork_desc_case "no open PR does not say un-armed"        "!arm this fork PR"    PR_ABSENT=1 PR_LABELS=ready-to-merge
 fork_desc_case "no open PR blames no permission"         "!pull-requests: read" PR_ABSENT=1 PR_LABELS=ready-to-merge
+
+# #283 adds a fourth: labelled, but not for this commit. A maintainer sees
+# `ready-to-merge` on the PR and a pending check; the description has to say
+# the label is for an older commit and how to re-arm, not "add the label".
+fork_desc_case "unreviewed commit says so"               "not reviewed"         PR_LABELS=ready-to-merge
+fork_desc_case "unreviewed commit says how to re-arm"    "/auto-review"         PR_LABELS=ready-to-merge
+fork_desc_case "unreviewed commit blames no permission"  "!pull-requests: read" PR_LABELS=ready-to-merge
+fork_desc_case "genuinely un-armed does not say not reviewed" "!not reviewed"   PR_LABELS=""
 
 echo
 # The harness must run each extracted step under the flags GitHub gives it —

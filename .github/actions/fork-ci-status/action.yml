@@ -8,6 +8,11 @@ description: >
   event payload and never touches head-repository content — see the security
   note in templates/ci-fork-status.yml before changing it.
 
+  An armed run is one whose PR carries `ready-to-merge`, whose head carries the
+  `auto-review/armed` success status the review posts on the commit it passed,
+  and which was created at or after that status — so its gate saw the arming
+  and built (fleet-audit#283). Everything else is reported `pending`.
+
   Requires `pull-requests: read` in addition to `statuses: write`: the arming
   decision is read from the PR's labels. Without it the lookup fails and every
   fork PR is reported as blocked (the fail-safe direction), so roll the stub's
@@ -38,6 +43,11 @@ runs:
         SHA: ${{ inputs.sha }}
         CONCLUSION: ${{ inputs.conclusion }}
         RUN_URL: ${{ inputs.run-url }}
+        # Read straight off the event rather than through an input, so no
+        # consumer stub has to change: when the run was CREATED, which is
+        # when its gate read the payload and decided whether to build. A
+        # re-run keeps it, and keeps that payload.
+        RUN_CREATED_AT: ${{ github.event.workflow_run.created_at }}
       run: |
         set -euo pipefail
 
@@ -85,6 +95,32 @@ runs:
           fi
         fi
 
+        # The label is not enough (fleet-audit#283). It stays on the PR when
+        # the fork pushes again, so it says nothing about THIS commit. The arm
+        # gate builds a fork only at a head that auto-review passed — recorded
+        # as an `auto-review/armed` status on that SHA — so ask the same
+        # question here.
+        #
+        # And ask it about the right moment. The gate decided whether to build
+        # when this run was CREATED, from the payload of that moment; this runs
+        # later. A run created before the arming deferred its build and still
+        # concluded `success`, and reported after the arming it went green —
+        # or overwrote a real failure, since only `pending` is kept off a
+        # terminal status. So only a run created at or after the arming counts.
+        if [ "$armed" = "true" ]; then
+          if ! reviewed_at="$(gh api "repos/$REPO/commits/$SHA/statuses?per_page=100" \
+                --jq 'map(select(.context=="auto-review/armed")) | .[0] | select(.state=="success") | .created_at')"; then
+            armed=unknown-review
+          elif [ -z "$reviewed_at" ]; then
+            armed=unreviewed
+          elif ! jq -en --arg a "$reviewed_at" --arg r "${RUN_CREATED_AT:-}" \
+                 '($r | fromdateiso8601) >= ($a | fromdateiso8601)' >/dev/null 2>&1; then
+            # Created before the arming — or no creation time to compare,
+            # which cannot be shown to be after it.
+            armed=predates
+          fi
+        fi
+
         # Anything that is not an unambiguous pass of a run that actually built
         # is reported rather than left unset: an unset required context blocks
         # the merge, which is correct, but it is indistinguishable from "CI has
@@ -105,6 +141,18 @@ runs:
           # (#196). Status descriptions are capped at 140 chars; this is ~75.
           state=pending
           desc="CI status undetermined — fork PR lookup failed (needs pull-requests: read)"
+        elif [ "$armed" = "unknown-review" ]; then
+          state=pending
+          desc="CI status undetermined — could not read whether auto-review passed this commit"
+        elif [ "$armed" = "unreviewed" ]; then
+          # Labelled for an earlier commit: the fork pushed after its review.
+          state=pending
+          desc="CI deferred — this commit was not reviewed; comment /auto-review to re-arm"
+        elif [ "$armed" = "predates" ]; then
+          # This run's gate ran before the arming, so it built nothing. The
+          # run the arming started reports for itself.
+          state=pending
+          desc="CI deferred — this run started before the review armed this commit"
         elif [ "$armed" != "true" ]; then
           # Genuinely un-armed: no `ready-to-merge` on the PR. An undecidable
           # arming state blocks rather than satisfies, same direction the gate

@@ -66,6 +66,9 @@ case "$*" in
   "pr edit"*--remove-label*)  [ "${LABEL_EDIT_FAILS:-}" = 1 ] && exit 1
                               exit 0 ;;
   "pr merge"*--disable-auto*) exit 0 ;;
+  # The reviewed-commit status a fork's arming is tied to (fleet-audit#283).
+  "api repos/"*"/statuses/"*)  [ "${STATUS_POST_FAILS:-}" = 1 ] && exit 1
+                              exit 0 ;;
 esac
 exit 0
 STUB
@@ -90,8 +93,11 @@ run_case() {
   local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
   export CALLS="$dir/calls"; : > "$CALLS"
   export GH_TOKEN=x PR=274 REPO=chrischall/fetchproxy VERDICT="$verdict" \
-         RECORDED_VERDICT="$recorded" PR_STATE="$state"
+         RECORDED_VERDICT="$recorded" PR_STATE="$state" \
+         IS_FORK="${IS_FORK:-false}" REVIEWED_SHA="${REVIEWED_SHA-cafe1234cafe1234cafe1234cafe1234cafe1234}" \
+         RUN_URL=https://example.invalid/run/1
   bash -e "$TMP/arm.sh" >"$dir/log" 2>&1
+  RC=$?
   CASE="$name"; LOG="$dir/log"
 }
 
@@ -175,6 +181,46 @@ run_case "fail on an already-merged PR" fail "$FAIL_COMMENT" "$MERGED_PR"
 unlabeled no; unarmed no; reached "De-arming #274"
 if grep -q "::warning::" "$LOG"; then ok "$CASE: warns that the PR merged over a fail"
 else bad "$CASE: warns that the PR merged over a fail" "no ::warning:: in: $(tr '\n' ' ' < "$LOG")"; fi
+
+echo "── forks: arming is tied to the reviewed commit (fleet-audit#283) ──"
+# `ready-to-merge` outlives the commit it was granted for: the fork can push
+# again, keep the label, and (with a label-only gate) build and go green on
+# code no reviewer saw. So a fork's arming also records WHICH commit passed —
+# an `auto-review/armed` status on the SHA this run checked out — and the arm
+# gate and ci-fork-status build and report only that commit.
+line_of() { grep -nF -- "$1" "$CALLS" | head -1 | cut -d: -f1; }
+fork_case() { IS_FORK=true run_case "$@"; }
+posted_armed() { # posted_armed <yes|no> <state>
+  assert "posts auto-review/armed=$2 on the reviewed commit" "$1" \
+    "statuses/cafe1234cafe1234cafe1234cafe1234cafe1234 -f state=$2 -f context=auto-review/armed"
+}
+
+fork_case "fork pass" pass "$PASS_COMMENT"; armed yes; posted_armed yes success
+s_line="$(line_of 'context=auto-review/armed')"; l_line="$(line_of '--add-label')"
+if [ -n "$s_line" ] && [ -n "$l_line" ] && [ "$s_line" -lt "$l_line" ]; then
+  ok "$CASE: records the commit BEFORE adding the label (the label starts CI)"
+else bad "$CASE: records the commit BEFORE adding the label (the label starts CI)" "status line=$s_line label line=$l_line"; fi
+# The label may already be there from an earlier commit's review. Re-adding a
+# present label fires no `labeled` event, so CI would never start for the
+# newly reviewed commit: take it off first so the add is a real event.
+r_line="$(line_of '--remove-label')"
+if [ -n "$r_line" ] && [ -n "$l_line" ] && [ "$r_line" -lt "$l_line" ]; then
+  ok "$CASE: removes the label before re-adding it, so labeled fires"
+else bad "$CASE: removes the label before re-adding it, so labeled fires" "remove line=$r_line label line=$l_line"; fi
+fork_case "fork warn" warn "$WARN_COMMENT"; armed yes; posted_armed yes success
+# No record, no arming: the label without the status arms nothing any more,
+# and adding it anyway would only mislead a reader of the PR.
+STATUS_POST_FAILS=1 fork_case "fork pass, status post fails" pass "$PASS_COMMENT"; armed no
+unset STATUS_POST_FAILS
+if [ "$RC" -ne 0 ]; then ok "$CASE: step fails loudly"; else bad "$CASE: step fails loudly" "rc=0"; fi
+REVIEWED_SHA="" fork_case "fork pass, reviewed commit unknown" pass "$PASS_COMMENT"; armed no
+# A fork `fail` also marks that commit failed, so a stale success from an
+# earlier pass of the same commit cannot re-arm it.
+fork_case "fork fail" fail "$FAIL_COMMENT" "$ARMED_PR"; unlabeled yes; posted_armed yes failure
+# Same-repo PRs are untouched: their label is tied to the diff by re-review.
+run_case "same-repo pass posts no status" pass "$PASS_COMMENT"; armed yes
+assert "posts a status" no "context=auto-review/armed"
+assert "removes the label first" no "--remove-label"
 
 echo "── De-arm on new commits (rereview_on_push) ──"
 # The same two-part obligation, in the other de-arm. This step exists so a

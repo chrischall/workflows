@@ -20,7 +20,7 @@ description: >
   `ci-gated` status context (scripts/update-ruleset.sh flips it). The workflow
   needs `permissions: {contents: read, statuses: write}` — dependabot runs are
   read-only unless permissions are explicit. In status mode, a `labeled` event
-  for a non-arming label on an already-armed PR also sets `run=false` (skip the
+  for a non-arming label on an already-armed same-repo PR also sets `run=false` (skip the
   duplicate build; the SHA's `ci-gated` status is already set). That
   suppression is unsafe in fail mode — a green job would overwrite a
   legitimately red `ci` check on the same SHA — so fail mode always re-runs.
@@ -52,8 +52,14 @@ description: >
   (see templates/ci-gradle.yml) or it will 403 in turn and turn a legitimately
   green run red.
 
-  An UN-ARMED fork now sets `run=false` — CI is deferred until a maintainer adds
-  `ready-to-merge`, exactly as for a same-repo PR. It used to build
+  An UN-ARMED fork now sets `run=false` — CI is deferred until a maintainer's
+  `/auto-review` passes it. A fork is armed for ONE commit: the label AND an
+  `auto-review/armed` success status on the head SHA, which the review posts on
+  the commit it passed. The label outlives that commit (a fork can push again,
+  and its token cannot remove the label), so a head without the status is
+  un-armed, and a failed lookup fails the gate rather than skip the build and
+  let ci-fork-status mirror a green that built nothing (fleet-audit#283). For
+  the same reason an armed fork gets no duplicate-run suppression. It used to build
   automatically, on the reasoning that the unreported `ci-gated` context blocked
   the merge regardless; `ci-fork-status.yml` now reports that context, and
   building unreviewed fork code before a human has looked is the thing worth not
@@ -118,20 +124,48 @@ runs:
         if [ "$USER_TYPE" != "User" ]; then run_ci "bot PR → run CI"; fi
 
 
-        case ",$LABELS," in
-          *,ready-to-merge,*)
-            # Already armed. Status mode: suppress the duplicate run a
-            # non-arming label would trigger — the SHA's ci-gated status is
-            # already set and stays untouched (on a fork it was deliberately
-            # never posted, so skipping leaves the merge blocked either way).
-            # Unsafe in fail mode.
-            if [ "$MODE" = "status" ] && [ "$EVENT_ACTION" = "labeled" ] && [ "$EVENT_LABEL" != "ready-to-merge" ]; then
-              echo "already armed; label '$EVENT_LABEL' is not an arming event → skip duplicate CI (ci-gated status unchanged)"
-              echo "run=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            run_ci "PR armed (ready-to-merge) → run CI" ;;
-        esac
+        ARMED=false
+        case ",$LABELS," in *,ready-to-merge,*) ARMED=true ;; esac
+
+        # A FORK is armed for one commit, not by the label (fleet-audit#283).
+        # The label stays on the PR when the fork pushes again — a fork run's
+        # token cannot remove it, and no review runs on a fork push — so a
+        # label check alone built every later commit unreviewed. Auto-review
+        # records the commit it passed as an `auto-review/armed` status on that
+        # SHA; only a head carrying it builds. Anything else takes the un-armed
+        # fork path below. A lookup that fails cannot say which, so the gate
+        # errors: a green run that built nothing would be mirrored into a green
+        # `ci-gated` by ci-fork-status.
+        #
+        # And no duplicate-run suppression for a fork: ci-fork-status can see
+        # when a run was created, not whether it built, so every run created
+        # after the arming has to build.
+        #
+        # KEEP IN SYNC with the `Arm gate` step in reusable-mcp-ci.yml.
+        if [ "$ARMED" = "true" ] && [ "$IS_FORK" = "true" ]; then
+          if ! REVIEWED_AT="$(gh api "repos/$REPO/commits/$HEAD_SHA/statuses?per_page=100" \
+                --jq 'map(select(.context=="auto-review/armed")) | .[0] | select(.state=="success") | .created_at')"; then
+            echo "::error::could not read whether auto-review passed $HEAD_SHA (the auto-review/armed status) — failing rather than guess. Re-run this job."
+            exit 1
+          fi
+          if [ -n "$REVIEWED_AT" ]; then
+            run_ci "fork PR armed for this exact commit (auto-review passed $HEAD_SHA at $REVIEWED_AT) → run CI"
+          fi
+          echo "fork PR carries ready-to-merge, but auto-review did not pass $HEAD_SHA (new commits since the review) → treated as un-armed; comment /auto-review to review this commit"
+          ARMED=false
+        fi
+
+        if [ "$ARMED" = "true" ]; then
+          # Already armed. Status mode: suppress the duplicate run a
+          # non-arming label would trigger — the SHA's ci-gated status is
+          # already set and stays untouched. Unsafe in fail mode.
+          if [ "$MODE" = "status" ] && [ "$EVENT_ACTION" = "labeled" ] && [ "$EVENT_LABEL" != "ready-to-merge" ]; then
+            echo "already armed; label '$EVENT_LABEL' is not an arming event → skip duplicate CI (ci-gated status unchanged)"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          run_ci "PR armed (ready-to-merge) → run CI"
+        fi
 
         # Fork PR in status mode: the read-only token makes the ci-gated POST
         # below impossible (403 → this step fails → every guarded build step is
@@ -147,12 +181,11 @@ runs:
         # same-repo PR, and a maintainer's `/auto-review` is what applies it.
         # It still posts nothing here.
         #
-        # Deliberately AFTER the armed case: an already-armed fork PR must take
-        # the armed path (and its duplicate-run suppression), or it rebuilds on
-        # every relabel where a same-repo PR is skipped (#113).
+        # Deliberately AFTER the armed case: an armed fork PR must take the
+        # armed path above.
         if [ "$MODE" = "status" ] && [ "$IS_FORK" = "true" ]; then
           echo "run=false" >> "$GITHUB_OUTPUT"
-          echo "fork PR ($PR_HEAD_REPO) is un-armed → CI deferred until a maintainer arms it (comment /auto-review, or add ready-to-merge); posting no ci-gated status (fork tokens are read-only)"
+          echo "fork PR ($PR_HEAD_REPO) is un-armed → CI deferred until a maintainer comments /auto-review and the review passes this commit; posting no ci-gated status (fork tokens are read-only)"
           exit 0
         fi
 
