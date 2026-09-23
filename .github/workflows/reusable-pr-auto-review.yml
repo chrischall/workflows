@@ -919,7 +919,7 @@ jobs:
           path="$RUNNER_TEMP/claude-code/node_modules/.bin/claude"
           "$path" --version
           echo "path=$path" >> "$GITHUB_OUTPUT"
-      - name: Install bubblewrap for the subprocess env scrub
+      - name: Install the sandbox dependencies (bubblewrap, socat)
         if: ${{ steps.ancestry.outputs.violations == '' && steps.relmsg.outputs.unparseable == '' }}
         # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (job env above) is enforced on Linux
         # with bubblewrap, which ubuntu-latest does not ship: without it Claude
@@ -927,12 +927,15 @@ jobs:
         # env scrubbing"), leaving every PR in the fleet un-reviewed. Ubuntu
         # 24.04 also blocks the unprivileged user namespace bwrap creates, via
         # AppArmor; the runner VM is ephemeral, so lifting that restriction
-        # here affects this job only.
+        # here affects this job only. The same sandbox proxies the Bash tool's
+        # network through socat; without it every command the model may run
+        # (gh pr comment, git, rg) fails "socat not installed" (#309).
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap
+          sudo apt-get install -y -qq bubblewrap socat
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true  # key absent = no restriction
           bwrap --ro-bind / / --unshare-user true && echo "bwrap: user namespace OK"
+          socat -V | head -1
 
       - name: Claude review with structured verdict
         id: review

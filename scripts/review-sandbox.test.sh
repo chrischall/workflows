@@ -102,6 +102,12 @@ WF_FILE="$(dirname "$0")/../.github/workflows/reusable-pr-auto-review.yml"
 if grep -qE 'apt-get install [^#]*bubblewrap' "$WF_FILE"; then
   ok "review job installs bubblewrap for the env scrub"
 else bad "review job installs bubblewrap for the env scrub" "no apt-get install bubblewrap in $WF_FILE"; fi
+# ...and socat, which the same sandbox needs to proxy the Bash tool's network:
+# without it every allowed command (gh pr comment, git, rg) fails with "Sandbox
+# dependencies not available: socat not installed" (workflows#309).
+if grep -qE 'apt-get install [^#]*socat' "$WF_FILE"; then
+  ok "review job installs socat for the sandboxed Bash tool"
+else bad "review job installs socat for the sandboxed Bash tool" "no apt-get install socat in $WF_FILE"; fi
 if grep -qF 'kernel.apparmor_restrict_unprivileged_userns=0' "$WF_FILE"; then
   ok "review job lets bwrap create its user namespace (ubuntu 24.04 AppArmor)"
 else bad "review job lets bwrap create its user namespace (ubuntu 24.04 AppArmor)" "no sysctl for apparmor_restrict_unprivileged_userns"; fi
