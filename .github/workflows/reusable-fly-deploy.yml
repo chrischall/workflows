@@ -111,7 +111,7 @@ jobs:
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@1.6
         if: steps.guard.outputs.ready == 'true'
 
       - name: Deploy to Fly

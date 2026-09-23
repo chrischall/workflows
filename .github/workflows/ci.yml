@@ -80,9 +80,10 @@ jobs:
         run: bash scripts/relmsg.test.sh
 
       - name: action pin policy
-        # Third-party actions ride release tags, never a commit SHA. #290
-        # SHA-pinned release-please-action in the reusable release and merged,
-        # because nothing here said no.
+        # Third-party actions ride release tags, never a commit SHA or a
+        # branch. #290 SHA-pinned release-please-action in the reusable release
+        # and merged, because nothing here said no; setup-flyctl rode @master
+        # ahead of the FLY_API_TOKEN step (fleet-audit#286).
         run: bash scripts/action-pins.test.sh
 
       - name: release-message drift tripwire
