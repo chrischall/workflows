@@ -401,19 +401,43 @@ that looks right and has simply lost the hold.
 
 **A manifest below the root is `dependabot_extra`, not a hand edit.**
 `dependabot` picks the ROOT ecosystem; `dependabot_extra` adds further
-directories as `<ecosystem>:<directory>` pairs, each rendered from
-`templates/fragments/dependabot-extra-<ecosystem>.yml` and spliced in before
-the github-actions entry. `curtaincall` (`npm:/web,npm:/ops/uptime-worker`) and
-`allotmint` (`npm:/web`) are gradle repos with Next.js/Worker apps beside the
-KMP build; with one ecosystem per repo their npm projects got no Dependabot
-updates at all, and allotmint's `next` sat two critical advisories behind
-(#307). The npm fragment carries the root template's `fix`/`chore` prefixes
-and the exact-name vitest pin. `dependabot_ignore` applies to the root entry
-only — a hold is written for one ecosystem. Only `npm` has a fragment today;
-an unknown ecosystem, or a directory that is not an absolute repo path, is a
-hard error, because the quiet failure is a valid config that never looks in
-the directory that needed it. Repos without the key render byte-identically:
+directories as `<ecosystem>:<directory>` pairs. `curtaincall`
+(`npm:/web,npm:/ops/uptime-worker`) and `allotmint` (`npm:/web`) are gradle
+repos with Next.js/Worker apps beside the KMP build; with one ecosystem per
+repo their npm projects got no Dependabot updates at all, and allotmint's
+`next` sat two critical advisories behind (#307).
+
+All extras of one ecosystem render as **one** update entry with
+`directories: [...]`, from `templates/fragments/dependabot-extra-<ecosystem>.yml`,
+spliced in before the github-actions entry. Dependabot groups never span update
+entries, so one entry per directory sent curtaincall the same vitest,
+typescript and `@types/node` majors twice; a group inside one multi-directory
+entry is one PR "across N directories". An extra in an ecosystem the template
+already has (the root one, or `github-actions`) merges into that entry instead,
+its `directory: /` becoming `directories: [/, ...]` — and so it inherits that
+entry's `dependabot_ignore` hold. A separate extra entry does not: a hold is
+written for one ecosystem. The npm fragment carries the root template's
+`fix`/`chore` prefixes, groups and exact-name vitest pin.
+
+Hard errors, because the quiet failure is a valid config that never looks in
+the directory that needed it: an ecosystem name that is not `^[a-z-]+$` or has
+no fragment (only `npm` does today), a directory that is not an absolute repo
+path or contains a `..` segment, a duplicate of the template's own `/` entry,
+and the same pair listed twice. Repos without the key render byte-identically:
 the `# __DEPENDABOT_EXTRA__` marker is deleted.
+
+**Every update entry batches its majors and its security fixes.** Majors stay
+out of the minor/patch groups (a major is never a drive-by merge) but get
+groups of their own rather than none — before, each major was its own PR and
+curtaincall's first multi-directory run opened 11. npm has `production-majors`
+and `dev-majors` (split by dependency type so the prefix stays `fix`/`chore`),
+gradle `majors`, github-actions `actions-majors`. The `vitest` group still
+wins vitest and `@vitest/coverage-v8` majors: its exact names score 1000
+against a pattern-less group's 500. Every entry also has a `security` group
+(`applies-to: security-updates`, `patterns: ["*"]`) so a same-day advisory
+batch is one PR; every other group omits `applies-to` and so stays
+version-updates only. `scripts/validate-render.rb` asserts all of this for
+every repo in `fleet.json`. There is deliberately no `cooldown`.
 
 **`none` renders NO FILE, not an empty one.** That is the escape hatch for a
 config that is deliberately bespoke, and it exists so a regeneration cannot

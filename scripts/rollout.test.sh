@@ -47,6 +47,10 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # subdirectories (`dependabot_extra`), with an ignore fragment that must stay
 # on the gradle entry. FAKE/ma is the same on the actions-only variant, and
 # FAKE/mbad / FAKE/mdir exist only to prove a bad extra fails loudly.
+# FAKE/mroot's extras share the ROOT ecosystem, so they must merge into the
+# root npm entry (`directories: [/, ...]`); FAKE/mdup, mtwice, mdots and meco
+# are the #310 review nits: a duplicate of the root, a repeated extra, a `..`
+# segment and an ecosystem name that is not `[a-z-]+`.
 # FAKE/n opts out of both repo-config templates, which is the only way to prove
 # an opt-out renders NOTHING rather than an empty file.
 # FAKE/p is a pre-1.0 repo: it sets the two optional release-please keys the
@@ -82,6 +86,19 @@ jq '{defaults: .defaults,
               ci: "none", release: "none", package_name: "fake-mbad"},
              {repo: "FAKE/mdir", dependabot: "gradle", dependabot_extra: "npm:web",
               ci: "none", release: "none", package_name: "fake-mdir"},
+             {repo: "FAKE/mroot", dependabot_ignore: "vitest-major",
+              dependabot_extra: "npm:/web,npm:/tools/cli",
+              ci: "none", release: "none", package_name: "fake-mroot"},
+             {repo: "FAKE/mact", dependabot: "gradle", dependabot_extra: "github-actions:/tools/action",
+              ci: "none", release: "none", package_name: "fake-mact"},
+             {repo: "FAKE/mdup", dependabot_extra: "npm:/",
+              ci: "none", release: "none", package_name: "fake-mdup"},
+             {repo: "FAKE/mtwice", dependabot: "gradle", dependabot_extra: "npm:/web,npm:/web",
+              ci: "none", release: "none", package_name: "fake-mtwice"},
+             {repo: "FAKE/mdots", dependabot: "gradle", dependabot_extra: "npm:/web/../etc",
+              ci: "none", release: "none", package_name: "fake-mdots"},
+             {repo: "FAKE/meco", dependabot: "gradle", dependabot_extra: "../npm:/web",
+              ci: "none", release: "none", package_name: "fake-meco"},
              {repo: "FAKE/n", dependabot: "none", release_config: "none",
               release_notes: "none"},
              {repo: "FAKE/r", reusable_release: "true", connector: "true",
@@ -1055,25 +1072,29 @@ assert_code EE 0
 # reverted by the next rollout, so the extra directories are fleet.json data.
 DIR="$TMP/multi"
 bash "$ROLLOUT" FAKE/m --render "$DIR" --only dependabot >/dev/null 2>"$TMP/ff0.err"
+# ONE npm entry for both directories (`directories:`), not one per directory:
+# dependabot groups never span update entries, so two entries meant vitest 5,
+# typescript 7 and @types/node 26 each arrived twice (curtaincall, 2026-09-24).
 if ruby -ryaml -e '
     d = YAML.safe_load(File.read(ARGV[0]))
     u = d["updates"] || []
-    got = u.map { |x| [x["package-ecosystem"], x["directory"]] }
-    want = [["gradle", "/"], ["npm", "/web"], ["npm", "/ops/uptime-worker"], ["github-actions", "/"]]
+    got = u.map { |x| [x["package-ecosystem"], x["directory"] || x["directories"]] }
+    want = [["gradle", "/"], ["npm", ["/web", "/ops/uptime-worker"]], ["github-actions", "/"]]
     abort "entries #{got.inspect}, want #{want.inspect}" unless got == want
     u.select { |x| x["package-ecosystem"] == "npm" }.each do |x|
-      cm = x["commit-message"] or abort "#{x["directory"]}: no commit-message"
-      abort "#{x["directory"]}: runtime prefix #{cm["prefix"].inspect}, want fix" unless cm["prefix"] == "fix"
-      abort "#{x["directory"]}: dev prefix #{cm["prefix-development"].inspect}, want chore" unless cm["prefix-development"] == "chore"
-      abort "#{x["directory"]}: no scope" unless cm["include"] == "scope"
+      abort "npm entry has both directory and directories" if x.key?("directory")
+      cm = x["commit-message"] or abort "no commit-message"
+      abort "runtime prefix #{cm["prefix"].inspect}, want fix" unless cm["prefix"] == "fix"
+      abort "dev prefix #{cm["prefix-development"].inspect}, want chore" unless cm["prefix-development"] == "chore"
+      abort "no scope" unless cm["include"] == "scope"
       pats = x.dig("groups", "vitest", "patterns") || []
-      abort "#{x["directory"]}: vitest pair not pinned" unless pats.include?("@vitest/coverage-v8")
-      abort "#{x["directory"]}: carries the gradle ignore block" if x.key?("ignore")
+      abort "vitest pair not pinned" unless pats.include?("@vitest/coverage-v8")
+      abort "carries the gradle ignore block" if x.key?("ignore")
     end
     g = u.find { |x| x["package-ecosystem"] == "gradle" }
     abort "the jaxb hold left the gradle entry" unless (g["ignore"] || []).any? { |i| i["dependency-name"] == "javax.xml.bind:jaxb-api" }
   ' "$DIR/.github/dependabot.yml" 2>"$TMP/ff1.err"; then
-  ok "FF: dependabot_extra adds each npm directory (fix/chore, vitest pinned), ignore stays on the root entry"
+  ok "FF: dependabot_extra renders one npm entry over every extra directory (fix/chore, vitest pinned), ignore stays on the root entry"
 else
   bad "FF: multi" "$(cat "$TMP/ff0.err" "$TMP/ff1.err" 2>/dev/null)"
 fi
@@ -1082,17 +1103,49 @@ DIR="$TMP/multi-actions"
 bash "$ROLLOUT" FAKE/ma --render "$DIR" --only dependabot >/dev/null 2>&1
 if ruby -ryaml -e '
     u = YAML.safe_load(File.read(ARGV[0]))["updates"] || []
-    got = u.map { |x| [x["package-ecosystem"], x["directory"]] }
-    abort "entries #{got.inspect}" unless got == [["npm", "/web"], ["github-actions", "/"]]
+    got = u.map { |x| [x["package-ecosystem"], x["directory"] || x["directories"]] }
+    abort "entries #{got.inspect}" unless got == [["npm", ["/web"]], ["github-actions", "/"]]
   ' "$DIR/.github/dependabot.yml" 2>"$TMP/ff2.err"; then
   ok "FF: dependabot_extra also works on the actions-only variant"
 else
   bad "FF: actions variant" "$(cat "$TMP/ff2.err")"
 fi
 
+# An extra in the ROOT ecosystem merges into the root entry rather than adding
+# a second npm entry beside it — and so it inherits the root's ignore holds.
+DIR="$TMP/multi-root"
+bash "$ROLLOUT" FAKE/mroot --render "$DIR" --only dependabot >/dev/null 2>"$TMP/ff3.err"
+if ruby -ryaml -e '
+    u = YAML.safe_load(File.read(ARGV[0]))["updates"] || []
+    got = u.map { |x| [x["package-ecosystem"], x["directory"] || x["directories"]] }
+    want = [["npm", ["/", "/web", "/tools/cli"]], ["github-actions", "/"]]
+    abort "entries #{got.inspect}, want #{want.inspect}" unless got == want
+    abort "npm root entry kept `directory:` beside `directories:`" if u[0].key?("directory")
+    abort "the vitest-major hold left the merged entry" unless (u[0]["ignore"] || []).any? { |i| i["dependency-name"] == "vitest" }
+  ' "$DIR/.github/dependabot.yml" 2>"$TMP/ff4.err"; then
+  ok "FF: a root-ecosystem extra merges into the root entry (directories: [/, ...]) and keeps its ignore"
+else
+  bad "FF: root merge" "$(cat "$TMP/ff3.err" "$TMP/ff4.err" 2>/dev/null)"
+fi
+
+# github-actions is in every template, so an extra there merges into the
+# template's own actions entry rather than needing a fragment of its own.
+DIR="$TMP/multi-act"
+bash "$ROLLOUT" FAKE/mact --render "$DIR" --only dependabot >/dev/null 2>"$TMP/ff5.err"
+if ruby -ryaml -e '
+    u = YAML.safe_load(File.read(ARGV[0]))["updates"] || []
+    got = u.map { |x| [x["package-ecosystem"], x["directory"] || x["directories"]] }
+    want = [["gradle", "/"], ["github-actions", ["/", "/tools/action"]]]
+    abort "entries #{got.inspect}, want #{want.inspect}" unless got == want
+  ' "$DIR/.github/dependabot.yml" 2>>"$TMP/ff5.err"; then
+  ok "FF: a github-actions extra merges into the template actions entry"
+else
+  bad "FF: actions merge" "$(cat "$TMP/ff5.err")"
+fi
+
 # Neither marker may survive into a consumer repo, whether spliced or not.
-for case in multi multi-actions paths gradle actions-only; do
-  if grep -q '__DEPENDABOT_EXTRA__\|__DEPENDABOT_DIRECTORY__' "$TMP/$case/.github/dependabot.yml" 2>/dev/null; then
+for case in multi multi-actions multi-root multi-act paths gradle actions-only; do
+  if grep -q '__DEPENDABOT_[A-Z_]*__' "$TMP/$case/.github/dependabot.yml" 2>/dev/null; then
     bad "FF: marker ($case)" "a dependabot_extra marker rendered literally"
   elif [ -f "$TMP/$case/.github/dependabot.yml" ]; then
     ok "FF: extra markers removed ($case)"
@@ -1103,7 +1156,8 @@ done
 
 # A bad extra is a hard error: the quiet failure is a valid config that simply
 # watches nothing in the directory that needed it.
-for spec in "mbad:has no fragment" "mdir:must be an absolute"; do
+for spec in "mbad:has no fragment" "mdir:must be an absolute" "mdup:duplicates the root" \
+            "mtwice:is listed twice" "mdots:must not contain" "meco:ecosystem must match"; do
   repo="FAKE/${spec%%:*}"; want="${spec#*:}"
   if bash "$ROLLOUT" "$repo" --render "$TMP/ff-$repo" --only dependabot >"$TMP/ff.out" 2>&1; then
     bad "FF: $repo" "rendered successfully instead of failing"
@@ -1113,6 +1167,101 @@ for spec in "mbad:has no fragment" "mdir:must be an absolute"; do
     bad "FF: $repo" "failed without the expected message: $(head -1 "$TMP/ff.out")"
   fi
 done
+
+
+# --- GG: grouping — majors, security fixes, and nothing left ungrouped -----
+# curtaincall's first dependabot_extra run opened 11 PRs, because majors were
+# excluded from every dev/prod group and so each one was a PR of its own.
+# Every entry now carries a majors group per dependency type and a `security`
+# group that catches same-day advisories as ONE PR. Version groups keep no
+# `applies-to`, so they default to version-updates and never swallow a
+# security fix into a PR that also carries unrelated majors.
+cat > "$TMP/gg.rb" <<'RUBY'
+require 'yaml'
+# Dependabot's PatternSpecificityCalculator, as the npm template's comment
+# documents it. The highest-scoring matching group wins.
+def score(pats, name)
+  return 500 if pats.nil?
+  pats.map do |p|
+    next 1000 if p == name
+    next nil unless File.fnmatch(p, name)
+    next 500 unless p.include?('*')
+    100 - 10 * p.count('*') + [p.length - 5, 0].max
+  end.compact.max
+end
+def winner(groups, name, dep_type, update)
+  cands = groups.select do |_, g|
+    g['applies-to'].nil? &&
+      (g['dependency-type'].nil? || g['dependency-type'] == dep_type) &&
+      (g['update-types'] || %w[major minor patch]).include?(update)
+  end
+  cands.map { |n, g| [n, score(g['patterns'], name)] }.reject { |_, s| s.nil? }.max_by { |_, s| s }&.first
+end
+errs = []
+ARGV.each do |f|
+  src = File.read(f)
+  errs << "#{f}: carries a cooldown" if src =~ /^\s*cooldown:/
+  (YAML.safe_load(src)['updates'] || []).each do |u|
+    at = "#{f} #{u['package-ecosystem']} #{(u['directory'] || u['directories']).inspect}"
+    g = u['groups'] || {}
+    sec = g['security']
+    errs << "#{at}: no security group" unless sec
+    if sec
+      errs << "#{at}: security group applies-to #{sec['applies-to'].inspect}" unless sec['applies-to'] == 'security-updates'
+      errs << "#{at}: security group patterns #{sec['patterns'].inspect}" unless sec['patterns'] == ['*']
+    end
+    g.each { |n, x| errs << "#{at}: version group #{n} has applies-to #{x['applies-to'].inspect}" if n != 'security' && x.key?('applies-to') }
+    want = case u['package-ecosystem']
+           when 'npm' then { 'production-majors' => 'production', 'dev-majors' => 'development' }
+           when 'gradle' then { 'majors' => nil }
+           when 'github-actions' then { 'actions-majors' => nil }
+           else {}
+           end
+    want.each do |n, dt|
+      x = g[n] or (errs << "#{at}: no #{n} group"; next)
+      errs << "#{at}: #{n} update-types #{x['update-types'].inspect}" unless x['update-types'] == ['major']
+      errs << "#{at}: #{n} dependency-type #{x['dependency-type'].inspect}" unless x['dependency-type'] == dt
+    end
+    next unless u['package-ecosystem'] == 'npm'
+    # The vitest pair must still beat dev-majors on a MAJOR: exact names score
+    # 1000, a pattern-less group 500. Were it the other way round, a vitest
+    # major would split across the two groups and deadlock on ERESOLVE.
+    %w[vitest @vitest/coverage-v8].each do |dep|
+      w = winner(g, dep, 'development', 'major')
+      errs << "#{at}: a #{dep} major goes to #{w.inspect}, not vitest" unless w == 'vitest'
+    end
+    { %w[typescript development] => 'dev-majors', %w[next production] => 'production-majors' }.each do |(dep, dt), exp|
+      w = winner(g, dep, dt, 'major')
+      errs << "#{at}: a #{dt} #{dep} major goes to #{w.inspect}, want #{exp}" unless w == exp
+    end
+  end
+end
+abort errs.join("\n") unless errs.empty?
+RUBY
+files=()
+for case in paths gradle actions-only multi multi-actions multi-root multi-act; do
+  files+=("$TMP/$case/.github/dependabot.yml")
+done
+if ruby "$TMP/gg.rb" "${files[@]}" 2>"$TMP/gg.err"; then
+  ok "GG: every entry has a security group and its majors groups; vitest still wins its majors"
+else
+  bad "GG: groups" "$(cat "$TMP/gg.err")"
+fi
+
+# A repo-specific hold must survive the new groups: an ignored dependency stays
+# ignored, it does not become a grouped major.
+DIR="$TMP/gg-ignore"
+bash "$ROLLOUT" FAKE/i --render "$DIR" --only dependabot >/dev/null 2>&1
+if ruby -ryaml -e '
+    u = YAML.safe_load(File.read(ARGV[0]))["updates"].find { |x| x["package-ecosystem"] == "npm" }
+    names = (u["ignore"] || []).map { |i| i["dependency-name"] }
+    abort "ignore lost: #{names.inspect}" unless (%w[agents vitest] - names).empty?
+    abort "no dev-majors beside the ignore" unless u.dig("groups", "dev-majors")
+  ' "$DIR/.github/dependabot.yml" 2>"$TMP/gg2.err"; then
+  ok "GG: ignore fragments still apply beside the majors groups"
+else
+  bad "GG: ignore" "$(cat "$TMP/gg2.err")"
+fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

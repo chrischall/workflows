@@ -2,9 +2,11 @@
 # Renders to: .github/dependabot.yml
 # Regenerate with: scripts/rollout.sh <owner/repo> --execute --only dependabot
 #
-# Majors are deliberately absent from the gradle group: a Gradle/AGP/Kotlin
-# major is never a drive-by merge, and dependabot cannot run gradle, so a
-# grouped major lands with a stale kotlin-js-store/yarn.lock.
+# Majors are deliberately kept OUT of the minor/patch group: a Gradle/AGP/
+# Kotlin major is never a drive-by merge, and dependabot cannot run gradle, so
+# a major riding a routine bump lands with a stale kotlin-js-store/yarn.lock.
+# They get a `majors` group of their own instead of no group at all, so a
+# week's majors are one PR to review rather than one PR each.
 #
 # A repo that needs a permanent major hold (a pin that exists BECAUSE of the
 # old major) keeps it in a fragment — templates/fragments/dependabot-ignore-
@@ -38,6 +40,19 @@ updates:
         update-types:
           - minor
           - patch
+      majors:
+        update-types:
+          - major
+      # SECURITY fixes, as ONE PR per update entry. `applies-to` is what
+      # scopes it: a group without that key defaults to version-updates, so
+      # none of the groups above ever collects an advisory, and this one never
+      # collects a routine bump. `*` rather than a dependency type so a
+      # same-day advisory across runtime and dev dependencies still lands as a
+      # single PR.
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   # __DEPENDABOT_EXTRA__
   - package-ecosystem: github-actions
@@ -55,3 +70,16 @@ updates:
         update-types:
           - minor
           - patch
+      actions-majors:
+        update-types:
+          - major
+      # SECURITY fixes, as ONE PR per update entry. `applies-to` is what
+      # scopes it: a group without that key defaults to version-updates, so
+      # none of the groups above ever collects an advisory, and this one never
+      # collects a routine bump. `*` rather than a dependency type so a
+      # same-day advisory across runtime and dev dependencies still lands as a
+      # single PR.
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"

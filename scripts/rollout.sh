@@ -345,35 +345,91 @@ if [ "$DEPENDABOT" != "none" ]; then
   fi
   # One template covered one ecosystem, so a gradle repo's Next.js app under
   # /web got no Dependabot updates at all — allotmint's `next` sat two critical
-  # advisories behind with nothing watching it (#307). Each extra entry is
-  # spliced in before the github-actions entry. The repo's ignore fragment is
-  # NOT applied to extras: it is written for the root ecosystem (a gradle JAXB
-  # hold means nothing to npm).
+  # advisories behind with nothing watching it (#307). The repo's ignore
+  # fragment is NOT applied to a separate extra entry: it is written for the
+  # root ecosystem (a gradle JAXB hold means nothing to npm).
+  #
+  # ONE entry per ecosystem, listing every directory under `directories:`.
+  # Dependabot groups never span update entries, so an entry per directory sent
+  # curtaincall the same vitest, typescript and @types/node majors twice. A
+  # group inside one multi-directory entry is one PR "across N directories".
+  # An extra in an ecosystem the template already has (the root one, or
+  # github-actions) merges into that entry (`directories: [/, ...]`) for the
+  # same reason — and so inherits its holds.
   #
   # Every failure below is a hard error for the same reason as a missing ignore
   # fragment: the quiet alternative is a valid config that simply does not
   # watch the directory that needed it.
-  EXTRAS="$STAGE/.frag-extra.yml"
-  : > "$EXTRAS"
+  # The template's own entries (its root ecosystem and github-actions), each
+  # watching `/`. An extra in one of these merges rather than duplicating it.
+  in_template() { grep -qxF "  - package-ecosystem: $1" "$DB"; }
+  PAIRS=""   # "<eco> <dir>" per line, in fleet.json order
+  ECOS=""    # each ecosystem once, in order of first appearance
   if [ -n "$DEPENDABOT_EXTRA" ]; then
     while IFS= read -r spec; do
       spec=$(printf '%s' "$spec" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
       [ -n "$spec" ] || continue
-      eco="${spec%%:*}"; dir="${spec#*:}"
       case "$spec" in *:*) ;; *)
         echo "::error::$REPO: dependabot_extra entry '$spec' must be <ecosystem>:<directory>"; exit 1 ;;
       esac
+      eco="${spec%%:*}"; dir="${spec#*:}"
+      # The name becomes part of a fragment PATH, so it must not be able to
+      # climb out of templates/fragments/.
+      if ! printf '%s' "$eco" | grep -Eq '^[a-z-]+$'; then
+        echo "::error::$REPO: dependabot_extra ecosystem '$eco' — ecosystem must match ^[a-z-]+\$"; exit 1
+      fi
       # Absolute and plain: dependabot resolves directories from the repo root,
       # and the value lands unquoted in YAML, so anything beyond a path
       # character could change the document's structure rather than its data.
       if ! printf '%s' "$dir" | grep -Eq '^/[A-Za-z0-9._/-]*$'; then
         echo "::error::$REPO: dependabot_extra directory '$dir' must be an absolute repo path like /web"; exit 1
       fi
-      XFRAG="$HERE/templates/fragments/dependabot-extra-$eco.yml"
-      [ -f "$XFRAG" ] || { echo "::error::$REPO: dependabot_extra ecosystem '$eco' has no fragment at $XFRAG"; exit 1; }
-      sed -e "s|__DEPENDABOT_DIRECTORY__|$(sed_escape "$dir")|g" "$XFRAG" >> "$EXTRAS"
+      if printf '%s' "$dir" | grep -Eq '(^|/)\.\.(/|$)'; then
+        echo "::error::$REPO: dependabot_extra directory '$dir' must not contain a '..' segment"; exit 1
+      fi
+      if in_template "$eco" && [ "$dir" = "/" ]; then
+        echo "::error::$REPO: dependabot_extra '$spec' duplicates the root entry (the template already watches $eco at /)"; exit 1
+      fi
+      if printf '%s\n' "$PAIRS" | grep -qxF "$eco $dir"; then
+        echo "::error::$REPO: dependabot_extra '$spec' is listed twice"; exit 1
+      fi
+      if ! in_template "$eco"; then
+        XFRAG="$HERE/templates/fragments/dependabot-extra-$eco.yml"
+        [ -f "$XFRAG" ] || { echo "::error::$REPO: dependabot_extra ecosystem '$eco' has no fragment at $XFRAG"; exit 1; }
+      fi
+      PAIRS="$PAIRS$eco $dir"$'\n'
+      printf '%s\n' "$ECOS" | grep -qxF "$eco" || ECOS="$ECOS$eco"$'\n'
     done < <(printf '%s\n' "$DEPENDABOT_EXTRA" | tr ',' '\n')
   fi
+  dirs_of() { printf '%s' "$PAIRS" | awk -v e="$1" '$1 == e { print "      - " $2 }'; }
+  EXTRAS="$STAGE/.frag-extra.yml"
+  : > "$EXTRAS"
+  while IFS= read -r eco; do
+    [ -n "$eco" ] || continue
+    LIST="$STAGE/.frag-dirs.yml"
+    if in_template "$eco"; then
+      # Rewrite the root entry's `directory: /` — the first one after its
+      # `package-ecosystem:` line — into a `directories:` list led by `/`.
+      { echo "      - /"; dirs_of "$eco"; } > "$LIST"
+      awk -v eco="$eco" -v list="$LIST" '
+        $0 == "  - package-ecosystem: " eco { armed = 1 }
+        armed && $0 == "    directory: /" {
+          print "    directories:"
+          while ((getline l < list) > 0) print l
+          armed = 0; done = 1; next
+        }
+        { print }
+        END { if (!done) exit 3 }
+      ' "$DB" > "$DB.tmp" || { echo "::error::$REPO: no root $eco entry to merge dependabot_extra into"; exit 1; }
+      mv "$DB.tmp" "$DB"
+    else
+      dirs_of "$eco" > "$LIST"
+      sed -e "/^      # __DEPENDABOT_DIRECTORIES__$/r $LIST" \
+          -e '/^      # __DEPENDABOT_DIRECTORIES__$/d' \
+          "$HERE/templates/fragments/dependabot-extra-$eco.yml" >> "$EXTRAS"
+    fi
+    rm -f "$LIST"
+  done < <(printf '%s' "$ECOS")
   # Same comment-line marker shape as __DEPENDABOT_IGNORE__, and deleted when
   # there are no extras, so every repo without one renders byte-identically.
   sed -e "/^  # __DEPENDABOT_EXTRA__$/r $EXTRAS" \
