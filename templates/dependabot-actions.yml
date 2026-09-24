@@ -8,6 +8,7 @@
 # action versions moving.
 version: 2
 updates:
+  # __DEPENDABOT_EXTRA__
   - package-ecosystem: github-actions
     directory: /
     schedule:
