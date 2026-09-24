@@ -168,16 +168,44 @@ entries.each do |repo, entry|
         # EVERY npm entry, not the first: dependabot_extra (#307) puts several
         # in one file, and a subdirectory app deadlocks on the vitest pair
         # exactly as a root one does.
+        dirs = ->(u) { Array(u['directories'] || u['directory']) }
         (doc['updates'] || []).select { |u| u['package-ecosystem'] == 'npm' }.each do |npm|
           pats = npm.dig('groups', 'vitest', 'patterns') || []
           unless pats.include?('@vitest/coverage-v8')
-            failures << "#{repo}/#{rel}: npm #{npm['directory']}: vitest group does not pin @vitest/coverage-v8 by exact name"
+            failures << "#{repo}/#{rel}: npm #{dirs.(npm).inspect}: vitest group does not pin @vitest/coverage-v8 by exact name"
           end
+        end
+        # Grouping. Every entry batches its majors and its security
+        # fixes: an entry without them opens one PR per major and one per
+        # advisory, which is how curtaincall's first run opened 11 PRs.
+        # Only `security` may carry applies-to — a version group that did
+        # would swallow advisories into a PR full of unrelated majors.
+        majors = { 'npm' => %w[production-majors dev-majors], 'gradle' => %w[majors],
+                   'github-actions' => %w[actions-majors] }
+        (doc['updates'] || []).each do |u|
+          at = "#{repo}/#{rel}: #{u['package-ecosystem']} #{dirs.(u).inspect}"
+          failures << "#{at}: has both directory and directories" if u.key?('directory') && u.key?('directories')
+          groups = u['groups'] || {}
+          sec = groups['security']
+          unless sec && sec['applies-to'] == 'security-updates' && sec['patterns'] == ['*']
+            failures << "#{at}: no `security` group (applies-to: security-updates, patterns: [\"*\"])"
+          end
+          groups.each do |n, g|
+            failures << "#{at}: version group #{n} sets applies-to" if n != 'security' && g.is_a?(Hash) && g.key?('applies-to')
+          end
+          (majors[u['package-ecosystem']] || []).each do |n|
+            failures << "#{at}: no #{n} group for major updates" unless groups.dig(n, 'update-types') == ['major']
+          end
+          failures << "#{at}: carries a cooldown" if u.key?('cooldown')
         end
         # Every directory fleet.json asks for must actually be watched. A dropped
         # one is invisible: the config stays valid and dependabot simply never
         # looks there — which is how allotmint's /web sat on a critical `next`.
-        have = (doc['updates'] || []).map { |u| "#{u['package-ecosystem']}:#{u['directory']}" }
+        # And each ecosystem must be ONE entry: groups never span entries, so a
+        # second entry for the same ecosystem re-sends every shared major.
+        eco_counts = (doc['updates'] || []).map { |u| u['package-ecosystem'] }.group_by(&:itself).transform_values(&:size)
+        eco_counts.each { |e, c| failures << "#{repo}/#{rel}: #{c} #{e} entries — extras must merge into one `directories:` entry" if c > 1 }
+        have = (doc['updates'] || []).flat_map { |u| dirs.(u).map { |d| "#{u['package-ecosystem']}:#{d}" } }
         cfg(entry, defaults, 'dependabot_extra').split(',').map(&:strip).reject(&:empty?).each do |want|
           failures << "#{repo}/#{rel}: dependabot_extra #{want.inspect} has no update entry" unless have.include?(want)
         end
