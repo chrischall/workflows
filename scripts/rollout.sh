@@ -123,6 +123,11 @@ FLY_DIR=$(cfg fly_dir)
 DEPENDABOT=$(cfg dependabot)
 # Name of a templates/fragments/dependabot-ignore-<name>.yml block to splice in.
 DEPENDABOT_IGNORE=$(cfg dependabot_ignore)
+# Further manifests below the root, as comma-separated `<ecosystem>:<dir>`
+# pairs (e.g. `npm:/web,npm:/ops/uptime-worker`). Each renders
+# templates/fragments/dependabot-extra-<ecosystem>.yml, so one repo can watch a
+# gradle root AND the npm apps beside it (#307).
+DEPENDABOT_EXTRA=$(cfg dependabot_extra)
 RELEASE_CONFIG=$(cfg release_config)
 RELEASE_NOTES=$(cfg release_notes)
 PACKAGE_NAME=$(cfg package_name)
@@ -338,6 +343,42 @@ if [ "$DEPENDABOT" != "none" ]; then
   else
     sed -e '/^    # __DEPENDABOT_IGNORE__$/d' "$DB" > "$DB.tmp" && mv "$DB.tmp" "$DB"
   fi
+  # One template covered one ecosystem, so a gradle repo's Next.js app under
+  # /web got no Dependabot updates at all — allotmint's `next` sat two critical
+  # advisories behind with nothing watching it (#307). Each extra entry is
+  # spliced in before the github-actions entry. The repo's ignore fragment is
+  # NOT applied to extras: it is written for the root ecosystem (a gradle JAXB
+  # hold means nothing to npm).
+  #
+  # Every failure below is a hard error for the same reason as a missing ignore
+  # fragment: the quiet alternative is a valid config that simply does not
+  # watch the directory that needed it.
+  EXTRAS="$STAGE/.frag-extra.yml"
+  : > "$EXTRAS"
+  if [ -n "$DEPENDABOT_EXTRA" ]; then
+    while IFS= read -r spec; do
+      spec=$(printf '%s' "$spec" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+      [ -n "$spec" ] || continue
+      eco="${spec%%:*}"; dir="${spec#*:}"
+      case "$spec" in *:*) ;; *)
+        echo "::error::$REPO: dependabot_extra entry '$spec' must be <ecosystem>:<directory>"; exit 1 ;;
+      esac
+      # Absolute and plain: dependabot resolves directories from the repo root,
+      # and the value lands unquoted in YAML, so anything beyond a path
+      # character could change the document's structure rather than its data.
+      if ! printf '%s' "$dir" | grep -Eq '^/[A-Za-z0-9._/-]*$'; then
+        echo "::error::$REPO: dependabot_extra directory '$dir' must be an absolute repo path like /web"; exit 1
+      fi
+      XFRAG="$HERE/templates/fragments/dependabot-extra-$eco.yml"
+      [ -f "$XFRAG" ] || { echo "::error::$REPO: dependabot_extra ecosystem '$eco' has no fragment at $XFRAG"; exit 1; }
+      sed -e "s|__DEPENDABOT_DIRECTORY__|$(sed_escape "$dir")|g" "$XFRAG" >> "$EXTRAS"
+    done < <(printf '%s\n' "$DEPENDABOT_EXTRA" | tr ',' '\n')
+  fi
+  # Same comment-line marker shape as __DEPENDABOT_IGNORE__, and deleted when
+  # there are no extras, so every repo without one renders byte-identically.
+  sed -e "/^  # __DEPENDABOT_EXTRA__$/r $EXTRAS" \
+      -e '/^  # __DEPENDABOT_EXTRA__$/d' "$DB" > "$DB.tmp" && mv "$DB.tmp" "$DB"
+  rm -f "$EXTRAS"
 fi
 [ "$RELEASE_NOTES" != "none" ] && render release-notes.yml ".github/release.yml"
 if [ "$RELEASE_CONFIG" != "none" ]; then
@@ -410,7 +451,7 @@ if [ -n "$ONLY" ]; then
 fi
 
 if [ "$EXECUTE" != "--check" ] && [ "$EXECUTE" != "--render" ] && [ "$EXECUTE" != "--pr-body" ]; then
-  echo "=== $REPO  (pat=$PAT_SECRET ci=$CI_MODE release=$RELEASE_MODE lockfix=${LOCKFIX:-none} connector=${CONNECTOR:-no} fly=${FLY_DIR:-no} dependabot=$DEPENDABOT) ==="
+  echo "=== $REPO  (pat=$PAT_SECRET ci=$CI_MODE release=$RELEASE_MODE lockfix=${LOCKFIX:-none} connector=${CONNECTOR:-no} fly=${FLY_DIR:-no} dependabot=$DEPENDABOT${DEPENDABOT_EXTRA:+,$DEPENDABOT_EXTRA}) ==="
   while IFS= read -r f; do echo "--- $f"; cat "$STAGE/$f"; done \
     < <(cd "$STAGE" && find . -type f | sed 's|^\./||' | sort)
 fi

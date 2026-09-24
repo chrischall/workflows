@@ -25,6 +25,7 @@
     "include_v_in_tag": "true",
     "include_component_in_tag": "false",
     "dependabot_ignore": "",
+    "dependabot_extra": "",
     "reusable_release": "true"
   },
   "repos": [
@@ -294,7 +295,8 @@
       "lockfix": "gradle",
       "dependabot": "gradle",
       "release_config": "none",
-      "dependabot_ignore": "jaxb"
+      "dependabot_ignore": "jaxb",
+      "dependabot_extra": "npm:/web,npm:/ops/uptime-worker"
     },
     {
       "repo": "nullnet-app/encore",
@@ -443,6 +445,7 @@
       "release": "custom",
       "conventions_hint": "TDD project (every behavior ships with a failing test first; never weaken assertions). Pure deterministic KMP engine in :shared/commonMain — no java.*/platform APIs and no platform RNG (seeded SplitMix64 only), except the LP solver's JVM actual. Conventional-Commit PR titles (squash-merged → release-please). Design spec: docs/superpowers/specs/2026-06-16-allotmint-engine-design.md.",
       "dependabot": "gradle",
+      "dependabot_extra": "npm:/web",
       "release_config": "none"
     },
     {

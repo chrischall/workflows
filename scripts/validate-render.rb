@@ -165,12 +165,21 @@ entries.each do |repo, entry|
         unless eco.include?('github-actions')
           failures << "#{repo}/#{rel}: no github-actions ecosystem — pinned action versions would stop moving"
         end
-        npm = (doc['updates'] || []).find { |u| u['package-ecosystem'] == 'npm' }
-        if npm
+        # EVERY npm entry, not the first: dependabot_extra (#307) puts several
+        # in one file, and a subdirectory app deadlocks on the vitest pair
+        # exactly as a root one does.
+        (doc['updates'] || []).select { |u| u['package-ecosystem'] == 'npm' }.each do |npm|
           pats = npm.dig('groups', 'vitest', 'patterns') || []
           unless pats.include?('@vitest/coverage-v8')
-            failures << "#{repo}/#{rel}: vitest group does not pin @vitest/coverage-v8 by exact name"
+            failures << "#{repo}/#{rel}: npm #{npm['directory']}: vitest group does not pin @vitest/coverage-v8 by exact name"
           end
+        end
+        # Every directory fleet.json asks for must actually be watched. A dropped
+        # one is invisible: the config stays valid and dependabot simply never
+        # looks there — which is how allotmint's /web sat on a critical `next`.
+        have = (doc['updates'] || []).map { |u| "#{u['package-ecosystem']}:#{u['directory']}" }
+        cfg(entry, defaults, 'dependabot_extra').split(',').map(&:strip).reject(&:empty?).each do |want|
+          failures << "#{repo}/#{rel}: dependabot_extra #{want.inspect} has no update entry" unless have.include?(want)
         end
 
       when 'claude.yml'

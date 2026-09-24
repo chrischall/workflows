@@ -370,7 +370,8 @@ leaving every Kotlin/AGP/Compose dependency untracked. A wrong value here is
 invisible: the config is valid and dependabot simply watches nothing.
 
 `fleet.json` keys: `dependabot` (`npm`|`gradle`|`actions`|`none`),
-`dependabot_ignore` (a fragment name, see below), `release_config`
+`dependabot_ignore` (a fragment name, see below), `dependabot_extra`
+(comma-separated `<ecosystem>:<directory>`, see below), `release_config`
 (`mcp`|`none`), `release_notes` (`on`|`none`), `package_name`, `release_type`,
 `version_files` (comma-separated), and the optional release-please keys
 `bump_minor_pre_major`, `initial_version`, `include_v_in_tag`,
@@ -397,6 +398,22 @@ column 0 renders to a top-level scalar and breaks the template parse, the same
 shape as the placeholder that took out two repos' release workflows. An
 unknown fragment name is a hard error, because the quiet failure is a config
 that looks right and has simply lost the hold.
+
+**A manifest below the root is `dependabot_extra`, not a hand edit.**
+`dependabot` picks the ROOT ecosystem; `dependabot_extra` adds further
+directories as `<ecosystem>:<directory>` pairs, each rendered from
+`templates/fragments/dependabot-extra-<ecosystem>.yml` and spliced in before
+the github-actions entry. `curtaincall` (`npm:/web,npm:/ops/uptime-worker`) and
+`allotmint` (`npm:/web`) are gradle repos with Next.js/Worker apps beside the
+KMP build; with one ecosystem per repo their npm projects got no Dependabot
+updates at all, and allotmint's `next` sat two critical advisories behind
+(#307). The npm fragment carries the root template's `fix`/`chore` prefixes
+and the exact-name vitest pin. `dependabot_ignore` applies to the root entry
+only — a hold is written for one ecosystem. Only `npm` has a fragment today;
+an unknown ecosystem, or a directory that is not an absolute repo path, is a
+hard error, because the quiet failure is a valid config that never looks in
+the directory that needed it. Repos without the key render byte-identically:
+the `# __DEPENDABOT_EXTRA__` marker is deleted.
 
 **`none` renders NO FILE, not an empty one.** That is the escape hatch for a
 config that is deliberately bespoke, and it exists so a regeneration cannot

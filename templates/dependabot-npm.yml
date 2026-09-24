@@ -65,6 +65,7 @@ updates:
           - minor
           - patch
 
+  # __DEPENDABOT_EXTRA__
   - package-ecosystem: github-actions
     directory: /
     schedule:

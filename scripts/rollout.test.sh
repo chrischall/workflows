@@ -43,6 +43,10 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # repos. The on path has to keep the whole block. Neither is observable
 # from the other.
 # FAKE/g is a gradle repo: its dependabot config must watch gradle, never npm.
+# FAKE/m is curtaincall-shaped: a gradle root plus npm projects in
+# subdirectories (`dependabot_extra`), with an ignore fragment that must stay
+# on the gradle entry. FAKE/ma is the same on the actions-only variant, and
+# FAKE/mbad / FAKE/mdir exist only to prove a bad extra fails loudly.
 # FAKE/n opts out of both repo-config templates, which is the only way to prove
 # an opt-out renders NOTHING rather than an empty file.
 # FAKE/p is a pre-1.0 repo: it sets the two optional release-please keys the
@@ -69,6 +73,15 @@ jq '{defaults: .defaults,
               package_name: "fake-p", bump_minor_pre_major: "true",
               initial_version: "0.1.0", include_v_in_tag: "",
               include_component_in_tag: ""},
+             {repo: "FAKE/m", dependabot: "gradle", dependabot_ignore: "jaxb",
+              dependabot_extra: "npm:/web,npm:/ops/uptime-worker",
+              ci: "none", release: "none", package_name: "fake-m"},
+             {repo: "FAKE/ma", dependabot: "actions", dependabot_extra: "npm:/web",
+              ci: "none", release: "none", package_name: "fake-ma"},
+             {repo: "FAKE/mbad", dependabot: "gradle", dependabot_extra: "cargo:/rs",
+              ci: "none", release: "none", package_name: "fake-mbad"},
+             {repo: "FAKE/mdir", dependabot: "gradle", dependabot_extra: "npm:web",
+              ci: "none", release: "none", package_name: "fake-mdir"},
              {repo: "FAKE/n", dependabot: "none", release_config: "none",
               release_notes: "none"},
              {repo: "FAKE/r", reusable_release: "true", connector: "true",
@@ -1033,6 +1046,73 @@ OUT="$TMP/out.txt"; ERR="$TMP/err.txt"
 GH_FIXTURES="$R_ON" bash "$ROLLOUT" FAKE/r --check > "$OUT" 2> "$ERR"; CODE=$?
 assert_has  EE "OK       FAKE/r"
 assert_code EE 0
+
+# --- FF: one repo, several ecosystems/directories (dependabot_extra) --------
+# The template took ONE ecosystem per repo, so allotmint's and curtaincall's
+# Next.js app under /web (and curtaincall's /ops/uptime-worker) got no
+# Dependabot updates at all — a `next` with two critical advisories sat
+# unwatched (workflows#307). A hand edit to their dependabot.yml would be
+# reverted by the next rollout, so the extra directories are fleet.json data.
+DIR="$TMP/multi"
+bash "$ROLLOUT" FAKE/m --render "$DIR" --only dependabot >/dev/null 2>"$TMP/ff0.err"
+if ruby -ryaml -e '
+    d = YAML.safe_load(File.read(ARGV[0]))
+    u = d["updates"] || []
+    got = u.map { |x| [x["package-ecosystem"], x["directory"]] }
+    want = [["gradle", "/"], ["npm", "/web"], ["npm", "/ops/uptime-worker"], ["github-actions", "/"]]
+    abort "entries #{got.inspect}, want #{want.inspect}" unless got == want
+    u.select { |x| x["package-ecosystem"] == "npm" }.each do |x|
+      cm = x["commit-message"] or abort "#{x["directory"]}: no commit-message"
+      abort "#{x["directory"]}: runtime prefix #{cm["prefix"].inspect}, want fix" unless cm["prefix"] == "fix"
+      abort "#{x["directory"]}: dev prefix #{cm["prefix-development"].inspect}, want chore" unless cm["prefix-development"] == "chore"
+      abort "#{x["directory"]}: no scope" unless cm["include"] == "scope"
+      pats = x.dig("groups", "vitest", "patterns") || []
+      abort "#{x["directory"]}: vitest pair not pinned" unless pats.include?("@vitest/coverage-v8")
+      abort "#{x["directory"]}: carries the gradle ignore block" if x.key?("ignore")
+    end
+    g = u.find { |x| x["package-ecosystem"] == "gradle" }
+    abort "the jaxb hold left the gradle entry" unless (g["ignore"] || []).any? { |i| i["dependency-name"] == "javax.xml.bind:jaxb-api" }
+  ' "$DIR/.github/dependabot.yml" 2>"$TMP/ff1.err"; then
+  ok "FF: dependabot_extra adds each npm directory (fix/chore, vitest pinned), ignore stays on the root entry"
+else
+  bad "FF: multi" "$(cat "$TMP/ff0.err" "$TMP/ff1.err" 2>/dev/null)"
+fi
+
+DIR="$TMP/multi-actions"
+bash "$ROLLOUT" FAKE/ma --render "$DIR" --only dependabot >/dev/null 2>&1
+if ruby -ryaml -e '
+    u = YAML.safe_load(File.read(ARGV[0]))["updates"] || []
+    got = u.map { |x| [x["package-ecosystem"], x["directory"]] }
+    abort "entries #{got.inspect}" unless got == [["npm", "/web"], ["github-actions", "/"]]
+  ' "$DIR/.github/dependabot.yml" 2>"$TMP/ff2.err"; then
+  ok "FF: dependabot_extra also works on the actions-only variant"
+else
+  bad "FF: actions variant" "$(cat "$TMP/ff2.err")"
+fi
+
+# Neither marker may survive into a consumer repo, whether spliced or not.
+for case in multi multi-actions paths gradle actions-only; do
+  if grep -q '__DEPENDABOT_EXTRA__\|__DEPENDABOT_DIRECTORY__' "$TMP/$case/.github/dependabot.yml" 2>/dev/null; then
+    bad "FF: marker ($case)" "a dependabot_extra marker rendered literally"
+  elif [ -f "$TMP/$case/.github/dependabot.yml" ]; then
+    ok "FF: extra markers removed ($case)"
+  else
+    bad "FF: marker ($case)" "no rendered dependabot.yml to inspect"
+  fi
+done
+
+# A bad extra is a hard error: the quiet failure is a valid config that simply
+# watches nothing in the directory that needed it.
+for spec in "mbad:has no fragment" "mdir:must be an absolute"; do
+  repo="FAKE/${spec%%:*}"; want="${spec#*:}"
+  if bash "$ROLLOUT" "$repo" --render "$TMP/ff-$repo" --only dependabot >"$TMP/ff.out" 2>&1; then
+    bad "FF: $repo" "rendered successfully instead of failing"
+  elif grep -q "$want" "$TMP/ff.out"; then
+    ok "FF: $repo fails with a named error ($want)"
+  else
+    bad "FF: $repo" "failed without the expected message: $(head -1 "$TMP/ff.out")"
+  fi
+done
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
