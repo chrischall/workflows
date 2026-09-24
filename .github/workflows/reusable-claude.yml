@@ -24,6 +24,16 @@ name: Reusable Claude (ad-hoc @claude)
 #    user could trigger a job holding CLAUDE_CODE_OAUTH_TOKEN with
 #    `contents: write`. Checking out PR head code (fix 1) raises the stakes on
 #    that, so the author gate ships with it: OWNER / MEMBER / COLLABORATOR only.
+#
+# 3. THE MODEL RUNS IN THE SAME SANDBOX AS THE AUTO-REVIEW (fleet-audit#967).
+#    On a fork PR the model reads a stranger's code, so everything #282 built
+#    for reusable-pr-auto-review.yml applies here too: the subprocess env
+#    scrub (with bubblewrap + socat), user-only settings, and no symlinks in
+#    the checkout. On top of that a fork PR gets no write tools at all and no
+#    persisted checkout token, and the job token is read-only for contents —
+#    the action pushes and comments with its own Claude App token. The mention
+#    must be a whole word, as the /auto-review command must lead its comment
+#    (#284). scripts/claude-sandbox.test.sh pins all of it.
 
 on:
   workflow_call:
@@ -45,6 +55,10 @@ jobs:
     # repair: an expression that cannot be evaluated makes the job SKIP, which
     # presents as a green check on a workflow that never ran, so the version
     # with nothing absent to dereference is the one worth keeping.
+    #
+    # `contains()` is only a cheap prefilter — expressions have no regex. The
+    # `gate` step below requires a whole-word mention before anything is
+    # checked out, so "mail me at someone@claude.ai" does not check out a fork.
     if: >-
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
       || (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
@@ -52,12 +66,77 @@ jobs:
       || (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      # Read-only: the action commits, pushes and comments with the Claude App
+      # token it mints over OIDC (id-token below), never this one. `write`
+      # here only ever reached the model as the credential actions/checkout
+      # persists into .git/config — on a fork PR, a stranger's checkout.
+      contents: read
       pull-requests: write
       issues: write
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
+    env:
+      # Strip secrets from every process the MODEL starts, exactly as the
+      # review job does (fleet-audit#282, #967): its Bash and git subprocesses
+      # must not inherit CLAUDE_CODE_OAUTH_TOKEN (the owner's Max-plan token)
+      # or the OIDC request token. Claude Code keeps them in its own process
+      # for API calls. Job-level, where claude-code-action reads it.
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1'
     steps:
+      # Two facts every later step keys on:
+      #   mention  the comment/review/issue names @claude as a whole word —
+      #            the same rule the action applies before it runs the model
+      #            ((^|\s)@claude([\s.,!?;:]|$)), applied here BEFORE the
+      #            checkout rather than after it.
+      #   fork     the PR's head lives in another repository (or is gone, or
+      #            cannot be looked up: fail closed). A fork PR gets no write
+      #            tools and no persisted checkout token.
+      - name: Require a whole-word @claude mention and detect a fork PR
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          REVIEW_BODY: ${{ github.event.review.body }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          IS_PR_COMMENT: ${{ github.event.issue.pull_request && 'true' || '' }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          case "$EVENT" in
+            issue_comment|pull_request_review_comment) text="$COMMENT_BODY" ;;
+            pull_request_review) text="$REVIEW_BODY" ;;
+            issues) text="$ISSUE_TITLE"$'\n'"$ISSUE_BODY" ;;
+            *) text="" ;;
+          esac
+          if ! printf '%s\n' "$text" | grep -Eq '(^|[[:space:]])@claude([[:space:].,!?;:]|$)'; then
+            echo "mention=false" >> "$GITHUB_OUTPUT"
+            echo "No whole-word @claude mention — nothing to do."
+            exit 0
+          fi
+          echo "mention=true" >> "$GITHUB_OUTPUT"
+
+          head=""
+          case "$EVENT" in
+            issue_comment)
+              if [ "$IS_PR_COMMENT" != "true" ]; then
+                echo "fork=false" >> "$GITHUB_OUTPUT"; exit 0
+              fi
+              head="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name' 2>/dev/null)" || head=""
+              ;;
+            pull_request_review|pull_request_review_comment) head="$PR_HEAD_REPO" ;;
+            *) echo "fork=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          if [ -n "$head" ] && [ "$head" != "null" ] \
+             && [ "$(printf '%s' "$head" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')" ]; then
+            echo "fork=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "fork=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::PR #${PR_NUMBER} is from a fork (${head:-unknown head}): read-only tools, no persisted token."
+          fi
+
       # NOTE: claude-code-action does its own fork-PR checkout on top of this
       # step, and then RESTORES the instruction-bearing files from the base
       # branch: ".claude, .mcp.json, .claude.json, .gitmodules, .ripgreprc,
@@ -72,8 +151,15 @@ jobs:
       # a stale-doc finding against a doc the branch already fixed (this is what
       # happened on ofw-mcp#175). Diff those files; don't read them.
       - name: Checkout the PR under discussion (or the default branch)
+        if: ${{ steps.gate.outputs.mention == 'true' }}
         uses: actions/checkout@v7
         with:
+          # Not on a fork: the model reads that checkout. Kept on same-repo
+          # PRs because the action's own `git fetch origin <branch>` runs
+          # before it swaps in its App token, and a private repo's fetch needs
+          # a credential. (The action removes this one before the model runs;
+          # the job token is contents: read regardless.)
+          persist-credentials: ${{ steps.gate.outputs.fork != 'true' }}
           # Full history: the agent compares against main constantly, and a
           # depth-1 clone has none of it.
           fetch-depth: 0
@@ -88,7 +174,34 @@ jobs:
              || (github.event.pull_request && format('refs/pull/{0}/head', github.event.pull_request.number))
              || '' }}
 
+      # Same step, byte for byte, as the review job's (claude-sandbox.test.sh
+      # checks they match; review-sandbox.test.sh pins its behaviour). A PR can
+      # commit `p -> /proc` and the model's Grep/Glob would read through it.
+      # Residual gap: the action re-fetches refs/pull/N/head itself, so a
+      # commit pushed in the seconds between this step and that fetch is
+      # checked out with its links intact.
+      - name: Remove symlinks from the checkout
+        if: ${{ steps.gate.outputs.mention == 'true' }}
+        run: |
+          removed=0
+          while IFS= read -r -d '' entry; do
+            mode="${entry%% *}"
+            path="${entry#*$'\t'}"
+            [ "$mode" = "120000" ] || continue
+            git update-index --skip-worktree -- "$path"
+            rm -f -- "$path"
+            removed=$((removed + 1))
+          done < <(git ls-files -s -z)
+          # Belt and braces: nothing untracked should exist in a fresh checkout,
+          # but a link that is not in the index would survive the loop above.
+          while IFS= read -r -d '' link; do
+            rm -f -- "$link"
+            removed=$((removed + 1))
+          done < <(find . -path ./.git -prune -o -type l -print0)
+          echo "Removed $removed symlink(s) from the worktree before the review."
+
       - name: Install pinned Claude Code (for Opus 5.5 / Fable 5.1)
+        if: ${{ steps.gate.outputs.mention == 'true' }}
         id: claude_code
         # claude-code-action@v1.0.230 bundles claude-agent-sdk 0.3.277 (Claude Code
         # 2.1.277); the newest action, v1.0.231, bundles 0.3.278. Claude Opus 5.5
@@ -103,7 +216,23 @@ jobs:
           path="$RUNNER_TEMP/claude-code/node_modules/.bin/claude"
           "$path" --version
           echo "path=$path" >> "$GITHUB_OUTPUT"
+      - name: Install the sandbox dependencies (bubblewrap, socat)
+        if: ${{ steps.gate.outputs.mention == 'true' }}
+        # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (job env) is enforced on Linux with
+        # bubblewrap, which ubuntu-latest lacks — without it Claude Code exits
+        # 1 before doing anything. Ubuntu 24.04's AppArmor blocks the user
+        # namespace bwrap creates (the runner VM is ephemeral, so lifting it
+        # affects this job only), and the sandboxed Bash tool proxies its
+        # network through socat (#309). Same step as the review job's.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap socat
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true  # key absent = no restriction
+          bwrap --ro-bind / / --unshare-user true && echo "bwrap: user namespace OK"
+          socat -V | head -1
+
       - name: Run Claude Code
+        if: ${{ steps.gate.outputs.mention == 'true' }}
         id: claude
         # PINNED, not @v1. v1.0.218 (published 2026-09-08T20:39Z) broke the
         # installer: every run fails with
@@ -125,5 +254,20 @@ jobs:
           # schedule, and an ad-hoc "@claude review this" is the ONLY review a
           # fork PR gets — it should not silently run on a different model than
           # the automated path picks for the same diff.
+          #
+          #   --setting-sources user  the action swaps the checkout's .claude/
+          #                           for the base branch's but still loads it,
+          #                           and a base-branch hook that runs a
+          #                           PR-owned script runs the PR's code (#282).
+          #   fork: no write tools    the action's tag mode grants file edits
+          #                           (acceptEdits), git add/commit/rm and its
+          #                           git-push wrapper, all backed by the App
+          #                           token — enough for an injected fork README
+          #                           to push the fork's commits into this repo
+          #                           as a branch. A fork PR gets a read-only
+          #                           review; it could never push to the fork.
+          #                           Deny beats allow and beats acceptEdits.
           claude_args: |
             --model claude-opus-5-5
+            --setting-sources user
+            ${{ steps.gate.outputs.fork == 'true' && '--disallowedTools "Edit,MultiEdit,Write,NotebookEdit,Bash(git add:*),Bash(git commit:*),Bash(git rm:*),Bash(git push:*),Bash(*git-push.sh*),mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files"' || '' }}

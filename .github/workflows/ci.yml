@@ -122,6 +122,14 @@ jobs:
         # and that commit subjects cannot break out of their prompt fence.
         run: bash scripts/review-sandbox.test.sh
 
+      - name: "@claude job sandbox unit tests"
+        # The ad-hoc @claude job is the only review a fork PR gets, so it runs
+        # a stranger's checkout too — the #282 sandbox was built for the review
+        # job only (fleet-audit#967). Pins the whole-word mention gate, fork
+        # detection and the fork's missing write tools, the read-only job
+        # token, the env scrub, user-only settings and symlink removal.
+        run: bash scripts/claude-sandbox.test.sh
+
       - name: arm / de-arm policy unit tests
         # #209 shipped scripts/arm.test.sh and never wired it in, so the guard
         # it added ran in CI exactly zero times — the same failure its
