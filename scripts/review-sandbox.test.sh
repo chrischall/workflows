@@ -118,6 +118,12 @@ else ok "prompt no longer tells the model to use find"; fi
 if grep -qF 'gh pr comment ${{ needs.context.outputs.number }} --body' "$TMP/prompt.txt"; then
   ok "prompt shows the scoped gh pr comment form"
 else bad "prompt shows the scoped gh pr comment form" "no 'gh pr comment <N> --body' in the prompt"; fi
+# The -F / --body-file deny rules match the whole command, --body text
+# included, so a summary that merely mentions either flag is refused. The
+# prompt has to warn the model off writing them anywhere (workflows#309).
+if grep -F 'TOOLS:' "$TMP/prompt.txt" | grep -qF 'anywhere in the command, including inside the comment text'; then
+  ok "prompt warns that -F/--body-file are refused even inside the comment text"
+else bad "prompt warns that -F/--body-file are refused even inside the comment text" "$(grep -F 'TOOLS:' "$TMP/prompt.txt")"; fi
 # The ancestry report quotes commit subjects the PR author wrote. It goes in
 # the prompt fenced as data, never as bare instruction text.
 if grep -B1 -F '${{ steps.ancestry.outputs.report }}' "$TMP/prompt.txt" | head -1 | grep -qE '^[[:space:]]*```'; then
