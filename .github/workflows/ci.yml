@@ -38,6 +38,15 @@ jobs:
         # token means the status can never be posted.
         run: bash scripts/gate.test.sh
 
+      - name: confirm-gate lint unit tests
+        # The fleet's check for a hand-rolled boolean `confirm` gate
+        # (fleet-audit#945) is bash inside YAML, and it fails quietly: a
+        # monorepo whose servers it never finds, an unbuilt entry treated as
+        # nothing to lint, or a swallowed exit code all go green. These
+        # extract the shipped step, stub git/npm and the audit script, and pin
+        # server discovery, the exit code, the env scrub and the tag-only ref.
+        run: bash scripts/confirm-gate-lint.test.sh
+
       - name: fleet drift sweep unit tests
         # The daily sweep is bash inside YAML, and every way it can be wrong is
         # quiet: it reports coverage in prose that nothing downstream reads.

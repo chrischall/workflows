@@ -78,6 +78,21 @@ described under "Reviewing a fork PR" below. The decision lives in TWO places th
 in step: `.github/actions/arm-gate/action.yml` and the inlined copy in
 `.github/workflows/reusable-mcp-ci.yml`; `scripts/gate.test.sh` exercises both.
 
+**Confirm-gate lint.** After build and tests, `reusable-mcp-ci.yml` starts
+every MCP server the repo builds over stdio and runs mcp-utils'
+`scripts/audit-annotations.mjs` against its `tools/list`. A server is the bin of
+a root or workspace package with an `@modelcontextprotocol/server`/`sdk`
+dependency: its only bin file, or, when it ships several (a server plus a
+helper CLI), the bin named after the package. A tool with a boolean `confirm`
+input fails CI (fleet-audit#945); writes without `confirmToken` are listed, not
+failed. Servers start with only `PATH` and `HOME`, so one that serves nothing but
+a healthcheck fails too: its real tools went unseen. A server that registers
+tools only once configured gets **placeholder** `KEY=value` lines from the
+repo's `.github/confirm-gate-lint.env` (never a real secret). The script is
+cloned from mcp-utils at the release tag in the step's `MCP_UTILS_LINT_TAG`, so a
+rule change reaches the fleet only when that line is bumped.
+`confirm-gate-lint: false` opts a repo out.
+
 **Reviewing a fork PR.** Auto-review cannot run on a fork through
 `pull_request`: GitHub withholds secrets from fork runs, so the reviewer has no
 credential, and `pull_request_target` — the usual answer — is rejected by

@@ -108,6 +108,19 @@ on:
         type: string
         required: false
         default: fail
+      confirm-gate-lint:
+        description: >-
+          Run mcp-utils' confirm-gate lint against every MCP server this repo
+          builds (the server bin of a package that depends on
+          @modelcontextprotocol/server or /sdk: its only bin, or the bin named
+          after the package) and fail on a tool that takes a boolean `confirm`
+          input. On by default; a repo with no such package passes without
+          linting anything. A server that needs config before it registers
+          its tools reads placeholder KEY=value lines from
+          .github/confirm-gate-lint.env.
+        type: boolean
+        required: false
+        default: true
 
 jobs:
   # Always runs. Decides whether real CI should run, and in status mode posts
@@ -312,6 +325,168 @@ jobs:
 
       - if: needs.gate.outputs.run == 'true'
         run: ${{ inputs.test-command }}
+
+      # Confirm-gate lint (fleet-audit#945). A hand-rolled `confirm:
+      # z.boolean()` is the deprecated gate a model can satisfy on its first
+      # call, and the fleet's confirmToken migration missed three repos that
+      # declared one without importing schemaConfirm — the grep that drove it
+      # never saw them. So this reads what the BUILT server publishes over
+      # stdio (tools/list inputSchema), where no spelling can hide it, using
+      # the rule in mcp-utils' scripts/lib/confirm-gates.mjs. A boolean
+      # `confirm` input fails the job; a write without confirmToken is only
+      # listed (many additive writes are ungated on purpose).
+      #
+      # WHICH bin is the server: a package may ship helper CLIs beside it
+      # (canvas-parent-mcp's `canvas-parent-mcp-qr-login` is an interactive
+      # login, not an MCP server — started as one it just hangs). So a package
+      # with one bin file lints that file, and a package with several lints
+      # only the bin named after the package; several with none of them named
+      # after it is an error, never a guess.
+      #
+      # Discovery runs FIRST: a repo with nothing to lint (a library, the
+      # host, a non-MCP CLI) passes without touching the network.
+      #
+      # The scripts are not in the npm package (`files: ["dist"]`), so they
+      # are cloned from mcp-utils at the release TAG below — never a branch or
+      # a SHA. The rule decides whether every fleet PR can merge, so it moves
+      # only when this line does: bump it after an mcp-utils release that
+      # changes the audit scripts. The MCP client the script imports is
+      # installed at the exact version that tag's lockfile pins, in a
+      # throwaway directory, so it depends on nothing the calling repo does or
+      # does not install (the client is an OPTIONAL peer of mcp-utils).
+      #
+      # Each server starts with PATH and HOME only, so nothing from the runner
+      # leaks into it. A server that registers its tools only once configured
+      # would then serve just its healthcheck and hide every tool from the
+      # lint — so a server that serves nothing BUT a healthcheck fails, and
+      # the repo gives it PLACEHOLDER config (never a real secret) in
+      # `.github/confirm-gate-lint.env`, one KEY=value per line.
+      # scripts/confirm-gate-lint.test.sh runs this exact script.
+      - name: Confirm-gate lint (served tool schemas)
+        if: needs.gate.outputs.run == 'true' && inputs.confirm-gate-lint
+        env:
+          MCP_UTILS_LINT_TAG: v2.6.1
+        run: |
+          set -euo pipefail
+          LINT="$RUNNER_TEMP/confirm-gate-lint"
+          rm -rf "$LINT"; mkdir -p "$LINT/run"
+
+          # The server bin of every package (root, then npm workspaces) that
+          # depends on the MCP server SDK. A library (mcp-connector), a host
+          # (mcp-host) or a CLI that is not an MCP server (fetchproxy's fpx)
+          # lists nothing and is skipped.
+          cat > "$LINT/servers.cjs" <<'JS'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const read = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+          const root = read('.');
+          const patterns = Array.isArray(root.workspaces) ? root.workspaces : (root.workspaces?.packages ?? []);
+          const dirs = ['.'];
+          for (const pat of patterns) {
+            if (pat.endsWith('/*') && !pat.slice(0, -2).includes('*')) {
+              const base = pat.slice(0, -2);
+              if (!fs.existsSync(base)) continue;
+              for (const d of fs.readdirSync(base, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+                if (d.isDirectory()) dirs.push(path.join(base, d.name));
+              }
+            } else if (!pat.includes('*')) {
+              dirs.push(pat);
+            } else {
+              console.error(`::error::unsupported workspaces pattern "${pat}" (only "dir" and "dir/*")`);
+              process.exit(2);
+            }
+          }
+          const MCP_SERVER = /^@modelcontextprotocol\/(server|sdk)$/;
+          const seen = new Set();
+          for (const dir of dirs) {
+            if (!fs.existsSync(path.join(dir, 'package.json'))) continue;
+            const pkg = read(dir);
+            const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+            if (!deps.some((d) => MCP_SERVER.test(d))) continue;
+            const short = String(pkg.name ?? '').replace(/^@[^/]+\//, '');
+            const bins = typeof pkg.bin === 'string' ? { [short]: pkg.bin } : (pkg.bin ?? {});
+            const files = [...new Set(Object.values(bins).map((b) => path.normalize(path.join(dir, b))))];
+            let entry;
+            if (files.length === 1) entry = files[0];
+            else if (files.length > 1) {
+              if (!(short in bins)) {
+                console.error(`::error::${path.join(dir, 'package.json')} ships several bins (${Object.keys(bins).join(', ')}) and none is named after the package ("${short}"), so the confirm-gate lint cannot tell which one is the MCP server. Name the server bin "${short}", or set confirm-gate-lint: false.`);
+                process.exit(2);
+              }
+              entry = path.normalize(path.join(dir, bins[short]));
+            }
+            if (entry && !seen.has(entry)) { seen.add(entry); console.log(entry); }
+          }
+          JS
+          SERVERS="$(node "$LINT/servers.cjs")"
+          if [ -z "$SERVERS" ]; then
+            echo "No package here ships an MCP server bin — nothing to lint."
+            exit 0
+          fi
+
+          # Placeholder config for servers that register tools only when
+          # configured. Literal KEY=value lines; blank lines and #comments
+          # are skipped; PATH and HOME cannot be overridden.
+          SERVER_ENV=()
+          ENV_FILE=.github/confirm-gate-lint.env
+          if [ -f "$ENV_FILE" ]; then
+            n=0
+            while IFS= read -r line || [ -n "$line" ]; do
+              n=$((n+1))
+              case "$line" in ''|'#'*) continue ;; esac
+              key="${line%%=*}"
+              if [ "$key" = "$line" ] || ! printf '%s\n' "$key" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$' || [ "$key" = PATH ] || [ "$key" = HOME ]; then
+                echo "::error file=$ENV_FILE,line=$n::expected KEY=value (KEY a shell name, not PATH or HOME)"
+                exit 1
+              fi
+              SERVER_ENV+=("$line")
+            done < "$ENV_FILE"
+            echo "Starting servers with ${#SERVER_ENV[@]} placeholder variable(s) from $ENV_FILE."
+          fi
+
+          MCP_UTILS_REPO=https://github.com/chrischall/mcp-utils.git
+          if ! printf '%s\n' "$MCP_UTILS_LINT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::MCP_UTILS_LINT_TAG '$MCP_UTILS_LINT_TAG' is not a release tag (vX.Y.Z). The lint is read from a tag, never a branch or a SHA."
+            exit 1
+          fi
+          if ! git ls-remote --exit-code --tags "$MCP_UTILS_REPO" "refs/tags/$MCP_UTILS_LINT_TAG" >/dev/null; then
+            echo "::error::mcp-utils has no tag $MCP_UTILS_LINT_TAG."
+            exit 1
+          fi
+          git -c advice.detachedHead=false clone -q --depth 1 --branch "$MCP_UTILS_LINT_TAG" "$MCP_UTILS_REPO" "$LINT/mcp-utils"
+          cp -R "$LINT/mcp-utils/scripts" "$LINT/run/scripts"
+          CLIENT_VERSION="$(node -p 'require(process.argv[1]).packages["node_modules/@modelcontextprotocol/client"].version' "$LINT/mcp-utils/package-lock.json")"
+          printf '{"private":true}\n' > "$LINT/run/package.json"
+          npm install --prefix "$LINT/run" --ignore-scripts --no-audit --no-fund --no-package-lock \
+            "@modelcontextprotocol/client@$CLIENT_VERSION" >/dev/null
+
+          rc=0
+          while IFS= read -r entry; do
+            if [ ! -f "$entry" ]; then
+              echo "::error::$entry is an MCP server bin in package.json but the build did not produce it, so its tools cannot be linted."
+              rc=1; continue
+            fi
+            echo "::group::confirm-gate lint: $entry"
+            status=0
+            env -i PATH="$PATH" HOME="$HOME" ${SERVER_ENV[@]+"${SERVER_ENV[@]}"} timeout 120 \
+              node "$LINT/run/scripts/audit-annotations.mjs" "$entry" </dev/null >"$LINT/out.txt" 2>&1 || status=$?
+            cat "$LINT/out.txt"
+            echo "::endgroup::"
+            # Per-tool lines of audit-annotations.mjs: "  <class> <name>...".
+            tools="$(sed -nE 's/^  (read|additive|DESTRUCTIVE) +([^ ]+).*/\2/p' "$LINT/out.txt")"
+            real="$(printf '%s\n' "$tools" | grep -Ev '(^|_)healthcheck$' | grep -c . || true)"
+            if [ "$status" -eq 124 ]; then
+              echo "::error::$entry did not answer tools/list over stdio within 120s."
+              rc=1
+            elif [ "$status" -ne 0 ]; then
+              echo "::error::$entry failed the confirm-gate lint: a tool takes a boolean \`confirm\` input (gate it with confirmToken + requireConfirmationWithFallback, or drop the gate), or the server did not start. The group above says which."
+              rc=1
+            elif [ "$real" -eq 0 ]; then
+              echo "::error::$entry served no tool beyond a healthcheck ($(printf '%s' "$tools" | tr '\n' ' ')) with an empty environment, so the lint saw none of its real tools. If it registers them only once configured, give it placeholder config (never a real secret) in $ENV_FILE, one KEY=value per line."
+              rc=1
+            fi
+          done <<< "$SERVERS"
+          exit "$rc"
 
       # Status mode: flip ci-gated to the real outcome. `always()` so a failed
       # build/test posts `failure` (merge stays blocked, and the checks UI
