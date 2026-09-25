@@ -51,6 +51,12 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # root npm entry (`directories: [/, ...]`); FAKE/mdup, mtwice, mdots and meco
 # are the #310 review nits: a duplicate of the root, a repeated extra, a `..`
 # segment and an ecosystem name that is not `[a-z-]+`.
+# FAKE/mx is FAKE/m plus `dependabot_extra_ignore`: a hold on the SEPARATE
+# npm extra entry, which the root `dependabot_ignore` never reaches. FAKE/mxbad,
+# mxfmt, mxtwice, mxnone and mxroot exist only to prove a bad one fails
+# loudly: an unknown fragment, no `<ecosystem>:` prefix, one ecosystem named
+# twice, no extra entry in that ecosystem, and an ecosystem whose extras merged
+# into the root entry.
 # FAKE/n opts out of both repo-config templates, which is the only way to prove
 # an opt-out renders NOTHING rather than an empty file.
 # FAKE/p is a pre-1.0 repo: it sets the two optional release-please keys the
@@ -99,6 +105,25 @@ jq '{defaults: .defaults,
               ci: "none", release: "none", package_name: "fake-mdots"},
              {repo: "FAKE/meco", dependabot: "gradle", dependabot_extra: "../npm:/web",
               ci: "none", release: "none", package_name: "fake-meco"},
+             {repo: "FAKE/mx", dependabot: "gradle", dependabot_ignore: "jaxb",
+              dependabot_extra: "npm:/web,npm:/ops/uptime-worker",
+              dependabot_extra_ignore: "npm:next-lint-peers",
+              ci: "none", release: "none", package_name: "fake-mx"},
+             {repo: "FAKE/mxbad", dependabot: "gradle", dependabot_extra: "npm:/web",
+              dependabot_extra_ignore: "npm:no-such-fragment",
+              ci: "none", release: "none", package_name: "fake-mxbad"},
+             {repo: "FAKE/mxfmt", dependabot: "gradle", dependabot_extra: "npm:/web",
+              dependabot_extra_ignore: "next-lint-peers",
+              ci: "none", release: "none", package_name: "fake-mxfmt"},
+             {repo: "FAKE/mxnone", dependabot: "gradle",
+              dependabot_extra_ignore: "npm:next-lint-peers",
+              ci: "none", release: "none", package_name: "fake-mxnone"},
+             {repo: "FAKE/mxtwice", dependabot: "gradle", dependabot_extra: "npm:/web",
+              dependabot_extra_ignore: "npm:next-lint-peers,npm:gogcli-peers",
+              ci: "none", release: "none", package_name: "fake-mxtwice"},
+             {repo: "FAKE/mxroot", dependabot_extra: "npm:/web",
+              dependabot_extra_ignore: "npm:next-lint-peers",
+              ci: "none", release: "none", package_name: "fake-mxroot"},
              {repo: "FAKE/n", dependabot: "none", release_config: "none",
               release_notes: "none"},
              {repo: "FAKE/r", reusable_release: "true", connector: "true",
@@ -1165,6 +1190,52 @@ for spec in "mbad:has no fragment" "mdir:must be an absolute" "mdup:duplicates t
     ok "FF: $repo fails with a named error ($want)"
   else
     bad "FF: $repo" "failed without the expected message: $(head -1 "$TMP/ff.out")"
+  fi
+done
+
+
+# --- FF2: a hold on a SEPARATE extra entry (dependabot_extra_ignore) ------
+# `dependabot_ignore` lands on the ROOT entry only; a separate extra entry never
+# inherits it, because a hold is written for one ecosystem (a gradle JAXB hold
+# means nothing to npm). So curtaincall's /web — which cannot take TypeScript 7
+# or ESLint 10 until typescript-eslint and eslint-plugin-react support them —
+# had no way to hold them, and got the same failing majors every week (#375).
+DIR="$TMP/multi-xign"
+bash "$ROLLOUT" FAKE/mx --render "$DIR" --only dependabot >/dev/null 2>"$TMP/ff2x0.err"
+if ruby -ryaml -e '
+    u = YAML.safe_load(File.read(ARGV[0]))["updates"] || []
+    npm = u.find { |x| x["package-ecosystem"] == "npm" } or abort "no npm entry"
+    names = (npm["ignore"] || []).map { |i| i["dependency-name"] }
+    abort "npm ignore #{names.inspect}, want typescript and eslint" unless names.include?("typescript") && names.include?("eslint")
+    abort "the gradle hold leaked onto npm" if names.any? { |n| n.include?("jaxb") }
+    g = u.find { |x| x["package-ecosystem"] == "gradle" }
+    gn = (g["ignore"] || []).map { |i| i["dependency-name"] }
+    abort "the jaxb hold left the gradle entry" unless gn.include?("javax.xml.bind:jaxb-api")
+    abort "the npm hold leaked onto gradle" if gn.include?("typescript")
+    abort "github-actions got an ignore" if u.find { |x| x["package-ecosystem"] == "github-actions" }.key?("ignore")
+  ' "$DIR/.github/dependabot.yml" 2>"$TMP/ff2x1.err"; then
+  ok "FF2: dependabot_extra_ignore splices its fragment into the extra entry only"
+else
+  bad "FF2: extra ignore" "$(cat "$TMP/ff2x0.err" "$TMP/ff2x1.err" 2>/dev/null)"
+fi
+if grep -q '__DEPENDABOT_[A-Z_]*__' "$DIR/.github/dependabot.yml" 2>/dev/null; then
+  bad "FF2: marker" "a dependabot marker rendered literally"
+else
+  ok "FF2: extra-ignore marker removed (spliced)"
+fi
+
+# Hard errors, for the same reason as a missing root fragment: the quiet
+# failure is a config that looks right and has simply lost the hold.
+for spec in "mxbad:has no fragment" "mxfmt:must be <ecosystem>:<fragment>" \
+            "mxtwice:names npm twice" \
+            "mxnone:no separate npm extra entry" "mxroot:no separate npm extra entry"; do
+  repo="FAKE/${spec%%:*}"; want="${spec#*:}"
+  if bash "$ROLLOUT" "$repo" --render "$TMP/ff2-$repo" --only dependabot >"$TMP/ff2.out" 2>&1; then
+    bad "FF2: $repo" "rendered successfully instead of failing"
+  elif grep -qF "$want" "$TMP/ff2.out"; then
+    ok "FF2: $repo fails with a named error ($want)"
+  else
+    bad "FF2: $repo" "failed without the expected message: $(head -1 "$TMP/ff2.out")"
   fi
 done
 

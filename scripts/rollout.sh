@@ -128,6 +128,11 @@ DEPENDABOT_IGNORE=$(cfg dependabot_ignore)
 # templates/fragments/dependabot-extra-<ecosystem>.yml, so one repo can watch a
 # gradle root AND the npm apps beside it (#307).
 DEPENDABOT_EXTRA=$(cfg dependabot_extra)
+# Holds for a SEPARATE extra entry, as comma-separated `<ecosystem>:<name>`
+# pairs (e.g. `npm:next-lint-peers`). Each splices the same
+# templates/fragments/dependabot-ignore-<name>.yml shape into that ecosystem's
+# extra entry, which `dependabot_ignore` (root entry only) never reaches.
+DEPENDABOT_EXTRA_IGNORE=$(cfg dependabot_extra_ignore)
 RELEASE_CONFIG=$(cfg release_config)
 RELEASE_NOTES=$(cfg release_notes)
 PACKAGE_NAME=$(cfg package_name)
@@ -401,6 +406,32 @@ if [ "$DEPENDABOT" != "none" ]; then
       printf '%s\n' "$ECOS" | grep -qxF "$eco" || ECOS="$ECOS$eco"$'\n'
     done < <(printf '%s\n' "$DEPENDABOT_EXTRA" | tr ',' '\n')
   fi
+  # Holds for the SEPARATE extra entries. Checked before anything renders, and
+  # every failure is a hard error: the quiet alternative is a valid config that
+  # has simply lost the hold. An ecosystem whose extras merged into a template
+  # entry has no separate entry to hold — its hold belongs in `dependabot_ignore`.
+  XIGN=""    # "<eco> <fragment path>" per line
+  if [ -n "$DEPENDABOT_EXTRA_IGNORE" ]; then
+    while IFS= read -r spec; do
+      spec=$(printf '%s' "$spec" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+      [ -n "$spec" ] || continue
+      # Both halves become part of a lookup or a PATH, so neither may carry
+      # anything beyond a plain name.
+      if ! printf '%s' "$spec" | grep -Eq '^[a-z-]+:[a-z0-9-]+$'; then
+        echo "::error::$REPO: dependabot_extra_ignore entry '$spec' must be <ecosystem>:<fragment>"; exit 1
+      fi
+      eco="${spec%%:*}"; name="${spec#*:}"
+      if in_template "$eco" || ! printf '%s\n' "$ECOS" | grep -qxF "$eco"; then
+        echo "::error::$REPO: dependabot_extra_ignore '$spec' — there is no separate $eco extra entry to hold (a hold on the root entry is dependabot_ignore)"; exit 1
+      fi
+      if printf '%s' "$XIGN" | awk '{print $1}' | grep -qxF "$eco"; then
+        echo "::error::$REPO: dependabot_extra_ignore names $eco twice — put both holds in one fragment"; exit 1
+      fi
+      XFRAG="$HERE/templates/fragments/dependabot-ignore-$name.yml"
+      [ -f "$XFRAG" ] || { echo "::error::$REPO: dependabot_extra_ignore '$spec' has no fragment at $XFRAG"; exit 1; }
+      XIGN="$XIGN$eco $XFRAG"$'\n'
+    done < <(printf '%s\n' "$DEPENDABOT_EXTRA_IGNORE" | tr ',' '\n')
+  fi
   dirs_of() { printf '%s' "$PAIRS" | awk -v e="$1" '$1 == e { print "      - " $2 }'; }
   EXTRAS="$STAGE/.frag-extra.yml"
   : > "$EXTRAS"
@@ -424,8 +455,13 @@ if [ "$DEPENDABOT" != "none" ]; then
       mv "$DB.tmp" "$DB"
     else
       dirs_of "$eco" > "$LIST"
+      IGN=$(printf '%s' "$XIGN" | awk -v e="$eco" '$1 == e { print $2 }')
+      # `r` of an empty name reads nothing, so an unheld entry just loses the
+      # marker line and renders byte-identically to before.
       sed -e "/^      # __DEPENDABOT_DIRECTORIES__$/r $LIST" \
           -e '/^      # __DEPENDABOT_DIRECTORIES__$/d' \
+          -e "/^    # __DEPENDABOT_EXTRA_IGNORE__$/r ${IGN:-/dev/null}" \
+          -e '/^    # __DEPENDABOT_EXTRA_IGNORE__$/d' \
           "$HERE/templates/fragments/dependabot-extra-$eco.yml" >> "$EXTRAS"
     fi
     rm -f "$LIST"

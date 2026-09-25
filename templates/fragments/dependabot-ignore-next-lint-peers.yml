@@ -1,0 +1,31 @@
+    ignore:
+      # A Next.js app's `next lint` stack caps two majors below their latest.
+      # `eslint-config-next` bundles typescript-eslint and eslint-plugin-react,
+      # and the app cannot move past what those two accept:
+      #
+      #   typescript  typescript-eslint's peer is `>=4.8.4 <6.1.0`, and lint
+      #               aborts on 7 with "typescript-eslint does not support
+      #               TS 7.0" before a file is linted.
+      #   eslint      eslint-plugin-react 7.37.5 (the latest) peers on
+      #               `^9.7` and crashes under ESLint 10:
+      #               `contextOrFilename.getFilename is not a function`.
+      #
+      # Found by curtaincall#375, which bumped /web to both and failed lint.
+      #
+      # `typescript` is held by MAJOR, not by a version ceiling, because this
+      # entry is shared by every directory it lists: curtaincall's
+      # /ops/uptime-worker has no lint and already runs TypeScript 7, so a
+      # `>=7.0.0` ceiling would also freeze its 7.x patches. Minors and patches
+      # still flow everywhere. `eslint` gets a ceiling because only the app
+      # declares it.
+      #
+      # A ceiling, not a permanent hold. Lift it when typescript-eslint's peer
+      # admits TypeScript 7 and eslint-plugin-react's admits ESLint 10 — read
+      # those two peer ranges, not the TypeScript or ESLint changelogs. Tracked
+      # for removal in nullnet-app/curtaincall#382.
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+      - dependency-name: eslint
+        versions:
+          - ">=10.0.0"

@@ -209,6 +209,14 @@ entries.each do |repo, entry|
         cfg(entry, defaults, 'dependabot_extra').split(',').map(&:strip).reject(&:empty?).each do |want|
           failures << "#{repo}/#{rel}: dependabot_extra #{want.inspect} has no update entry" unless have.include?(want)
         end
+        # And every extra hold must actually sit on its entry. A lost one is
+        # invisible too: the config stays valid and dependabot goes back to
+        # proposing the major the hold exists to stop.
+        cfg(entry, defaults, 'dependabot_extra_ignore').split(',').map(&:strip).reject(&:empty?).each do |spec|
+          eco = spec.split(':', 2).first
+          u = (doc['updates'] || []).find { |x| x['package-ecosystem'] == eco }
+          failures << "#{repo}/#{rel}: dependabot_extra_ignore #{spec.inspect} rendered no ignore: on the #{eco} entry" unless u && !(u['ignore'] || []).empty?
+        end
 
       when 'claude.yml'
         uses = doc.dig('jobs', 'claude', 'uses').to_s

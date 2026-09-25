@@ -26,6 +26,7 @@
     "include_component_in_tag": "false",
     "dependabot_ignore": "",
     "dependabot_extra": "",
+  "dependabot_extra_ignore": "",
     "reusable_release": "true"
   },
   "repos": [
@@ -296,7 +297,8 @@
       "dependabot": "gradle",
       "release_config": "none",
       "dependabot_ignore": "jaxb",
-      "dependabot_extra": "npm:/web,npm:/ops/uptime-worker"
+      "dependabot_extra": "npm:/web,npm:/ops/uptime-worker",
+  "dependabot_extra_ignore": "npm:next-lint-peers"
     },
     {
       "repo": "nullnet-app/encore",
