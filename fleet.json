@@ -451,6 +451,14 @@
       "release_config": "none"
     },
     {
+      "repo": "nullnet-app/contextmint-bridge",
+      "pat_secret": "NULLNET_RELEASE_PAT",
+      "ci": "custom",
+      "release": "custom",
+      "conventions_hint": "TDD project (tests first; never weaken assertions). MV3 browser extension; @fetchproxy/protocol comes from npm and protocol changes land in chrischall/fetchproxy first. Repo rules in CLAUDE.md.",
+      "release_config": "none"
+    },
+    {
       "repo": "chrischall/sixflags-mcp",
       "test_command": "npm run test:coverage",
       "package_name": "sixflags-mcp",
