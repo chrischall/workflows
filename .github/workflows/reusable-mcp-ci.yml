@@ -121,6 +121,16 @@ on:
         type: boolean
         required: false
         default: true
+      fs-confinement-lint:
+        description: >-
+          Run mcp-utils' fs-confinement lint over this repo's source (in a
+          repo that ships an MCP server bin, as for confirm-gate-lint) and
+          fail on a call to fileBlob / readFileHead / resolveOutputDir,
+          imported from @chrischall/mcp-utils, that passes no allowedRoots —
+          a model-chosen path with no confinement. On by default.
+        type: boolean
+        required: false
+        default: true
 
 jobs:
   # Always runs. Decides whether real CI should run, and in status mode posts
@@ -361,11 +371,22 @@ jobs:
       # lint — so a server that serves nothing BUT a healthcheck fails, and
       # the repo gives it PLACEHOLDER config (never a real secret) in
       # `.github/confirm-gate-lint.env`, one KEY=value per line.
+      #
+      # FS confinement (the same issue's other half) is a SOURCE check, since
+      # a served inputSchema says `path: string` whether or not the tool
+      # confines it: mcp-utils' scripts/audit-fs-confinement.mjs fails a call
+      # to fileBlob / readFileHead / resolveOutputDir, imported from
+      # @chrischall/mcp-utils, that passes no `allowedRoots`. It runs from the
+      # same tagged clone, before any server starts, and a failure there
+      # still lets the served lint run so one push shows every problem.
+      # Each half has its own input so a repo can opt out of one.
       # scripts/confirm-gate-lint.test.sh runs this exact script.
-      - name: Confirm-gate lint (served tool schemas)
-        if: needs.gate.outputs.run == 'true' && inputs.confirm-gate-lint
+      - name: MCP lints (confirm gates, fs confinement)
+        if: needs.gate.outputs.run == 'true' && (inputs.confirm-gate-lint || inputs.fs-confinement-lint)
         env:
-          MCP_UTILS_LINT_TAG: v2.6.1
+          MCP_UTILS_LINT_TAG: v2.7.0
+          CONFIRM_GATE_LINT: ${{ inputs.confirm-gate-lint }}
+          FS_CONFINEMENT_LINT: ${{ inputs.fs-confinement-lint }}
         run: |
           set -euo pipefail
           LINT="$RUNNER_TEMP/confirm-gate-lint"
@@ -429,7 +450,7 @@ jobs:
           # are skipped; PATH and HOME cannot be overridden.
           SERVER_ENV=()
           ENV_FILE=.github/confirm-gate-lint.env
-          if [ -f "$ENV_FILE" ]; then
+          if [ "$CONFIRM_GATE_LINT" = true ] && [ -f "$ENV_FILE" ]; then
             n=0
             while IFS= read -r line || [ -n "$line" ]; do
               n=$((n+1))
@@ -455,12 +476,29 @@ jobs:
           fi
           git -c advice.detachedHead=false clone -q --depth 1 --branch "$MCP_UTILS_LINT_TAG" "$MCP_UTILS_REPO" "$LINT/mcp-utils"
           cp -R "$LINT/mcp-utils/scripts" "$LINT/run/scripts"
+
+          rc=0
+          if [ "$FS_CONFINEMENT_LINT" = true ]; then
+            if [ ! -f "$LINT/run/scripts/audit-fs-confinement.mjs" ]; then
+              echo "::error::mcp-utils $MCP_UTILS_LINT_TAG has no scripts/audit-fs-confinement.mjs, so the fs-confinement lint cannot run. Pin a release that ships it."
+              exit 1
+            fi
+            echo "::group::fs-confinement lint (source)"
+            status=0
+            node "$LINT/run/scripts/audit-fs-confinement.mjs" . --github </dev/null || status=$?
+            echo "::endgroup::"
+            if [ "$status" -ne 0 ]; then
+              echo "::error::the fs-confinement lint failed: a call to mcp-utils' fileBlob / readFileHead / resolveOutputDir passes no allowedRoots, so a model-chosen path is unconfined (annotated above). Pass allowedRoots — the directories the tool may read or write, e.g. from a <SVC>_UPLOAD_DIR / <SVC>_OUTPUT_DIR setting — or set fs-confinement-lint: false."
+              rc=1
+            fi
+          fi
+          if [ "$CONFIRM_GATE_LINT" != true ]; then exit "$rc"; fi
+
           CLIENT_VERSION="$(node -p 'require(process.argv[1]).packages["node_modules/@modelcontextprotocol/client"].version' "$LINT/mcp-utils/package-lock.json")"
           printf '{"private":true}\n' > "$LINT/run/package.json"
           npm install --prefix "$LINT/run" --ignore-scripts --no-audit --no-fund --no-package-lock \
             "@modelcontextprotocol/client@$CLIENT_VERSION" >/dev/null
 
-          rc=0
           while IFS= read -r entry; do
             if [ ! -f "$entry" ]; then
               echo "::error::$entry is an MCP server bin in package.json but the build did not produce it, so its tools cannot be linted."

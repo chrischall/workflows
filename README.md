@@ -93,6 +93,15 @@ cloned from mcp-utils at the release tag in the step's `MCP_UTILS_LINT_TAG`, so 
 rule change reaches the fleet only when that line is bumped.
 `confirm-gate-lint: false` opts a repo out.
 
+**FS-confinement lint.** The same step, in a repo that ships a server, also
+runs mcp-utils' `scripts/audit-fs-confinement.mjs` over the repo's source (tests,
+`node_modules` and build output skipped). A call to `fileBlob`, `readFileHead` or
+`resolveOutputDir` imported from `@chrischall/mcp-utils` that passes no
+`allowedRoots` in its own arguments fails CI with an annotation at the call
+(fleet-audit#945): a model-chosen path with no confinement.
+`resolveOutputDir(undefined, …)` is exempt. It is read from the same tag.
+`fs-confinement-lint: false` opts a repo out.
+
 **Reviewing a fork PR.** Auto-review cannot run on a fork through
 `pull_request`: GitHub withholds secrets from fork runs, so the reviewer has no
 credential, and `pull_request_target` — the usual answer — is rejected by
