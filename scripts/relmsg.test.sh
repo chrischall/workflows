@@ -12,8 +12,8 @@
 # such commits across 13 repos, ten of them feat/fix.
 #
 # The step therefore has to reconstruct the message GitHub will actually
-# create, which is NOT one thing across this fleet: of the 84 repos in
-# fleet.json, 43 squash with COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, 40 with
+# create, which is NOT one thing across this fleet: of the 85 repos in
+# fleet.json, 44 squash with COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, 40 with
 # PR_TITLE/PR_BODY and one with a mixed PR_TITLE/COMMIT_MESSAGES — so the same
 # PR yields a different commit depending on the repo. Most of these cases are
 # about that reconstruction; the parse itself is one library call.
@@ -153,14 +153,14 @@ fi
 echo
 echo "— it must read the message THIS repo will actually build —"
 
-# 39 repos: the PR body ships. A broken COMMIT body does not.
+# 40 repos: the PR body ships. A broken COMMIT body does not.
 setup
 commits_json "fix: x
 
 $BROKEN_BODY"
 run_case "PR_BODY repo: a broken COMMIT body is not the shipped message" ok
 
-# 43 repos: the commit messages ship, so the PR body is the irrelevant one.
+# 44 repos: the commit messages ship, so the PR body is the irrelevant one.
 setup
 export REPO_JSON='{"squash_merge_commit_title":"COMMIT_OR_PR_TITLE","squash_merge_commit_message":"COMMIT_MESSAGES"}'
 commits_json "fix: x
