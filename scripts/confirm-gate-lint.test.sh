@@ -91,8 +91,14 @@ export FAKE_AUDIT="$TMP/fake-audit.mjs"
 cat > "$FAKE_AUDIT" <<'JS'
 import fs from 'node:fs';
 const entry = process.argv[2];
-fs.appendFileSync('.lint-calls', JSON.stringify({ entry, leaked: process.env.LEAK_ME ?? null }) + '\n');
-if (fs.readFileSync(entry, 'utf8').includes('CONFIRM_BOOLEAN')) {
+fs.appendFileSync('.lint-calls', JSON.stringify({ entry, leaked: process.env.LEAK_ME ?? null, placeholder: process.env.X_BASE_URL ?? null }) + '\n');
+const src = fs.readFileSync(entry, 'utf8');
+// Mirrors the real script's per-tool lines ("  <class> <name>"), which the
+// step reads to spot a server that served nothing but its healthcheck.
+console.log('  read        x_healthcheck');
+if (!src.includes('NEEDS_CONFIG') || process.env.X_BASE_URL) console.log('  read        x_get_thing');
+if (src.includes('CONFIRM_BOOLEAN')) {
+  console.log('  DESTRUCTIVE x_toggle  <- ERROR: `confirm` boolean');
   console.error('ERROR: x_toggle take a boolean `confirm` input.');
   process.exit(1);
 }
@@ -183,6 +189,54 @@ run_case "$F"
 expect "a CLI bin with no MCP server dependency is not started" 0 ""
 if printf '%s\n' "$OUT" | grep -qF 'nothing to lint'; then ok "says so in the log"
 else bad "says so in the log" "$OUT"; fi
+if [ -z "$CALLS_LOG" ]; then ok "and never touches the network (no git, no npm)"
+else bad "and never touches the network (no git, no npm)" "$CALLS_LOG"; fi
+
+echo "── multi-bin packages: only the server bin is started ──"
+# canvas-parent-mcp ships its server and an interactive QR-login CLI. Started
+# as a server, the CLI never answers tools/list and the step times out red.
+F="$TMP/multibin"
+pkg "$F" "{\"name\":\"c-mcp\",\"bin\":{\"c-mcp\":\"dist/index.js\",\"c-mcp-qr-login\":\"dist/qr-login-cli.js\"},$SDK}"
+server "$F/dist/index.js"; server "$F/dist/qr-login-cli.js" CONFIRM_BOOLEAN
+run_case "$F"
+expect "a server bin plus a non-server CLI bin: only the bin named after the package is linted" 0 "dist/index.js"
+F="$TMP/multibin-scoped"
+pkg "$F" "{\"name\":\"@x/d-mcp\",\"bin\":{\"d-mcp-setup\":\"dist/setup.js\",\"d-mcp\":\"dist/index.js\"},$SDK}"
+server "$F/dist/index.js"; server "$F/dist/setup.js" CONFIRM_BOOLEAN
+run_case "$F"
+expect "a scoped package's server bin is the one named after its unscoped name" 0 "dist/index.js"
+F="$TMP/multibin-ambiguous"
+pkg "$F" "{\"name\":\"e-mcp\",\"bin\":{\"e-server\":\"dist/index.js\",\"e-login\":\"dist/login.js\"},$SDK}"
+server "$F/dist/index.js"; server "$F/dist/login.js"
+run_case "$F"
+if [ "$RC" != 0 ] && [ -z "$LINTED" ] && printf '%s\n' "$OUT" | grep -qF 'none is named after the package' \
+   && ! printf '%s\n' "$CALLS_LOG" | grep -q clone; then
+  ok "several bins, none named after the package: fails and says why, never guesses"
+else bad "several bins, none named after the package: fails and says why, never guesses" "rc=$RC linted='$LINTED'
+$OUT"; fi
+
+echo "── a server that registers tools only once configured ──"
+F="$TMP/unconfigured"; pkg "$F" "{\"name\":\"g-mcp\",\"bin\":{\"g-mcp\":\"dist/index.js\"},$SDK}"; server "$F/dist/index.js" NEEDS_CONFIG
+run_case "$F" X_BASE_URL=https://runner.example
+expect "serving only a healthcheck fails (its real tools went unseen) — the runner's own env does not count" 1 "dist/index.js"
+if printf '%s\n' "$OUT" | grep -qF 'served no tool beyond a healthcheck (x_healthcheck'; then
+  ok "the failure names the tools it did see and points at .github/confirm-gate-lint.env"
+else bad "the failure names the tools it did see and points at .github/confirm-gate-lint.env" "$OUT"; fi
+mkdir -p "$F/.github"
+printf '# placeholders only\n\nX_BASE_URL=https://g.example.invalid\nX_TOKEN=placeholder=with=equals\n' > "$F/.github/confirm-gate-lint.env"
+run_case "$F"
+expect "placeholder config from .github/confirm-gate-lint.env lets it register its tools" 0 "dist/index.js"
+if grep -qF '"leaked":null,"placeholder":"https://g.example.invalid"' "$F/.lint-calls"; then
+  ok "the server gets the placeholders and still none of the runner's environment"
+else bad "the server gets the placeholders and still none of the runner's environment" "$(cat "$F/.lint-calls")"; fi
+for badline in 'PATH=/evil' 'not a pair' '1X=y'; do
+  printf '%s\n' "$badline" > "$F/.github/confirm-gate-lint.env"
+  run_case "$F"
+  if [ "$RC" = 1 ] && [ -z "$LINTED" ] && printf '%s\n' "$OUT" | grep -qF '::error file=.github/confirm-gate-lint.env,line=1::'; then
+    ok "rejects '$badline' in the env file"
+  else bad "rejects '$badline' in the env file" "rc=$RC linted='$LINTED'
+$OUT"; fi
+done
 
 echo "── the ref policy holds at run time ──"
 F="$TMP/clean"
