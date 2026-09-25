@@ -386,7 +386,9 @@ invisible: the config is valid and dependabot simply watches nothing.
 
 `fleet.json` keys: `dependabot` (`npm`|`gradle`|`actions`|`none`),
 `dependabot_ignore` (a fragment name, see below), `dependabot_extra`
-(comma-separated `<ecosystem>:<directory>`, see below), `release_config`
+(comma-separated `<ecosystem>:<directory>`, see below),
+`dependabot_extra_ignore` (comma-separated `<ecosystem>:<fragment>`, see
+below), `release_config`
 (`mcp`|`none`), `release_notes` (`on`|`none`), `package_name`, `release_type`,
 `version_files` (comma-separated), and the optional release-please keys
 `bump_minor_pre_major`, `initial_version`, `include_v_in_tag`,
@@ -433,6 +435,18 @@ its `directory: /` becoming `directories: [/, ...]` — and so it inherits that
 entry's `dependabot_ignore` hold. A separate extra entry does not: a hold is
 written for one ecosystem. The npm fragment carries the root template's
 `fix`/`chore` prefixes, groups and exact-name vitest pin.
+
+A hold on a separate extra entry is `dependabot_extra_ignore`: `<ecosystem>:<name>`
+splices the same `templates/fragments/dependabot-ignore-<name>.yml` shape into
+that ecosystem's extra entry. `curtaincall` (`npm:next-lint-peers`) holds its
+Next.js app below TypeScript 7 and ESLint 10, which its lint plugins cannot
+load yet (curtaincall#375). The hold covers every directory in the entry, so
+write it to spare the ones it does not concern — `next-lint-peers` holds
+`typescript` by major rather than by ceiling because the uptime worker in the
+same entry already runs 7. Hard errors: no `<ecosystem>:` prefix, an unknown
+fragment, the same ecosystem twice, and an ecosystem with no separate extra
+entry (a hold on the root entry, or on extras merged into it, is
+`dependabot_ignore`).
 
 Hard errors, because the quiet failure is a valid config that never looks in
 the directory that needed it: an ecosystem name that is not `^[a-z-]+$` or has
