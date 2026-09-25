@@ -108,6 +108,16 @@ on:
         type: string
         required: false
         default: fail
+      confirm-gate-lint:
+        description: >-
+          Run mcp-utils' confirm-gate lint against every MCP server this repo
+          builds (a package with a `bin` that depends on
+          @modelcontextprotocol/server or /sdk) and fail on a tool that takes
+          a boolean `confirm` input. On by default; a repo with no such
+          package passes without linting anything.
+        type: boolean
+        required: false
+        default: true
 
 jobs:
   # Always runs. Decides whether real CI should run, and in status mode posts
@@ -312,6 +322,120 @@ jobs:
 
       - if: needs.gate.outputs.run == 'true'
         run: ${{ inputs.test-command }}
+
+      # Confirm-gate lint (fleet-audit#945). A hand-rolled `confirm:
+      # z.boolean()` is the deprecated gate a model can satisfy on its first
+      # call, and the fleet's confirmToken migration missed three repos that
+      # declared one without importing schemaConfirm — the grep that drove it
+      # never saw them. So this reads what the BUILT server publishes over
+      # stdio (tools/list inputSchema), where no spelling can hide it, using
+      # the rule in mcp-utils' scripts/lib/confirm-gates.mjs. A boolean
+      # `confirm` input fails the job; a write without confirmToken is only
+      # listed (many additive writes are ungated on purpose).
+      #
+      # The scripts are not in the npm package (`files: ["dist"]`), so they
+      # are cloned from mcp-utils at the release TAG below — never a branch or
+      # a SHA. The rule decides whether every fleet PR can merge, so it moves
+      # only when this line does: bump it after an mcp-utils release that
+      # changes the audit scripts. The MCP client the script imports is
+      # installed at the exact version that tag's lockfile pins, in a
+      # throwaway directory, so it depends on nothing the calling repo does or
+      # does not install (the client is an OPTIONAL peer of mcp-utils).
+      #
+      # Each server starts with an empty environment (PATH and HOME only), as
+      # it did in the survey that preceded turning this on: tools/list must
+      # not need credentials, and nothing from the runner leaks into it.
+      # scripts/confirm-gate-lint.test.sh runs this exact script.
+      - name: Confirm-gate lint (served tool schemas)
+        if: needs.gate.outputs.run == 'true' && inputs.confirm-gate-lint
+        env:
+          MCP_UTILS_LINT_TAG: v2.6.1
+        run: |
+          set -euo pipefail
+          MCP_UTILS_REPO=https://github.com/chrischall/mcp-utils.git
+          if ! printf '%s\n' "$MCP_UTILS_LINT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::MCP_UTILS_LINT_TAG '$MCP_UTILS_LINT_TAG' is not a release tag (vX.Y.Z). The lint is read from a tag, never a branch or a SHA."
+            exit 1
+          fi
+          if ! git ls-remote --exit-code --tags "$MCP_UTILS_REPO" "refs/tags/$MCP_UTILS_LINT_TAG" >/dev/null; then
+            echo "::error::mcp-utils has no tag $MCP_UTILS_LINT_TAG."
+            exit 1
+          fi
+
+          LINT="$RUNNER_TEMP/confirm-gate-lint"
+          rm -rf "$LINT"; mkdir -p "$LINT/run"
+          git -c advice.detachedHead=false clone -q --depth 1 --branch "$MCP_UTILS_LINT_TAG" "$MCP_UTILS_REPO" "$LINT/mcp-utils"
+          cp -R "$LINT/mcp-utils/scripts" "$LINT/run/scripts"
+          CLIENT_VERSION="$(node -p 'require(process.argv[1]).packages["node_modules/@modelcontextprotocol/client"].version' "$LINT/mcp-utils/package-lock.json")"
+          printf '{"private":true}\n' > "$LINT/run/package.json"
+          npm install --prefix "$LINT/run" --ignore-scripts --no-audit --no-fund --no-package-lock \
+            "@modelcontextprotocol/client@$CLIENT_VERSION" >/dev/null
+
+          # Every package (root, then npm workspaces) that ships a `bin` and
+          # depends on the MCP server SDK. A library (mcp-connector), a host
+          # (mcp-host) or a CLI that is not an MCP server (fetchproxy's fpx)
+          # lists nothing and is skipped.
+          cat > "$LINT/servers.cjs" <<'JS'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const read = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+          const root = read('.');
+          const patterns = Array.isArray(root.workspaces) ? root.workspaces : (root.workspaces?.packages ?? []);
+          const dirs = ['.'];
+          for (const pat of patterns) {
+            if (pat.endsWith('/*') && !pat.slice(0, -2).includes('*')) {
+              const base = pat.slice(0, -2);
+              if (!fs.existsSync(base)) continue;
+              for (const d of fs.readdirSync(base, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+                if (d.isDirectory()) dirs.push(path.join(base, d.name));
+              }
+            } else if (!pat.includes('*')) {
+              dirs.push(pat);
+            } else {
+              console.error(`unsupported workspaces pattern "${pat}" (only "dir" and "dir/*")`);
+              process.exit(2);
+            }
+          }
+          const MCP_SERVER = /^@modelcontextprotocol\/(server|sdk)$/;
+          const seen = new Set();
+          for (const dir of dirs) {
+            if (!fs.existsSync(path.join(dir, 'package.json'))) continue;
+            const pkg = read(dir);
+            const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+            if (!deps.some((d) => MCP_SERVER.test(d))) continue;
+            const bins = typeof pkg.bin === 'string' ? [pkg.bin] : Object.values(pkg.bin ?? {});
+            for (const b of bins) {
+              const entry = path.normalize(path.join(dir, b));
+              if (!seen.has(entry)) { seen.add(entry); console.log(entry); }
+            }
+          }
+          JS
+          SERVERS="$(node "$LINT/servers.cjs")"
+          if [ -z "$SERVERS" ]; then
+            echo "No package here ships an MCP server bin — nothing to lint."
+            exit 0
+          fi
+
+          rc=0
+          while IFS= read -r entry; do
+            if [ ! -f "$entry" ]; then
+              echo "::error::$entry is an MCP server bin in package.json but the build did not produce it, so its tools cannot be linted."
+              rc=1; continue
+            fi
+            echo "::group::confirm-gate lint: $entry"
+            status=0
+            env -i PATH="$PATH" HOME="$HOME" timeout 120 \
+              node "$LINT/run/scripts/audit-annotations.mjs" "$entry" </dev/null || status=$?
+            echo "::endgroup::"
+            if [ "$status" -eq 124 ]; then
+              echo "::error::$entry did not answer tools/list over stdio within 120s."
+              rc=1
+            elif [ "$status" -ne 0 ]; then
+              echo "::error::$entry failed the confirm-gate lint: a tool takes a boolean \`confirm\` input (gate it with confirmToken + requireConfirmationWithFallback, or drop the gate), or the server did not start. The group above says which."
+              rc=1
+            fi
+          done <<< "$SERVERS"
+          exit "$rc"
 
       # Status mode: flip ci-gated to the real outcome. `always()` so a failed
       # build/test posts `failure` (merge stays blocked, and the checks UI
