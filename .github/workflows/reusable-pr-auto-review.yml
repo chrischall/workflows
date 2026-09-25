@@ -952,7 +952,7 @@ jobs:
         # down at once because @v1 is a floating tag — last good run 22:07:24Z,
         # first failure 22:19:42Z, with no change on our side in between.
         # Lift back to @v1 once a release past 1.0.218 fixes the binary path.
-        uses: anthropics/claude-code-action@v1.0.230
+        uses: anthropics/claude-code-action@v1.0.231
         with:
           path_to_claude_code_executable: ${{ steps.claude_code.outputs.path }}
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
