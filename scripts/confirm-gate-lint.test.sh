@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Unit tests for the `Confirm-gate lint (served tool schemas)` step in
+# Unit tests for the `MCP lints (confirm gates, fs confinement)` step in
 # reusable-mcp-ci.yml (fleet-audit#945).
 #
 # That step fails a PR whose built MCP server publishes a tool with a boolean
 # `confirm` input — the deprecated gate a model can satisfy on its first call.
 # The fleet's confirmToken migration missed three repos that declared one by
-# hand, because the grep that drove it looked for `schemaConfirm`. Every way
-# this step can be wrong is quiet:
+# hand, because the grep that drove it looked for `schemaConfirm`. It also
+# fails a server whose source hands a path to mcp-utils' fileBlob /
+# readFileHead / resolveOutputDir without `allowedRoots` (a model-chosen path
+# with no confinement). Every way this step can be wrong is quiet:
 #
 #   - it lints nothing (finds no server in a monorepo, or treats a missing
 #     build as "nothing to do") and goes green;
@@ -20,8 +22,11 @@
 # The step is extracted from the shipped YAML at run time (the gate.test.sh
 # technique), `git` and `npm` are stubbed on PATH, and mcp-utils'
 # audit-annotations.mjs is replaced by a fake that fails when the entry file
-# says CONFIRM_BOOLEAN and records what it was started with. Node, timeout and
-# the step's own server discovery are real.
+# says CONFIRM_BOOLEAN and records what it was started with. Its
+# audit-fs-confinement.mjs is replaced by a fake that fails on a src/ line
+# calling fileBlob( without allowedRoots (the real rule is tested in
+# mcp-utils' scripts/*.test.mjs). Node, timeout and the step's own server
+# discovery are real.
 #
 # Usage: bash scripts/confirm-gate-lint.test.sh
 set -uo pipefail   # no -e: assertions need to observe failures
@@ -33,7 +38,7 @@ PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf 'ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf 'FAIL %s\n     %s\n' "$1" "$2"; }
 
-STEP_NAME='Confirm-gate lint (served tool schemas)'
+STEP_NAME='MCP lints (confirm gates, fs confinement)'
 ruby -ryaml -e '
   wf = YAML.load_file(ARGV[0])
   steps = wf["jobs"]["ci"]["steps"]
@@ -44,21 +49,33 @@ ruby -ryaml -e '
   File.write(ARGV[4], (s["env"] || {})["MCP_UTILS_LINT_TAG"].to_s)
   t = steps.index { |x| x["run"].to_s.include?("inputs.test-command") } or abort("no test step")
   File.write(ARGV[5], "#{i} #{t}")
-  inp = (wf["on"] || wf[true])["workflow_call"]["inputs"]["confirm-gate-lint"] or abort("no confirm-gate-lint input")
-  File.write(ARGV[6], "#{inp["type"]} #{inp["default"]} #{inp["required"]}")
-' "$WF" "$STEP_NAME" "$TMP/step.sh" "$TMP/if.txt" "$TMP/tag.txt" "$TMP/order.txt" "$TMP/input.txt" \
+  inputs = (wf["on"] || wf[true])["workflow_call"]["inputs"]
+  lines = %w[confirm-gate-lint fs-confinement-lint].map do |name|
+    inp = inputs[name] or abort("no #{name} input")
+    "#{name} #{inp["type"]} #{inp["default"]} #{inp["required"]}"
+  end
+  File.write(ARGV[6], lines.join("\n") + "\n")
+  env = s["env"] || {}
+  File.write(ARGV[7], "#{env["CONFIRM_GATE_LINT"]}\n#{env["FS_CONFINEMENT_LINT"]}\n")
+' "$WF" "$STEP_NAME" "$TMP/step.sh" "$TMP/if.txt" "$TMP/tag.txt" "$TMP/order.txt" "$TMP/input.txt" "$TMP/env.txt" \
   || { echo "FAIL: could not extract the confirm-gate lint step from $WF"; exit 1; }
 
 echo "── wiring ──"
-if grep -qF "needs.gate.outputs.run == 'true'" "$TMP/if.txt" && grep -qF 'inputs.confirm-gate-lint' "$TMP/if.txt"; then
-  ok "runs only when the gate armed CI, and only while the input is on"
-else bad "runs only when the gate armed CI, and only while the input is on" "if: $(cat "$TMP/if.txt")"; fi
+if grep -qF "needs.gate.outputs.run == 'true'" "$TMP/if.txt" && grep -qF 'inputs.confirm-gate-lint' "$TMP/if.txt" \
+   && grep -qF 'inputs.fs-confinement-lint' "$TMP/if.txt"; then
+  ok "runs only when the gate armed CI, and only while one of the lint inputs is on"
+else bad "runs only when the gate armed CI, and only while one of the lint inputs is on" "if: $(cat "$TMP/if.txt")"; fi
+if [ "$(cat "$TMP/env.txt")" = '${{ inputs.confirm-gate-lint }}
+${{ inputs.fs-confinement-lint }}' ]; then
+  ok "each input reaches the script as its own switch"
+else bad "each input reaches the script as its own switch" "$(cat "$TMP/env.txt")"; fi
 read -r lint_i test_i < "$TMP/order.txt"
 if [ "$lint_i" -gt "$test_i" ]; then ok "runs after the build and the tests (it lints the built server)"
 else bad "runs after the build and the tests (it lints the built server)" "lint step $lint_i, test step $test_i"; fi
-if [ "$(cat "$TMP/input.txt")" = "boolean true false" ]; then
-  ok "confirm-gate-lint is an optional boolean, on by default (no stub change needed)"
-else bad "confirm-gate-lint is an optional boolean, on by default (no stub change needed)" "$(cat "$TMP/input.txt")"; fi
+if [ "$(cat "$TMP/input.txt")" = "confirm-gate-lint boolean true false
+fs-confinement-lint boolean true false" ]; then
+  ok "confirm-gate-lint and fs-confinement-lint are optional booleans, on by default (no stub change needed)"
+else bad "confirm-gate-lint and fs-confinement-lint are optional booleans, on by default (no stub change needed)" "$(cat "$TMP/input.txt")"; fi
 
 echo "── the rule is read from a release tag ──"
 TAG="$(cat "$TMP/tag.txt")"
@@ -76,6 +93,7 @@ case "$1" in
     dest="${@: -1}"
     mkdir -p "$dest/scripts/lib"
     cp "$FAKE_AUDIT" "$dest/scripts/audit-annotations.mjs"
+    [ -n "${FAKE_NO_FS_SCRIPT:-}" ] || cp "$FAKE_FS_AUDIT" "$dest/scripts/audit-fs-confinement.mjs"
     echo 'export {}' > "$dest/scripts/lib/confirm-gates.mjs"
     printf '{"packages":{"node_modules/@modelcontextprotocol/client":{"version":"2.0.7"}}}\n' > "$dest/package-lock.json"
     ;;
@@ -104,6 +122,29 @@ if (src.includes('CONFIRM_BOOLEAN')) {
 }
 console.log('confirm gates   confirm-boolean 0   ungated writes 0');
 JS
+export FAKE_FS_AUDIT="$TMP/fake-fs-audit.mjs"
+cat > "$FAKE_FS_AUDIT" <<'JS'
+import fs from 'node:fs';
+import path from 'node:path';
+fs.appendFileSync('.fs-calls', JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }) + '\n');
+let bad = 0;
+const walk = (d) => {
+  if (!fs.existsSync(d)) return;
+  for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    const f = path.join(d, e.name);
+    if (e.isDirectory()) walk(f);
+    else fs.readFileSync(f, 'utf8').split('\n').forEach((l, i) => {
+      if (l.includes('fileBlob(') && !l.includes('allowedRoots')) {
+        bad++;
+        console.log(`::error file=${f},line=${i + 1},col=1::fileBlob(p) passes no allowedRoots`);
+      }
+    });
+  }
+};
+walk('src');
+console.log(`fs confinement: ${bad} unconfined.`);
+process.exit(bad ? 1 : 0);
+JS
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
 # pkg <dir> <json>; server <file> [CONFIRM_BOOLEAN]
@@ -117,11 +158,13 @@ run_case() {
   local dir="$1"; shift
   N=$((N+1))
   export CALLS="$TMP/calls.$N"; : > "$CALLS"
-  rm -f "$dir/.lint-calls"
+  rm -f "$dir/.lint-calls" "$dir/.fs-calls"
   OUT="$(cd "$dir" && env PATH="$TMP/bin:$PATH" RUNNER_TEMP="$TMP/runner.$N" HOME="$TMP" \
-          MCP_UTILS_LINT_TAG="$TAG" LEAK_ME=runner-secret "$@" bash -e "$TMP/step.sh" 2>&1)"
+          MCP_UTILS_LINT_TAG="$TAG" CONFIRM_GATE_LINT=true FS_CONFINEMENT_LINT=true \
+          LEAK_ME=runner-secret "$@" bash -e "$TMP/step.sh" 2>&1)"
   RC=$?
   CALLS_LOG="$(cat "$CALLS")"
+  FS_RAN="$( [ -f "$dir/.fs-calls" ] && cat "$dir/.fs-calls" )"
   LINTED="$( [ -f "$dir/.lint-calls" ] && node -e '
     const l = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map(JSON.parse);
     console.log(l.map((c) => c.entry).join(" "))' "$dir/.lint-calls" )"
@@ -237,6 +280,48 @@ for badline in 'PATH=/evil' 'not a pair' '1X=y'; do
   else bad "rejects '$badline' in the env file" "rc=$RC linted='$LINTED'
 $OUT"; fi
 done
+
+echo "── fs confinement (source) ──"
+# fsrepo <dir> <src line>: a built single-server repo with src/tool.ts.
+fsrepo() {
+  pkg "$1" "{\"name\":\"f-mcp\",\"bin\":{\"f-mcp\":\"dist/index.js\"},$SDK}"; server "$1/dist/index.js"
+  mkdir -p "$1/src"; printf "import { fileBlob } from '@chrischall/mcp-utils';\n%s\n" "$2" > "$1/src/tool.ts"
+}
+F="$TMP/fs-ok"; fsrepo "$F" 'await fileBlob(p, { allowedRoots: roots });'
+run_case "$F"
+expect "a confined file-helper call passes, and the served lint still runs" 0 "dist/index.js"
+if printf '%s\n' "$FS_RAN" | grep -qF '"args":[".","--github"]' && printf '%s\n' "$FS_RAN" | grep -qF "\"cwd\":\"$(cd "$F" && pwd -P)\""; then
+  ok "the fs lint runs from the tagged clone over the whole repo, with GitHub annotations"
+else bad "the fs lint runs from the tagged clone over the whole repo, with GitHub annotations" "$FS_RAN
+$OUT"; fi
+F="$TMP/fs-bad"; fsrepo "$F" 'await fileBlob(p);'
+run_case "$F"
+expect "an unconfined file-helper call fails the step — and the served lint still runs" 1 "dist/index.js"
+if printf '%s\n' "$OUT" | grep -qF '::error file=src/tool.ts,line=2,col=1::' \
+   && printf '%s\n' "$OUT" | grep -qF '::error::the fs-confinement lint failed'; then
+  ok "the failure is annotated at the call and says what to do"
+else bad "the failure is annotated at the call and says what to do" "$OUT"; fi
+run_case "$F" FS_CONFINEMENT_LINT=false
+expect "fs-confinement-lint: false turns only the source lint off" 0 "dist/index.js"
+if [ -z "$FS_RAN" ]; then ok "and the fs script is not run"; else bad "and the fs script is not run" "$FS_RAN"; fi
+run_case "$F" CONFIRM_GATE_LINT=false
+expect "confirm-gate-lint: false still runs the fs lint (and fails), but starts no server" 1 ""
+if ! printf '%s\n' "$CALLS_LOG" | grep -q '^npm install'; then ok "and installs no MCP client"
+else bad "and installs no MCP client" "$CALLS_LOG"; fi
+F="$TMP/fs-ok"
+run_case "$F" CONFIRM_GATE_LINT=false
+expect "confirm-gate-lint: false with a confined call passes" 0 ""
+run_case "$F" FAKE_NO_FS_SCRIPT=1
+if [ "$RC" = 1 ] && [ -z "$FS_RAN" ] && printf '%s\n' "$OUT" | grep -qF "has no scripts/audit-fs-confinement.mjs"; then
+  ok "a tag that predates the fs lint fails loudly, never a silent pass"
+else bad "a tag that predates the fs lint fails loudly, never a silent pass" "rc=$RC
+$OUT"; fi
+F="$TMP/fs-library"; pkg "$F" "{\"name\":\"@x/lib\",\"main\":\"./dist/index.js\",$SDK}"
+mkdir -p "$F/src"; printf "import { fileBlob } from '@chrischall/mcp-utils';\nawait fileBlob(p);\n" > "$F/src/tool.ts"
+run_case "$F"
+if [ "$RC" = 0 ] && [ -z "$FS_RAN" ] && [ -z "$CALLS_LOG" ]; then ok "a repo with no MCP server bin is not fs-linted either"
+else bad "a repo with no MCP server bin is not fs-linted either" "rc=$RC fs='$FS_RAN'
+$OUT"; fi
 
 echo "── the ref policy holds at run time ──"
 F="$TMP/clean"
