@@ -149,6 +149,14 @@ jobs:
         # a minute earlier (fetchproxy#274).
         run: bash scripts/arm.test.sh
 
+      - name: auto-merge arm fallback unit tests
+        # reusable-auto-merge.yml's arm steps. GitHub refuses to ENABLE
+        # auto-merge on a PR that is already mergeable, so a PR armed after
+        # its CI went green must be merged directly — and only from
+        # CLEAN/UNSTABLE/HAS_HOOKS, still armed, never with --admin
+        # (fetchproxy#416 sat armed and unmerged until merged by hand).
+        run: bash scripts/auto-merge-arm.test.sh
+
       - name: duplicate-review stand-down unit tests
         # The other half of #274: two reviews of one diff, racing. This pins
         # the ordering rule (younger run stands down) and — more easily got

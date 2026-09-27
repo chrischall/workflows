@@ -13,6 +13,12 @@ name: Reusable auto-merge
 # "merge when CI is green", not "merge without CI". Repos without a required
 # check would merge immediately — the rollout creates rulesets first.
 #
+# GitHub refuses to ENABLE auto-merge on a PR that is already mergeable
+# (nothing to wait for). When `--auto` is refused, each arm step re-reads the
+# PR and merges it directly — same flags, pinned to the head it read, no
+# `--admin` — only if it is open, not a draft, still armed, and
+# CLEAN/UNSTABLE/HAS_HOOKS. Tested by scripts/auto-merge-arm.test.sh.
+#
 # pull_request_target (in the stub) because dependabot's pull_request token
 # is restricted. Safe: PR code is never checked out or executed here.
 #
@@ -256,17 +262,77 @@ jobs:
           # Unchanged for every PR the previous step did not override — all
           # 536 of the measured corpus, since the type gate excludes every one
           # of the five that did not parse. Same command, same flags, same
-          # idempotence; the `elif` is the path that has always existed.
+          # idempotence; without an override MERGE is just `--squash`, the
+          # arm that has always existed.
+          # MERGE holds every flag but `--auto`, so a direct merge below uses
+          # exactly what the arm would have — method and overridden message.
+          MERGE=(--squash)
           if [ "${OVERRIDE:-}" = "true" ]; then
-            if gh pr merge --auto --squash --subject "$SUBJECT" --body "$BODY" "$PR_URL"; then exit 0; fi
-          elif gh pr merge --auto --squash "$PR_URL"; then exit 0; fi
-          state="$(gh pr view "$PR_URL" --json state --jq .state 2>/dev/null || echo UNKNOWN)"
-          if [ "$state" = "MERGED" ]; then
-            echo "PR already merged (instant-merge race) — treating as success."
-            exit 0
+            MERGE+=(--subject "$SUBJECT" --body "$BODY")
           fi
-          echo "::error::auto-merge arm failed (PR state=$state)"
-          exit 1
+          if gh pr merge --auto "${MERGE[@]}" "$PR_URL"; then exit 0; fi
+
+          # --auto was refused. The common reason is benign: GitHub will not
+          # ENABLE auto-merge on a PR that is already mergeable, because there
+          # is nothing to wait for ("Pull request is in unstable status
+          # (enablePullRequestAutoMerge)" — a PR armed after its CI already
+          # went green; chrischall/fetchproxy#416 sat armed and unmerged until
+          # merged by hand). So re-read the PR and, if it is open, not a draft,
+          # still armed, and in a state auto-merge itself would merge from,
+          # merge it now with the SAME flags the arm used. Never `--admin`:
+          # GitHub still enforces the ruleset on this merge, and
+          # `--match-head-commit` pins it to the head that was read as
+          # mergeable, so a push in between is refused rather than merged.
+          # BLOCKED/BEHIND/DIRTY fail loudly as before; UNKNOWN (GitHub still
+          # computing) gets one retry. MERGED at any point is success — the
+          # instant-merge race, or a concurrent merge winning.
+          # Tested by scripts/auto-merge-arm.test.sh; keep both arm steps'
+          # copies of this block identical.
+          field() { jq -r "$1" <<<"$pr" 2>/dev/null || true; }
+          for attempt in 1 2; do
+            pr="$(gh pr view "$PR_URL" --json state,mergeStateStatus,isDraft,labels,headRefOid 2>/dev/null || true)"
+            state="$(field '.state // empty')"; state="${state:-UNKNOWN}"
+            mss="$(field '.mergeStateStatus // empty')"; mss="${mss:-UNKNOWN}"
+            if [ "$state" = "MERGED" ]; then
+              echo "PR already merged (instant-merge race) — treating as success."
+              exit 0
+            fi
+            if [ "$state" != "OPEN" ]; then
+              if [ "$state" = "UNKNOWN" ] && [ "$attempt" = 1 ]; then sleep "${ARM_RETRY_WAIT:-15}"; continue; fi
+              echo "::error::auto-merge arm failed (PR state=$state)"
+              exit 1
+            fi
+            if [ "$(field '.isDraft')" != "false" ]; then
+              echo "::error::auto-merge arm failed (PR is a draft)"
+              exit 1
+            fi
+            if [ -n "${ARM_LABEL:-}" ] && [ "$(field '[.labels[].name] | index(env.ARM_LABEL) != null')" != "true" ]; then
+              echo "::warning::auto-merge was refused and \`$ARM_LABEL\` has since been removed — not merging."
+              exit 0
+            fi
+            case "$mss" in
+              CLEAN|UNSTABLE|HAS_HOOKS)
+                head="$(field '.headRefOid // empty')"
+                if [ -z "$head" ]; then
+                  echo "::error::auto-merge arm failed (could not read the PR head)"
+                  exit 1
+                fi
+                echo "Auto-merge refused but the PR is already mergeable ($mss) — merging directly."
+                if gh pr merge "${MERGE[@]}" --match-head-commit "$head" "$PR_URL"; then exit 0; fi
+                pr="$(gh pr view "$PR_URL" --json state 2>/dev/null || true)"
+                state="$(field '.state // empty')"; state="${state:-UNKNOWN}"
+                if [ "$state" = "MERGED" ]; then
+                  echo "PR merged concurrently — treating as success."
+                  exit 0
+                fi
+                echo "::error::direct merge failed (PR state=$state, mergeStateStatus was $mss)"
+                exit 1 ;;
+              UNKNOWN)
+                if [ "$attempt" = 1 ]; then sleep "${ARM_RETRY_WAIT:-15}"; continue; fi ;;
+            esac
+            echo "::error::auto-merge arm failed (PR state=$state, mergeStateStatus=$mss)"
+            exit 1
+          done
 
   arm-on-ready-label:
     runs-on: ubuntu-latest
@@ -284,12 +350,72 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.release_pat }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          # The label that triggered this job (see its `if:`). A refused arm
+          # merges directly only while the PR still carries it.
+          ARM_LABEL: ready-to-merge
         run: |
-          if gh pr merge --auto --squash "$PR_URL"; then exit 0; fi
-          state="$(gh pr view "$PR_URL" --json state --jq .state 2>/dev/null || echo UNKNOWN)"
-          if [ "$state" = "MERGED" ]; then
-            echo "PR already merged (instant-merge race) — treating as success."
-            exit 0
-          fi
-          echo "::error::auto-merge arm failed (PR state=$state)"
-          exit 1
+          # MERGE holds every flag but `--auto`; see the dependabot step.
+          MERGE=(--squash)
+          if gh pr merge --auto "${MERGE[@]}" "$PR_URL"; then exit 0; fi
+
+          # --auto was refused. The common reason is benign: GitHub will not
+          # ENABLE auto-merge on a PR that is already mergeable, because there
+          # is nothing to wait for ("Pull request is in unstable status
+          # (enablePullRequestAutoMerge)" — a PR armed after its CI already
+          # went green; chrischall/fetchproxy#416 sat armed and unmerged until
+          # merged by hand). So re-read the PR and, if it is open, not a draft,
+          # still armed, and in a state auto-merge itself would merge from,
+          # merge it now with the SAME flags the arm used. Never `--admin`:
+          # GitHub still enforces the ruleset on this merge, and
+          # `--match-head-commit` pins it to the head that was read as
+          # mergeable, so a push in between is refused rather than merged.
+          # BLOCKED/BEHIND/DIRTY fail loudly as before; UNKNOWN (GitHub still
+          # computing) gets one retry. MERGED at any point is success — the
+          # instant-merge race, or a concurrent merge winning.
+          # Tested by scripts/auto-merge-arm.test.sh; keep both arm steps'
+          # copies of this block identical.
+          field() { jq -r "$1" <<<"$pr" 2>/dev/null || true; }
+          for attempt in 1 2; do
+            pr="$(gh pr view "$PR_URL" --json state,mergeStateStatus,isDraft,labels,headRefOid 2>/dev/null || true)"
+            state="$(field '.state // empty')"; state="${state:-UNKNOWN}"
+            mss="$(field '.mergeStateStatus // empty')"; mss="${mss:-UNKNOWN}"
+            if [ "$state" = "MERGED" ]; then
+              echo "PR already merged (instant-merge race) — treating as success."
+              exit 0
+            fi
+            if [ "$state" != "OPEN" ]; then
+              if [ "$state" = "UNKNOWN" ] && [ "$attempt" = 1 ]; then sleep "${ARM_RETRY_WAIT:-15}"; continue; fi
+              echo "::error::auto-merge arm failed (PR state=$state)"
+              exit 1
+            fi
+            if [ "$(field '.isDraft')" != "false" ]; then
+              echo "::error::auto-merge arm failed (PR is a draft)"
+              exit 1
+            fi
+            if [ -n "${ARM_LABEL:-}" ] && [ "$(field '[.labels[].name] | index(env.ARM_LABEL) != null')" != "true" ]; then
+              echo "::warning::auto-merge was refused and \`$ARM_LABEL\` has since been removed — not merging."
+              exit 0
+            fi
+            case "$mss" in
+              CLEAN|UNSTABLE|HAS_HOOKS)
+                head="$(field '.headRefOid // empty')"
+                if [ -z "$head" ]; then
+                  echo "::error::auto-merge arm failed (could not read the PR head)"
+                  exit 1
+                fi
+                echo "Auto-merge refused but the PR is already mergeable ($mss) — merging directly."
+                if gh pr merge "${MERGE[@]}" --match-head-commit "$head" "$PR_URL"; then exit 0; fi
+                pr="$(gh pr view "$PR_URL" --json state 2>/dev/null || true)"
+                state="$(field '.state // empty')"; state="${state:-UNKNOWN}"
+                if [ "$state" = "MERGED" ]; then
+                  echo "PR merged concurrently — treating as success."
+                  exit 0
+                fi
+                echo "::error::direct merge failed (PR state=$state, mergeStateStatus was $mss)"
+                exit 1 ;;
+              UNKNOWN)
+                if [ "$attempt" = 1 ]; then sleep "${ARM_RETRY_WAIT:-15}"; continue; fi ;;
+            esac
+            echo "::error::auto-merge arm failed (PR state=$state, mergeStateStatus=$mss)"
+            exit 1
+          done
