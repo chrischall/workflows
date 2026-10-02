@@ -6,7 +6,7 @@
 # PR head (a stranger's fork once a maintainer comments /auto-review), and
 # commit subjects the ancestry step quotes into the prompt. So everything the
 # model may run has to be safe under injected instructions. What was probed
-# against the pinned Claude Code (2.1.280; scrub re-checked on 2.1.288) before this was written:
+# against Claude Code 2.1.280 (scrub re-checked on 2.1.288, the CLI the action bundles) before this was written:
 #
 #   - Claude Code's own path checks already refuse `cat`/`rg`/`jq`/`ls`/`git`
 #     on a path outside the checkout, resolve symlinks for `cat`/`Read`, and

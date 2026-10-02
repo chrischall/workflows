@@ -373,8 +373,9 @@ jobs:
       # request token, or any other credential. Claude Code keeps them in its
       # own process for API calls and removes them from Bash, hooks and MCP
       # stdio servers. GH_TOKEN/GITHUB_TOKEN are deliberately NOT stripped, so
-      # `gh pr comment` still posts: checked against the pinned Claude Code
-      # 2.1.280 before this shipped, and again on 2.1.288 (2026-10-02) (`env` under the scrub showed GH_TOKEN and
+      # `gh pr comment` still posts: checked against Claude Code
+      # 2.1.280 before this shipped, and again on 2.1.288 (2026-10-02) — the CLI
+      # claude-code-action v1.0.240 bundles, which now runs unpinned (`env` under the scrub showed GH_TOKEN and
       # GITHUB_TOKEN, and no HF_TOKEN / ACTIONS_ID_TOKEN_REQUEST_TOKEN).
       # Job-level, where claude-code-action's docs put it: the action reads it
       # through the `env` context and passes it on to Claude.
@@ -915,25 +916,6 @@ jobs:
           echo "Selected ${MODEL} — ${REASON}"
           echo "**Model:** \`${MODEL}\` — ${REASON}" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Install pinned Claude Code (for Opus 5.5 / Fable 5.1)
-        id: claude_code
-        if: ${{ steps.ancestry.outputs.violations == '' && steps.relmsg.outputs.unparseable == '' }}
-        # claude-code-action@v1.0.230 bundles claude-agent-sdk 0.3.277 (Claude Code
-        # 2.1.277) and v1.0.231 bundles 0.3.278. Claude Opus 5.5
-        # is refused by every Claude Code below 2.1.280 (`400
-        # claude_code_version_too_old`), which would leave the PR un-reviewed.
-        # Verified locally 2026-09-23: agent-sdk 0.3.278 driving this exact CLI
-        # returns a schema-valid verdict on opus-5-5, fable-5-1, sonnet-5 and
-        # haiku-4-5. v1.0.240 bundles 0.3.288 (Claude Code 2.1.288), which clears
-        # that floor; this step now pins the SAME 2.1.288, so SDK and CLI match.
-        # It (and `path_to_claude_code_executable`) stays until #303's last step:
-        # a real >500-line review returning a verdict on the bundled CLI. The
-        # sandbox env scrub was re-checked on 2.1.288 (2026-10-02).
-        run: |
-          npm install --prefix "$RUNNER_TEMP/claude-code" --no-audit --no-fund @anthropic-ai/claude-code@2.1.288
-          path="$RUNNER_TEMP/claude-code/node_modules/.bin/claude"
-          "$path" --version
-          echo "path=$path" >> "$GITHUB_OUTPUT"
       - name: Install the sandbox dependencies (bubblewrap, socat)
         if: ${{ steps.ancestry.outputs.violations == '' && steps.relmsg.outputs.unparseable == '' }}
         # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (job env above) is enforced on Linux
@@ -977,7 +959,6 @@ jobs:
         # (scripts/action-pins.test.sh rejects `@v1`), and dependabot bumps it.
         uses: anthropics/claude-code-action@v1.0.240
         with:
-          path_to_claude_code_executable: ${{ steps.claude_code.outputs.path }}
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
           # No `github_token:` — the installed Claude App authors comments
           # as claude[bot] via OIDC.
