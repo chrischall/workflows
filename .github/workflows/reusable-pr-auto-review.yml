@@ -951,6 +951,13 @@ jobs:
 
       - name: Claude review with structured verdict
         id: review
+        # BOUNDED: a review takes 2-3 minutes; with no bound a hung model call
+        # inherits GitHub's 360-minute default and, since CI waits for the
+        # review to arm the PR, stalls it silently for six hours
+        # (mcp-host#1050). On the STEP, not the job: a step timeout fails the
+        # step and the `!cancelled()` steps below still post the no-verdict
+        # outcome; a job timeout would cancel them too.
+        timeout-minutes: 25
         # A deterministic ancestry violation IS the verdict — running a model
         # review on top would only produce prose beside a fact the pipeline
         # already established (the verdict step emits the fail directly).

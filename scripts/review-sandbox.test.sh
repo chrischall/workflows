@@ -53,8 +53,9 @@ ruby -ryaml -e '
   File.write(ARGV[5], neut ? neut["run"] : "")
   anc = steps.find { |s| s["id"] == "ancestry" } or abort("no ancestry step")
   File.write(ARGV[6], anc["run"])
+  File.write(ARGV[7], "#{review["timeout-minutes"]}\n#{job["timeout-minutes"]}\n")
 ' "$WF" "$TMP/args.txt" "$TMP/prompt.txt" "$TMP/env.txt" "$TMP/steps.txt" \
-    "$TMP/neutralize.sh" "$TMP/ancestry.sh" \
+    "$TMP/neutralize.sh" "$TMP/ancestry.sh" "$TMP/timeouts.txt" \
   || { echo "FAIL: could not extract the review job from $WF"; exit 1; }
 
 # The --allowedTools / --disallowedTools values, one rule per line.
@@ -174,6 +175,27 @@ if grep -q 'IS an ancestor' "$out"; then ok "ancestry report still lists the com
 else bad "ancestry report still lists the commit" "$(cat "$out" "$TMP/anc.log")"; fi
 if grep -qF '`' "$out"; then bad "no backtick from a commit subject reaches the prompt" "$(grep -F '`' "$out")"
 else ok "no backtick from a commit subject reaches the prompt"; fi
+
+# A HUNG review must fail fast and visibly. With no timeout the step inherits
+# GitHub's 360-minute default, and because CI is gated on the review arming
+# the PR, a hung model call stalls the PR for six hours with no signal
+# (mcp-host#1050, 2026-10-02: 17 min in "Claude review" before a manual
+# cancel + re-run passed in ~2). The bound is on the STEP, not the job: a
+# step timeout fails the step, so the `!cancelled()` steps after it still run
+# and post the no-verdict outcome; a job timeout CANCELS the job and skips
+# them, which is the silent stall again. A job-level bound, if any, must
+# leave room for those steps to finish.
+step_to="$(sed -n 1p "$TMP/timeouts.txt")"; job_to="$(sed -n 2p "$TMP/timeouts.txt")"
+if [ -n "$step_to" ] && [ "$step_to" -ge 10 ] && [ "$step_to" -le 60 ]; then
+  ok "review step has a timeout-minutes between 10 and 60 (got $step_to)"
+else
+  bad "review step has a timeout-minutes between 10 and 60" "got '${step_to:-none}'"
+fi
+if [ -z "$job_to" ] || { [ -n "$step_to" ] && [ "$job_to" -ge $((step_to + 10)) ]; }; then
+  ok "no job timeout cuts off the post-review steps (job='${job_to:-none}')"
+else
+  bad "no job timeout cuts off the post-review steps" "job=$job_to step=${step_to:-none}"
+fi
 
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
