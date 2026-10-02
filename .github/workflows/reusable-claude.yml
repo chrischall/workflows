@@ -200,25 +200,6 @@ jobs:
           done < <(find . -path ./.git -prune -o -type l -print0)
           echo "Removed $removed symlink(s) from the worktree before the review."
 
-      - name: Install pinned Claude Code (for Opus 5.5 / Fable 5.1)
-        if: ${{ steps.gate.outputs.mention == 'true' }}
-        id: claude_code
-        # claude-code-action@v1.0.230 bundles claude-agent-sdk 0.3.277 (Claude Code
-        # 2.1.277) and v1.0.231 bundles 0.3.278. Claude Opus 5.5
-        # is refused by every Claude Code below 2.1.280 (`400
-        # claude_code_version_too_old`), which would leave the PR un-reviewed.
-        # Verified locally 2026-09-23: agent-sdk 0.3.278 driving this exact CLI
-        # returns a schema-valid verdict on opus-5-5, fable-5-1, sonnet-5 and
-        # haiku-4-5. v1.0.240 bundles 0.3.288 (Claude Code 2.1.288), which clears
-        # that floor; this step now pins the SAME 2.1.288, so SDK and CLI match.
-        # It (and `path_to_claude_code_executable`) stays until #303's last step:
-        # a real >500-line review returning a verdict on the bundled CLI. The
-        # sandbox env scrub was re-checked on 2.1.288 (2026-10-02).
-        run: |
-          npm install --prefix "$RUNNER_TEMP/claude-code" --no-audit --no-fund @anthropic-ai/claude-code@2.1.288
-          path="$RUNNER_TEMP/claude-code/node_modules/.bin/claude"
-          "$path" --version
-          echo "path=$path" >> "$GITHUB_OUTPUT"
       - name: Install the sandbox dependencies (bubblewrap, socat)
         if: ${{ steps.gate.outputs.mention == 'true' }}
         # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB (job env) is enforced on Linux with
@@ -249,7 +230,6 @@ jobs:
         # (scripts/action-pins.test.sh rejects `@v1`), and dependabot bumps it.
         uses: anthropics/claude-code-action@v1.0.240
         with:
-          path_to_claude_code_executable: ${{ steps.claude_code.outputs.path }}
           # Auth via the user's Claude Max plan (OAuth token from
           # `claude setup-token`). Counts against the Max subscription's
           # quota instead of pay-per-token API billing.
