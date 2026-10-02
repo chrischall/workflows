@@ -284,21 +284,33 @@ jobs:
           # Every failure below falls through to reviewing. One redundant
           # review costs tokens; a review that silently never happens leaves a
           # PR un-armed and stuck, with a skipped run as the only evidence.
-          WF_ID=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq '.workflow_id' 2>/dev/null || true)
+          #
+          # Falling through is right; falling through QUIETLY is not. These
+          # reads used to discard gh's error and log a ::notice::, so when the
+          # release PAT lacked `actions: read` this step failed open on every
+          # PRIVATE repo (public run listings need no permission) and every
+          # `--label`ed PR there got two reviews that could disagree —
+          # apple-swift-mcp#160 got `pass` and `warn` on one commit.
+          ERR=$(mktemp)
+          refused() {
+            echo "::warning::could not $1 ($(tr '\n' ' ' < "$ERR" | head -c 300)) — reviewing anyway, so a twin run on this commit may review it too. On a private repo this usually means the release PAT lacks actions: read."
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          WF_ID=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq '.workflow_id' 2>"$ERR" || true)
           case "$WF_ID" in
-            ''|*[!0-9]*)
-              echo "::notice::could not resolve this run's workflow id — reviewing rather than risk no review at all."
-              echo "eligible=true" >> "$GITHUB_OUTPUT"
-              exit 0 ;;
+            ''|*[!0-9]*) refused "resolve this run's workflow id" ;;
           esac
 
           # Runs of THIS workflow on THIS commit that started before this one.
           # A `pull_request` run's head_sha is the PR head, so the `opened` and
           # `labeled` twins of one push share it — and a later push does not,
           # which is what keeps `synchronize` re-reviews out of this.
-          CANDIDATES=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&event=pull_request&per_page=100" \
+          RUNS=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&event=pull_request&per_page=100" \
             --jq ".workflow_runs[] | select(.workflow_id == $WF_ID) | select(.id < $RUN_ID) | .id" \
-            2>/dev/null | sort -n || true)
+            2>"$ERR") || refused "list this commit's runs"
+          CANDIDATES=$(printf '%s\n' "$RUNS" | sort -n)
 
           for id in $CANDIDATES; do
             tries=0

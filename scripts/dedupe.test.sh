@@ -85,6 +85,11 @@ n=$(( $(cat "$FIX/.calls.$key" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "$FIX/.calls.$key"
 [ "$n" -ge 2 ] && [ -f "$fixture.2" ] && fixture="$fixture.2"
 
+# An `.err` fixture stands in for a refused read: gh prints its error to
+# stderr and exits 1, exactly what a token without `actions: read` gets on a
+# PRIVATE repo (public run listings need no permission, which is how the gap
+# hid on every public repo).
+if [ -f "$fixture.err" ]; then cat "$fixture.err" >&2; exit 1; fi
 [ -f "$fixture" ] || exit 1
 echo "$endpoint" >> "$FIX/.calls.log"
 if [ -n "$filter" ]; then jq -r "$filter" "$fixture"; else cat "$fixture"; fi
@@ -233,8 +238,34 @@ else ok "I: an ineligible event costs no API calls"; fi
 # --- J: fail safe toward reviewing -----------------------------------------
 # A read that fails must not silence the review: no verdict means no arming
 # and a PR stuck forever, which is worse than one redundant review.
-case_api_down() { echo '{"workflow_runs":[]}' > "$1/runs.json"; }   # no run-200.json
+#
+# Reviewing is the right fallback, but it must not be a quiet one. A refused
+# read used to surface only as a ::notice::, so when RELEASE_PAT lacked
+# `actions: read` this step failed open on EVERY private repo and every
+# `--label`ed PR got two reviews that could disagree — apple-swift-mcp#160
+# got `pass` and `warn` on one commit, and nothing on the run said why.
+FORBIDDEN='gh: Resource not accessible by personal access token (HTTP 403)'
+case_api_down() {
+  echo '{"workflow_runs":[]}' > "$1/runs.json"
+  echo "$FORBIDDEN" > "$1/run-200.json.err"
+}
 run_case "J: an Actions API failure reviews rather than risking no review" true case_api_down
+assert_warns() {   # <case> <log dir>
+  if grep -q '^::warning::.*HTTP 403' "$2/log" && grep -q 'actions: read' "$2/log"; then
+    ok "$1: warns with gh's error and the missing-permission hint"
+  else bad "$1: warns with gh's error and the missing-permission hint" "log: $(tr '\n' ' ' < "$2/log")"; fi
+}
+assert_warns "J" "$LAST_DIR"
+
+# --- L: the candidate listing can be refused too ---------------------------
+# Same failure one call later: the run resolves but listing the commit's runs
+# is refused. Swallowing that reads as "no other runs" and reviews silently.
+case_list_refused() {
+  seed_self "$1"
+  echo "$FORBIDDEN" > "$1/runs.json.err"
+}
+run_case "L: a refused run listing reviews rather than risking no review" true case_list_refused
+assert_warns "L" "$LAST_DIR"
 
 # --- K: the poll has a ceiling ---------------------------------------------
 # An earlier run wedged in `context` forever must not wedge this one too.
