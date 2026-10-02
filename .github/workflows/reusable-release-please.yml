@@ -109,7 +109,7 @@ jobs:
       # person actually looks — the release PR, and the GitHub Release notes
       # cut from it. Re-applied every run, because release-please regenerates
       # the changelog and force-pushes its branch each time.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         if: steps.release.outputs.pr != ''
         with:
           token: ${{ secrets.release_pat }}

@@ -459,7 +459,7 @@ jobs:
           fi
 
       - name: Checkout PR
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           # EXPLICIT ref, because this workflow now has two triggers. On
           # `pull_request` the default checkout is already the PR merge ref, but

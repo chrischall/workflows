@@ -318,10 +318,10 @@ jobs:
           echo "::error::$MSG This failing check is expected and clears once the PR is armed."
           exit 1
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         if: needs.gate.outputs.run == 'true'
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.0.0
         if: needs.gate.outputs.run == 'true'
         with:
           node-version: ${{ inputs.node-version }}
