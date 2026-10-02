@@ -374,7 +374,7 @@ jobs:
       # own process for API calls and removes them from Bash, hooks and MCP
       # stdio servers. GH_TOKEN/GITHUB_TOKEN are deliberately NOT stripped, so
       # `gh pr comment` still posts: checked against the pinned Claude Code
-      # 2.1.280 before this shipped (`env` under the scrub showed GH_TOKEN and
+      # 2.1.280 before this shipped, and again on 2.1.288 (2026-10-02) (`env` under the scrub showed GH_TOKEN and
       # GITHUB_TOKEN, and no HF_TOKEN / ACTIONS_ID_TOKEN_REQUEST_TOKEN).
       # Job-level, where claude-code-action's docs put it: the action reads it
       # through the `env` context and passes it on to Claude.
@@ -919,15 +919,18 @@ jobs:
         id: claude_code
         if: ${{ steps.ancestry.outputs.violations == '' && steps.relmsg.outputs.unparseable == '' }}
         # claude-code-action@v1.0.230 bundles claude-agent-sdk 0.3.277 (Claude Code
-        # 2.1.277); the newest action, v1.0.231, bundles 0.3.278. Claude Opus 5.5
+        # 2.1.277) and v1.0.231 bundles 0.3.278. Claude Opus 5.5
         # is refused by every Claude Code below 2.1.280 (`400
         # claude_code_version_too_old`), which would leave the PR un-reviewed.
         # Verified locally 2026-09-23: agent-sdk 0.3.278 driving this exact CLI
         # returns a schema-valid verdict on opus-5-5, fable-5-1, sonnet-5 and
-        # haiku-4-5. Drop this step (and `path_to_claude_code_executable`) once
-        # an action release bundles claude-agent-sdk >= 0.3.280 (tracked in #303).
+        # haiku-4-5. v1.0.240 bundles 0.3.288 (Claude Code 2.1.288), which clears
+        # that floor; this step now pins the SAME 2.1.288, so SDK and CLI match.
+        # It (and `path_to_claude_code_executable`) stays until #303's last step:
+        # a real >500-line review returning a verdict on the bundled CLI. The
+        # sandbox env scrub was re-checked on 2.1.288 (2026-10-02).
         run: |
-          npm install --prefix "$RUNNER_TEMP/claude-code" --no-audit --no-fund @anthropic-ai/claude-code@2.1.280
+          npm install --prefix "$RUNNER_TEMP/claude-code" --no-audit --no-fund @anthropic-ai/claude-code@2.1.288
           path="$RUNNER_TEMP/claude-code/node_modules/.bin/claude"
           "$path" --version
           echo "path=$path" >> "$GITHUB_OUTPUT"
@@ -970,8 +973,9 @@ jobs:
         # so the PR is left UN-REVIEWED and cannot arm. It took the whole fleet
         # down at once because @v1 is a floating tag — last good run 22:07:24Z,
         # first failure 22:19:42Z, with no change on our side in between.
-        # Lift back to @v1 once a release past 1.0.218 fixes the binary path.
-        uses: anthropics/claude-code-action@v1.0.231
+        # Stays an exact tag: the fleet pins every third-party action to one
+        # (scripts/action-pins.test.sh rejects `@v1`), and dependabot bumps it.
+        uses: anthropics/claude-code-action@v1.0.240
         with:
           path_to_claude_code_executable: ${{ steps.claude_code.outputs.path }}
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
@@ -1049,7 +1053,7 @@ jobs:
               - Formatting taste a formatter would own: comment length, single- vs multi-line comments, blank lines, line breaks, import order not enforced by a config.
               - Rephrasing comments/identifiers that are already clear.
               - Anything you cannot ground in the docs, a repo config, or adjacent-code style.
-              - How an action or reusable workflow is pinned, when it follows the owner's fleet policy: third-party actions on a release TAG (`@v5.0.0`, `@v1`, `@1.6`), `chrischall/workflows/*` on `@main`. Never ask for a commit SHA instead — the owner has ruled SHA pins out for every action, third-party included, secret-bearing steps included, and a tag pin is the policy, not a supply-chain gap.
+              - How an action or reusable workflow is pinned, when it follows the owner's fleet policy: third-party actions on an exact release TAG (`@v5.0.0`, or `@1.6` for an action that tags MAJOR.MINOR only), `chrischall/workflows/*` on `@main`. Never ask for a commit SHA instead — the owner has ruled SHA pins out for every action, third-party included, secret-bearing steps included, and a tag pin is the policy, not a supply-chain gap.
             The one pin that IS a finding: a NEW `uses: …@<40-hex commit SHA>` introduced by this PR (🟡 Nit; say to use the release tag the SHA names). Removing a SHA pin in favour of a tag is correct and never a finding.
             If your only findings are out-of-scope, the verdict is `pass`.
 
