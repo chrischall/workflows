@@ -419,6 +419,10 @@ recheck_case no  "label still there"       "$LIVE_ARMED"
 recheck_case yes "label removed meanwhile" "$(live "autorelease: pending")"
 recheck_case yes "PR unreadable (fail safe: back to un-armed)" "__UNREADABLE__"
 recheck_case no  "already merged"          "$(live "autorelease: pending,ready-to-merge" MERGED)"
+# A merged or closed PR is never touched, even with the label gone — the
+# state short-circuit, not the label check, is what spares it (#323).
+recheck_case no  "merged, label gone"      "$(live "autorelease: pending" MERGED)"
+recheck_case no  "closed, label gone"      "$(live "autorelease: pending" CLOSED)"
 
 echo
 echo "$PASS passed, $FAIL failed"
