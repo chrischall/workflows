@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Guard for the fleet's action-pin policy: third-party actions ride release
-# TAGS (`@v5.0.0`), chrischall/workflows rides `@main`, and nothing is ever
-# pinned to a commit SHA or (third-party) to a branch. A SHA pin is unreadable in review, and a
-# `# vX.Y.Z` comment beside it is a claim nothing checks.
+# Guard for the fleet's action-pin policy: third-party actions ride EXACT
+# release tags (`@v5.0.0`), chrischall/workflows rides `@main`, and nothing is
+# ever pinned to a commit SHA, a branch, or (third-party) a moving major tag
+# like `@v7`. A SHA pin is unreadable in review, and a `# vX.Y.Z` comment
+# beside it is a claim nothing checks.
 #
 # #290 SHA-pinned release-please-action in the reusable release and it merged,
 # because nothing here said no. This scans every workflow, template, fragment
@@ -40,10 +41,19 @@ else
   bad "actions pinned to a commit SHA (use the release tag, e.g. @v5.0.0)" "$hits"
 fi
 
-# Branch refs (fleet-audit#286). `@master` / `@main` on a third-party
-# action is mutable: a push to that branch changes what runs, secrets and all,
-# in every consumer with no review. Third-party refs must be tag-shaped
-# (`v5`, `v5.0.0`, `1.6`); only first-party chrischall/* actions ride `@main`.
+# Branch refs (fleet-audit#286) and moving major tags (fleet-audit#888).
+# `@master` / `@main` on a third-party action is mutable: a push to that branch
+# changes what runs, secrets and all, in every consumer with no review. A major
+# tag (`@v7`) is the same thing one step removed: the action's owner moves it
+# on every release. Third-party refs must be an exact release tag
+# (`v5.0.0`, `1.2.3`); only first-party chrischall/* actions ride `@main`.
+#
+# This used to accept any tag-shaped ref (`v5`), so `actions/checkout@v7` sat
+# in templates/release-please*.yml untouched — and a fleet re-sync from them
+# undid repos' own exact pins (realty-mcp#76).
+#
+# One exception: superfly/flyctl-actions tags its releases MAJOR.MINOR only
+# (`1.6`, no patch), so that is its exact form; its `1` is still a major tag.
 # Prints the offending `uses:` value, or nothing when the ref is acceptable.
 branch_ref() {
   printf '%s\n' "$1" | sed -nE 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*["'\'']?([^[:space:]"'\''#]+)["'\'']?.*/\2/p' | while read -r ref; do
@@ -51,7 +61,9 @@ branch_ref() {
     case "$ref" in *@*) ;; *) continue ;; esac
     owner="${ref%%/*}"; version="${ref##*@}"
     [ "$owner" = chrischall ] && continue
-    printf '%s\n' "$version" | grep -Eq '^v?[0-9]+(\.[0-9]+)*$' && continue
+    exact='^v?[0-9]+\.[0-9]+\.[0-9]+$'
+    case "$ref" in superfly/flyctl-actions*@*) exact='^v?[0-9]+\.[0-9]+$' ;; esac
+    printf '%s\n' "$version" | grep -Eq "$exact" && continue
     printf '%s\n' "$ref"
   done
 }
@@ -59,12 +71,16 @@ branch_ref() {
 for line in \
   '      - uses: superfly/flyctl-actions/setup-flyctl@master' \
   '        uses: actions/checkout@main' \
-  "      - uses: 'owner/repo@release-branch'"; do
-  if [ -n "$(branch_ref "$line")" ]; then ok "branch check catches: ${line##*uses: }"
-  else bad "branch check misses a branch ref" "$line"; fi
+  "      - uses: 'owner/repo@release-branch'" \
+  '      - uses: actions/checkout@v7' \
+  '        uses: gradle/actions/setup-gradle@v4' \
+  '      - uses: owner/repo@v4.4' \
+  '      - uses: superfly/flyctl-actions/setup-flyctl@1'; do
+  if [ -n "$(branch_ref "$line")" ]; then ok "ref check catches: ${line##*uses: }"
+  else bad "ref check misses a branch or major-tag ref" "$line"; fi
 done
 for line in \
-  '      - uses: actions/checkout@v7' \
+  '      - uses: actions/checkout@v7.0.1' \
   '      - uses: googleapis/release-please-action@v5.0.0' \
   '      - uses: superfly/flyctl-actions/setup-flyctl@1.6' \
   '    uses: chrischall/workflows/.github/workflows/reusable-mcp-ci.yml@main' \
@@ -72,8 +88,8 @@ for line in \
   '      - uses: ./.github/actions/mcp-publish' \
   '      # a comment mentioning uses: foo/bar@master is not a step' \
   '            prose about a NEW `uses: foo/bar@master` in a prompt is not a step'; do
-  if [ -n "$(branch_ref "$line")" ]; then bad "branch check flags an allowed ref" "$line"
-  else ok "branch check allows: ${line##*uses: }"; fi
+  if [ -n "$(branch_ref "$line")" ]; then bad "ref check flags an allowed ref" "$line"
+  else ok "ref check allows: ${line##*uses: }"; fi
 done
 
 branch_hits=$(grep -rEn --include='*.yml' --include='*.yaml' '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]' \
@@ -81,9 +97,9 @@ branch_hits=$(grep -rEn --include='*.yml' --include='*.yaml' '^[[:space:]]*(-[[:
   r=$(branch_ref "${hit#*:*:}"); [ -n "$r" ] && printf '%s\n' "$hit"
 done)
 if [ -z "$branch_hits" ]; then
-  ok "no third-party action rides a branch ref"
+  ok "every third-party action rides an exact release tag"
 else
-  bad "third-party actions on a branch ref (use a release tag, e.g. @v5.0.0)" "$branch_hits"
+  bad "third-party actions on a branch or major tag (use the exact release tag, e.g. @v5.0.0)" "$branch_hits"
 fi
 
 # npx in the composite actions (fleet-audit#285). They run inside the publish

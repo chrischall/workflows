@@ -152,7 +152,7 @@ jobs:
       # happened on ofw-mcp#175). Diff those files; don't read them.
       - name: Checkout the PR under discussion (or the default branch)
         if: ${{ steps.gate.outputs.mention == 'true' }}
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           # Not on a fork: the model reads that checkout. Kept on same-repo
           # PRs because the action's own `git fetch origin <branch>` runs
