@@ -894,7 +894,7 @@ jobs:
             MODEL="claude-haiku-4-5"
             REASON="${CHANGED} lines (≤50, trivial)"
           elif [ "$CHANGED" -le 500 ]; then
-            MODEL="claude-sonnet-5"
+            MODEL="claude-sonnet-5-5"
             REASON="${CHANGED} lines (51-500)"
           elif [ "$CHANGED" -le 10000 ]; then
             MODEL="claude-opus-5-5"
@@ -909,7 +909,7 @@ jobs:
           # tiny changelog diff routes there, yet these are the PRs that arm a
           # publish, the highest blast radius per line in the fleet.
           if [ "$MODEL" = "claude-haiku-4-5" ] && [[ "$HEAD_REF" == release-please--* ]]; then
-            MODEL="claude-sonnet-5"
+            MODEL="claude-sonnet-5-5"
             REASON="release PR floor (${REASON})"
           fi
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
