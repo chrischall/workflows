@@ -185,6 +185,18 @@ else ok "no backtick from a commit subject reaches the prompt"; fi
 # and post the no-verdict outcome; a job timeout CANCELS the job and skips
 # them, which is the silent stall again. A job-level bound, if any, must
 # leave room for those steps to finish.
+# A consistent in-repo rename of an output enum passed review and shipped as a
+# patch (zillow-mcp #294: never_sold -> not_in_history). The checklist has to
+# name contract changes, and grade them a Nit — tracked, never blocking.
+contract_line="$(grep -F 'Changes to the tool/API contract' "$TMP/prompt.txt")"
+if [ -n "$contract_line" ]; then ok "prompt asks the reviewer to check contract changes"
+else bad "prompt asks the reviewer to check contract changes" "no 'Changes to the tool/API contract' item"; fi
+if printf '%s' "$contract_line" | grep -qF '🟡 Nit' \
+  && printf '%s' "$contract_line" | grep -qF '`!`' \
+  && printf '%s' "$contract_line" | grep -qF '`BREAKING CHANGE`'; then
+  ok "contract changes are a Nit unless the title or footer marks them breaking"
+else bad "contract changes are a Nit unless the title or footer marks them breaking" "${contract_line:-<missing>}"; fi
+
 step_to="$(sed -n 1p "$TMP/timeouts.txt")"; job_to="$(sed -n 2p "$TMP/timeouts.txt")"
 if [ -n "$step_to" ] && [ "$step_to" -ge 10 ] && [ "$step_to" -le 60 ]; then
   ok "review step has a timeout-minutes between 10 and 60 (got $step_to)"

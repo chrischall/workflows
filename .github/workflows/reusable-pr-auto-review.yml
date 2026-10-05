@@ -1004,6 +1004,7 @@ jobs:
                - Adherence to documented conventions
                - Test coverage of new code paths
                - Security or data-integrity concerns
+               - Changes to the tool/API contract: a renamed or removed output field, a changed enum or status value, or an input parameter renamed, removed or newly required. Callers live outside this repo, so a rename that is consistent inside it can still break them; the diff itself is the evidence, so no outside caller has to be found. Unless the PR title carries `!` or the body a `BREAKING CHANGE` footer, raise it as a 🟡 Nit naming the old and new value — never 🔴, since the owner may ship it as-is.
 
             REPO-SPECIFIC NOTES:
             ${{ inputs.conventions_hint }}
