@@ -393,7 +393,7 @@ jobs:
           rm -rf "$LINT"; mkdir -p "$LINT/run"
 
           # The server bin of every package (root, then npm workspaces) that
-          # depends on the MCP server SDK. A library (mcp-connector), a host
+          # depends on the MCP server SDK. A library, a host
           # (mcp-host) or a CLI that is not an MCP server (fetchproxy's fpx)
           # lists nothing and is skipped.
           cat > "$LINT/servers.cjs" <<'JS'

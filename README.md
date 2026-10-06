@@ -10,7 +10,6 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 | `.github/workflows/reusable-claude.yml` | reusable workflow | all |
 | `.github/workflows/reusable-mcp-ci.yml` | reusable workflow | node repos |
 | `.github/workflows/reusable-cloudflare-deploy.yml` | reusable workflow | web repos (OpenNext → Cloudflare Workers) |
-| `.github/workflows/reusable-mcp-connector-deploy.yml` | reusable workflow | MCP repos with a hosted connector (plain `wrangler deploy`) |
 | `.github/workflows/reusable-fly-deploy.yml` | reusable workflow | repos with a Fly.io backend |
 | `.github/workflows/reusable-dependabot-lockfix.yml` | reusable workflow | repos with derived lockfiles dependabot can't refresh |
 | `.github/workflows/reusable-release-please.yml` | reusable workflow | MCP repos by default (via `templates/release-please-reusable.yml`; `reusable_release: ""` opts out) |
@@ -248,24 +247,19 @@ apps with a JVM/Gradle prebuild (a shared KMP engine). Onboard a repo by copying
 `docs/cloudflare-web-deploy.md`. Live consumers: allotmint-clients/web (with a
 JDK prebuild) and curtaincall/web (plain).
 
-`reusable-mcp-connector-deploy.yml` is the *other* Cloudflare deploy: an MCP
-server's hosted connector Worker, deployed with a plain `wrangler deploy` from
-the repo root — no framework build, no `web/`. It takes a `ref` so a release
-deploys the released source rather than whatever `main` happens to be, and pairs
-with `reusable-fly-deploy.yml` for connectors that also run a Fly backend (a
-Worker cannot execute a binary, so `gogcli-mcp` runs the `gog` CLI on Fly).
+`reusable-fly-deploy.yml` deploys a repo's Fly.io backend. It takes a `ref`
+so a release deploys the released source rather than whatever `main` happens to
+be. Setting `fly_dir` in `fleet.json` makes `rollout.sh` append a `deploy-runner`
+job to the repo's `release-please.yml`, gated on `release_created == 'true'`
+(the fragment is `templates/fragments/deploy-fly-job.yml`). The job passes
+`FLY_API_TOKEN` explicitly (never `secrets: inherit`, which would hand a deploy
+workflow every secret the repo holds, `RELEASE_PAT` included), scopes itself to
+`contents: read`, and warns-and-passes when the token is absent, so a missing
+secret never reports an otherwise-good release as broken. Any job that must run
+against the new backend should `needs: deploy-runner`.
 
-Wire the automatic path into `release-please.yml` gated on
-`release_created == 'true'`; copy `templates/deploy-connector.yml` for the
-on-demand `workflow_dispatch` path. Both jobs pass their deploy token
-explicitly (never `secrets: inherit`, which would hand a deploy workflow every
-secret the repo holds, `RELEASE_PAT` included) and scope themselves to
-`contents: read`. Both warn-and-pass when their token is absent, so a missing
-secret never reports an otherwise-good release as broken. When a repo deploys both halves,
-deploy Fly first and make the Worker job `needs:` it.
-
-These exist because hand-deployed connectors drift: one had drifted far enough
-to keep serving a tool schema its repo had already replaced.
+It exists because hand-deployed services drift: one hosted MCP server had
+drifted far enough to keep serving a tool schema its repo had already replaced.
 
 `reusable-dependabot-lockfix.yml` regenerates derived lockfiles on dependabot
 PRs and pushes them back with the release PAT (so CI retriggers), for bumps
@@ -415,11 +409,9 @@ release-please finds the previous release *by tag*.
 
 **A repo-specific `ignore:` block is a fragment, not a reason to opt out.**
 `templates/fragments/dependabot-ignore-<name>.yml`, selected by
-`dependabot_ignore`. `gogcli-mcp` (an `agents` ceiling mirroring
-`mcp-connector`'s published peer range) and `curtaincall` (a permanent
-javax-namespace JAXB hold) were both opted out of the dependabot template
-purely to protect one block each — which also cost them the vitest pin and
-every future fix. The splice marker is a *comment* line: a bare `__X__` at
+`dependabot_ignore`. `curtaincall` (a permanent javax-namespace JAXB hold) was
+opted out of the dependabot template purely to protect one block — which also
+cost it the vitest pin and every future fix. The splice marker is a *comment* line: a bare `__X__` at
 column 0 renders to a top-level scalar and breaks the template parse, the same
 shape as the placeholder that took out two repos' release workflows. An
 unknown fragment name is a hard error, because the quiet failure is a config
@@ -481,8 +473,8 @@ every repo in `fleet.json`. There is deliberately no `cooldown`.
 config that is deliberately bespoke, and it exists so a regeneration cannot
 quietly revert a hand-written reason (#76). Two repos use `dependabot: none`
 today — `StoryMint` (per-target Swift package directories) and `PassMint` (a
-worker-only npm directory); `curtaincall` and `gogcli-mcp` were moved off it
-onto `dependabot_ignore` fragments. Twenty-one repos set
+worker-only npm directory); `curtaincall` was moved off it onto a
+`dependabot_ignore` fragment, and `gogcli-mcp` onto the stock config. Twenty-one repos set
 `release_config: none` — their `extra-files` stamp versions into monorepo
 paths the shared template does not have — and `gogcli-mcp` sets
 `release_notes: none` for a `⚠️ Required gogcli version` category keyed on a

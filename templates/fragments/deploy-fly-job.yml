@@ -1,9 +1,9 @@
 
-  # Deploy the Fly backend at the released tag. Goes BEFORE the connector: the
-  # halves are compatible in both directions, but a new Worker against an old
-  # backend is the combination that leans on compatibility shims, so prefer the
-  # other order. A failure here skips the connector too, leaving a consistent
-  # pair rather than a half-updated one.
+  # Deploy the Fly backend at the released tag, so what is live tracks the
+  # release instead of drifting behind main. Deliberately not `needs: publish`:
+  # the backend is independent of npm and the MCP registry, so a registry
+  # hiccup should not leave it stale. Any job that must run against the new
+  # backend should `needs: deploy-runner`, so a failed deploy skips it too.
   deploy-runner:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
