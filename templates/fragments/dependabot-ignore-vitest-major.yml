@@ -14,10 +14,9 @@
       # bump, which is why that repo's CLAUDE.md says all five move together
       # or none do.
       #
-      # THE SECOND REPO HELD BACK FOR THIS REASON — `gogcli-peers` carries the
-      # same ceiling for the same peer, and the two are the fleet's only
-      # pool-workers consumers. Lift them in the same pass: the thing to read
-      # is the pool's peer range, not vitest's changelog.
+      # This is the fleet's only pool-workers consumer, so this is the only
+      # vitest ceiling. Lift it when the pool's peer range admits vitest 5: the
+      # thing to read is that peer range, not vitest's changelog.
       #
       # A ceiling, not a freeze. 4.x minors and patches flow normally, which is
       # where the security fixes are. Only `vitest` is named: this repo declares

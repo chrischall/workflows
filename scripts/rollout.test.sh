@@ -24,9 +24,9 @@ ROOT="$TMP/root"
 mkdir -p "$ROOT/scripts"
 ln -s "$HERE/scripts/rollout.sh" "$ROOT/scripts/rollout.sh"
 ln -s "$HERE/templates" "$ROOT/templates"
-# Real defaults, one synthetic repo: a connector repo gets the widest stub set
-# (auto-merge, ci, claude, deploy-connector, pr-auto-review, release-please),
-# which is what makes "report EVERY drifted stub" testable at all.
+# Real defaults, one synthetic repo: FAKE/x takes the default stub set
+# (auto-merge, ci, claude, pr-auto-review, release-please and the rest), which
+# is what makes "report EVERY drifted stub" testable at all.
 # FAKE/z exists only to exercise the NEGATIVE render paths: with a non-standard
 # ci mode neither ci.yml nor ci-fork-status.yml may be produced. Without it the
 # "and never without it" half of case I was asserted by the case name and
@@ -65,7 +65,7 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # (Keep prose OUT of the jq program: jq eats `#` to end-of-line, and an
 # apostrophe there closes the surrounding shell quote.)
 jq '{defaults: .defaults,
-     repos: [{repo: "FAKE/x", connector: "true", package_name: "fake-x", reusable_release: "",
+     repos: [{repo: "FAKE/x", package_name: "fake-x", reusable_release: "",
               version_files: "src/version.ts"},
              {repo: "FAKE/y", ci_dispatch: "true", package_name: "fake-y"},
              {repo: "FAKE/s", sanitize_release_message: "true", ci: "none",
@@ -75,7 +75,7 @@ jq '{defaults: .defaults,
               package_name: "fake-g"},
              {repo: "FAKE/a", dependabot: "actions", ci: "none", release: "none",
               package_name: "fake-a"},
-             {repo: "FAKE/i", dependabot_ignore: "gogcli-peers", ci: "none",
+             {repo: "FAKE/i", dependabot_ignore: "vitest-major", ci: "none",
               release: "none", package_name: "fake-i"},
              {repo: "FAKE/bad", dependabot_ignore: "no-such-fragment",
               ci: "none", release: "none", package_name: "fake-bad"},
@@ -119,14 +119,14 @@ jq '{defaults: .defaults,
               dependabot_extra_ignore: "npm:next-lint-peers",
               ci: "none", release: "none", package_name: "fake-mxnone"},
              {repo: "FAKE/mxtwice", dependabot: "gradle", dependabot_extra: "npm:/web",
-              dependabot_extra_ignore: "npm:next-lint-peers,npm:gogcli-peers",
+              dependabot_extra_ignore: "npm:next-lint-peers,npm:vitest-major",
               ci: "none", release: "none", package_name: "fake-mxtwice"},
              {repo: "FAKE/mxroot", dependabot_extra: "npm:/web",
               dependabot_extra_ignore: "npm:next-lint-peers",
               ci: "none", release: "none", package_name: "fake-mxroot"},
              {repo: "FAKE/n", dependabot: "none", release_config: "none",
               release_notes: "none"},
-             {repo: "FAKE/r", reusable_release: "true", connector: "true",
+             {repo: "FAKE/r", reusable_release: "true", fly_dir: "server",
               package_name: "fake-r"},
              {repo: "FAKE/rs", reusable_release: "true", ci: "none",
               package_name: "fake-rs", skill_path: "skills/one/SKILL.md"}]}' \
@@ -245,10 +245,10 @@ assert_clean_stderr A
 # --- B: drift does not hide a MISSING stub later in the set ----------------
 DIR=$(fixtures b)
 printf '\n# hand-edited: ci\n' >> "$DIR/.github/workflows/ci.yml"
-rm "$DIR/.github/workflows/deploy-connector.yml"
+rm "$DIR/.github/workflows/claude.yml"
 run_check "$DIR"
 assert_has  B "DRIFT    FAKE/x/.github/workflows/ci.yml"
-assert_has  B "MISSING  FAKE/x/.github/workflows/deploy-connector.yml"
+assert_has  B "MISSING  FAKE/x/.github/workflows/claude.yml"
 assert_code B 1
 
 # --- C: clean repo is OK ---------------------------------------------------
@@ -709,15 +709,15 @@ else bad "S: commit body" "still names templates/\$ONLY.yml, which does not exis
 # also cost them the vitest pin and every future fix. The block is a fragment
 # now, so the config is templated AND the hold is kept. If this regresses, the
 # hold disappears silently: dependabot simply starts proposing bumps that
-# cannot install (gogcli's agents ceiling) or that break the build (curtaincall's
-# javax-namespace JAXB pin).
+# cannot install (mcp-host's pool-workers vitest ceiling) or that break the
+# build (curtaincall's javax-namespace JAXB pin).
 DIR="$TMP/ign-on"
 bash "$ROLLOUT" FAKE/i --render "$DIR" --only dependabot >/dev/null 2>&1
 if ruby -ryaml -e '
     d = YAML.safe_load(File.read(ARGV[0]))
     ign = (d["updates"] || []).flat_map { |u| u["ignore"] || [] }
     abort "no ignore entries" if ign.empty?
-    abort "wrong dep" unless ign.any? { |i| i["dependency-name"] == "agents" }
+    abort "wrong dep" unless ign.any? { |i| i["dependency-name"] == "vitest" }
   ' "$DIR/.github/dependabot.yml" 2>/dev/null; then
   ok "T: dependabot_ignore splices the fragment into the rendered config"
 else
@@ -1030,8 +1030,8 @@ fi
 # move. Opt-in first because this is the merge-and-publish path for the whole
 # fleet: a canary has to prove a real release through it before anyone else
 # renders it. FAKE/x is the unopted control, FAKE/r the opted repo with a
-# connector (deploy fragments read the stub's release-please outputs, so every
-# output they name must be one the reusable workflow declares), and FAKE/rs a
+# fly_dir (the deploy fragment reads the stub's release-please outputs, so every
+# output it names must be one the reusable workflow declares), and FAKE/rs a
 # pinned skill, whose sed range has to work in the new template too.
 R_OFF="$TMP/r-off"; bash "$ROLLOUT" FAKE/x  --render "$R_OFF" >/dev/null
 R_ON="$TMP/r-on";   bash "$ROLLOUT" FAKE/r  --render "$R_ON"  >/dev/null
@@ -1061,7 +1061,7 @@ errs << "checkout ref is not the resolved tag (#{co.dig('with', 'ref').inspect})
 mp = steps.find { |s| s['uses'].to_s.include?('mcp-publish') } || {}
 errs << "mcp-publish version is not the resolved version (#{mp.dig('with', 'version').inspect})" unless mp.dig('with', 'version') == '${{ needs.release-please.outputs.version }}'
 errs << "mcp-publish tag-name is not the resolved tag (#{mp.dig('with', 'tag-name').inspect})" unless mp.dig('with', 'tag-name') == '${{ needs.release-please.outputs.tag }}'
-errs << 'deploy-connector fragment not appended' unless stub.dig('jobs', 'deploy-connector')
+errs << 'deploy-runner fragment not appended' unless stub.dig('jobs', 'deploy-runner')
 errs << 'unpinned repo renders a skill-path line or its comment' if src =~ /skill-path/
 stub['jobs'].each { |n, j| (j['steps'] || []).each { |s| errs << "job #{n}: ${{ inside a run: body" if s['run'].to_s.include?('${{') } }
 
@@ -1326,13 +1326,56 @@ bash "$ROLLOUT" FAKE/i --render "$DIR" --only dependabot >/dev/null 2>&1
 if ruby -ryaml -e '
     u = YAML.safe_load(File.read(ARGV[0]))["updates"].find { |x| x["package-ecosystem"] == "npm" }
     names = (u["ignore"] || []).map { |i| i["dependency-name"] }
-    abort "ignore lost: #{names.inspect}" unless (%w[agents vitest] - names).empty?
+    abort "ignore lost: #{names.inspect}" unless (%w[vitest] - names).empty?
     abort "no dev-majors beside the ignore" unless u.dig("groups", "dev-majors")
   ' "$DIR/.github/dependabot.yml" 2>"$TMP/gg2.err"; then
   ok "GG: ignore fragments still apply beside the majors groups"
 else
   bad "GG: ignore" "$(cat "$TMP/gg2.err")"
 fi
+
+# --- HH: the hosted-connector deploy path is retired --------------------------
+# chrischall/mcp-connector was archived (2026-10-05) and no fleet repo set
+# `connector`. The key, its templates and its reusable workflow are gone, so
+# nothing may still render or advertise a Worker deploy, and `fly_dir` must
+# stand on its own: a Fly-only repo gets deploy-runner and nothing after it.
+for f in .github/workflows/reusable-mcp-connector-deploy.yml templates/deploy-connector.yml \
+         templates/fragments/deploy-connector-job.yml \
+         templates/fragments/deploy-connector-job-after-fly.yml \
+         templates/fragments/dependabot-ignore-gogcli-peers.yml; do
+  if [ -e "$HERE/$f" ]; then bad "HH: $f" "still exists"
+  else ok "HH: $f removed"; fi
+done
+if grep -qiE 'CONNECTOR|deploy-connector' "$HERE/scripts/rollout.sh"; then
+  bad "HH: rollout.sh" "still reads or renders the connector key: $(grep -niE 'CONNECTOR|deploy-connector' "$HERE/scripts/rollout.sh" | head -3)"
+else ok "HH: rollout.sh has no connector branch"; fi
+if jq -e '.defaults | has("connector")' "$HERE/fleet.json" >/dev/null ||
+   jq -e '.repos[] | select(has("connector") or .repo == "chrischall/mcp-connector")' "$HERE/fleet.json" >/dev/null; then
+  bad "HH: fleet.json" "still carries the connector key or the archived mcp-connector repo"
+else ok "HH: fleet.json has no connector key and no mcp-connector entry"; fi
+HDR=$(bash "$ROLLOUT" FAKE/r 2>/dev/null | grep '^=== ')
+case "$HDR" in
+  *connector=*) bad "HH: header" "dry-run header still reports connector=: $HDR" ;;
+  *fly=server*) ok "HH: dry-run header reports fly without a connector field" ;;
+  *)            bad "HH: header" "unexpected header: $HDR" ;;
+esac
+# Captured first: under pipefail, `grep -q` closing the pipe early turns a
+# match into a failed pipeline, and the check would pass on exactly the text
+# it exists to catch.
+BODY=$(bash "$ROLLOUT" FAKE/r --pr-body 2>/dev/null)
+if ! printf '%s' "$BODY" | grep -q 'deploy-runner'; then
+  bad "HH: pr body" "lost the deploy-runner bullet: $BODY"
+elif printf '%s\n' "$BODY" | grep -qi 'deploy-connector\|worker'; then
+  bad "HH: pr body" "still advertises a Worker deploy"
+else ok "HH: pr body names no Worker deploy"; fi
+if [ -e "$R_ON/.github/workflows/deploy-connector.yml" ] ||
+   ruby -ryaml -e 'j = YAML.load_file(ARGV[0])["jobs"]; abort unless j.keys.any? { |k| k.include?("connector") }' \
+     "$R_ON/.github/workflows/release-please.yml" 2>/dev/null; then
+  bad "HH: fly-only render" "a fly_dir repo still renders a connector job or stub"
+else ok "HH: a fly_dir repo renders deploy-runner alone"; fi
+if grep -qi 'connector\|worker' "$HERE/templates/fragments/deploy-fly-job.yml"; then
+  bad "HH: deploy-fly-job.yml" "its comment still assumes a Worker job follows"
+else ok "HH: deploy-fly-job.yml stands alone"; fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
