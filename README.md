@@ -33,7 +33,12 @@ diff used to race — and they can disagree. The younger run now stands down
 while an older run of the same workflow is reviewing the same head SHA; run ids
 give both runs the same total order, so exactly one proceeds and neither waits
 on the other. A re-review triggered by a label *after* the first verdict lands
-is not a duplicate and still runs, as does `/auto-review` at any time.
+is not a duplicate and still runs. `/auto-review` never yields to the automatic
+review — it is the fork path, and the only path for a PR that edits the caller
+stub — but a second `/auto-review` stands down while an earlier one is still
+reviewing the same head (zillow-mcp#297 typed it twice and got two rounds,
+the second overwriting the first's follow-up checklist). Once that review
+finishes, `/auto-review` re-reviews as before.
 
 A `fail` does not merely decline to arm — it **de-arms**, removing
 `ready-to-merge` *and* calling `gh pr merge --disable-auto`. Both are needed:
