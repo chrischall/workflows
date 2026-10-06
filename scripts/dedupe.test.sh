@@ -74,6 +74,8 @@ done
 
 case "$endpoint" in
   *"/actions/runs?head_sha="*) fixture="$FIX/runs.json" ;;
+  *"/actions/runs?event=issue_comment"*) fixture="$FIX/comment-runs.json" ;;
+  *"/issues/"*"/comments"*)    fixture="$FIX/comments.json" ;;
   *"/actions/runs/"*"/jobs")   fixture="$FIX/jobs-${endpoint##*/actions/runs/}"; fixture="${fixture%/jobs}.json" ;;
   *"/actions/runs/"*)          fixture="$FIX/run-${endpoint##*/actions/runs/}.json" ;;
   *) exit 1 ;;
@@ -125,7 +127,12 @@ run_case() {
   export FIX="$dir"
   export GITHUB_OUTPUT="$dir/out"; : > "$GITHUB_OUTPUT"
   export GH_TOKEN=pat REPO=chrischall/fetchproxy EVENT=pull_request \
-         RUN_ID=200 SHA=deadbee ELIGIBLE=true
+         RUN_ID=200 SHA=deadbee ELIGIBLE=true \
+         PR_NUMBER=42 COMMENT_ID=900 TITLE='feat: a "quoted" $title'
+  # The issue_comment path looks the PR up in run listings and comments. Seed
+  # empty ones so a pull_request case that never reads them still has them.
+  echo '{"workflow_runs":[]}' > "$dir/comment-runs.json"
+  echo '[]' > "$dir/comments.json"
   "$setup" "$dir"
   bash -e "$TMP/solo.sh" >"$dir/log" 2>&1
   local got; got="$(grep -o 'eligible=[a-z]*' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)"
@@ -215,18 +222,102 @@ case_other_workflow() {
 }
 run_case "G: CI's own run on the same commit is not a review" true case_other_workflow
 
-# --- H: /auto-review is never deduped away ---------------------------------
-# The command IS the fork gate and the manual escape hatch. If a maintainer
-# types it while something else is running, it must still review — otherwise
-# the command silently does nothing and looks broken.
+FORBIDDEN='gh: Resource not accessible by personal access token (HTTP 403)'
+
+# --- H: /auto-review is not deduped against the AUTOMATIC review ----------
+# The command is the fork gate and the manual escape hatch — and on a PR that
+# edits the caller stub, the pull_request run can never emit a verdict, so the
+# command is the only way through. It must still review while a pull_request
+# run is live, or the command silently does nothing and looks broken.
 case_issue_comment() {
   seed_self "$1"
   export EVENT=issue_comment
-  echo '{"workflow_runs":[{"id":100,"workflow_id":7},{"id":200,"workflow_id":7}]}' > "$1/runs.json"
+  echo '{"workflow_runs":[{"id":100,"workflow_id":7,"created_at":"2026-10-06T09:00:00Z"},{"id":200,"workflow_id":7}]}' > "$1/runs.json"
   echo '{"id":100,"workflow_id":7,"status":"in_progress"}' > "$1/run-100.json"
   job_payload in_progress "" > "$1/jobs-100.json"
 }
-run_case "H: /auto-review reviews even alongside a live run" true case_issue_comment
+run_case "H: /auto-review reviews even alongside a live pull_request run" true case_issue_comment
+
+# --- M..T: two /auto-review commands on one commit -------------------------
+# zillow-mcp#297: `/auto-review` posted twice, 32s apart. Each comment gets
+# its own concurrency group (so the reviewer's own progress comment can never
+# cancel the review, #182), so both reviewed the same commit, posted two sets
+# of inline comments, and the second run REGENERATED the follow-up issue —
+# three nits only the first round found vanished from the tracker. The
+# younger command must stand down while an elder command is still reviewing
+# the same head. Same rule as the pull_request twins: younger yields, a
+# FINISHED elder never suppresses a re-review.
+#
+# The comment-run payloads carry the PR title, because an issue_comment run's
+# head_sha is the DEFAULT branch, not the PR — the title is what the Actions
+# API offers. A title can collide across PRs, so an earlier command comment
+# on THIS PR is required as well.
+PUSHED='{"workflow_runs":[{"id":50,"workflow_id":7,"created_at":"2026-10-06T09:00:00Z"},{"id":51,"workflow_id":7,"created_at":"2026-10-06T09:30:00Z"},{"id":52,"workflow_id":99,"created_at":"2026-10-06T08:00:00Z"}]}'
+# cmd <id> <created_at> [body] [association]
+cmd() { jq -nc --argjson id "$1" --arg t "$2" --arg b "${3:-/auto-review}" --arg a "${4:-OWNER}" \
+          '{id: $id, created_at: $t, body: $b, author_association: $a}'; }
+# crun <id> <created_at> <status> [title] [workflow_id]
+crun() { jq -nc --argjson id "$1" --arg t "$2" --arg s "$3" --arg d "${4-$TITLE}" --argjson w "${5:-7}" \
+          '{id: $id, workflow_id: $w, created_at: $t, status: $s, display_title: $d}'; }
+
+# The zillow-mcp#297 shape: elder command run 100 is mid-review.
+seed_twin_commands() {
+  seed_self "$1"
+  export EVENT=issue_comment
+  echo "$PUSHED" > "$1/runs.json"
+  printf '[%s,%s]\n' "$(cmd 800 2026-10-06T09:58:40Z)" "$(cmd 900 2026-10-06T09:59:12Z)" > "$1/comments.json"
+  printf '{"workflow_runs":[%s,%s]}\n' "$(crun 200 2026-10-06T09:59:16Z in_progress)" \
+    "$(crun 100 2026-10-06T09:58:43Z in_progress)" > "$1/comment-runs.json"
+  crun 100 2026-10-06T09:58:43Z in_progress > "$1/run-100.json"
+}
+case_twin_reviewing() { seed_twin_commands "$1"; job_payload in_progress "" > "$1/jobs-100.json"; }
+run_case "M: a second /auto-review stands down while the first is reviewing" false case_twin_reviewing
+
+case_twin_finished() { seed_twin_commands "$1"; crun 100 2026-10-06T09:58:43Z completed > "$1/run-100.json"
+  job_payload completed success > "$1/jobs-100.json"; }
+run_case "N: /auto-review after the first review FINISHED re-reviews" true case_twin_finished
+
+case_twin_late_job() { seed_twin_commands "$1"; printf '%s' "$no_review_job" > "$1/jobs-100.json"
+  job_payload queued "" > "$1/jobs-100.json.2"; }
+run_case "O: waits for the elder command's review job, then stands down" false case_twin_late_job
+
+# A push between the two commands: the elder reviews the OLD head. With
+# rereview_on_push off (the default) the push itself reviews nothing, so this
+# command is the only review the new head will get.
+case_pushed_between() { seed_twin_commands "$1"; job_payload in_progress "" > "$1/jobs-100.json"
+  printf '[%s,%s]\n' "$(cmd 800 2026-10-06T08:30:00Z)" "$(cmd 900 2026-10-06T09:59:12Z)" > "$1/comments.json"; }
+run_case "P: an elder command from BEFORE the head was pushed does not count" true case_pushed_between
+
+# Same title, different PR: a live command run elsewhere, but nobody asked
+# for a review on THIS PR before us. Also: a mention, not a command, and a
+# command from someone the gate does not trust.
+case_no_earlier_command() { seed_twin_commands "$1"; job_payload in_progress "" > "$1/jobs-100.json"
+  printf '[%s,%s,%s]\n' "$(cmd 700 2026-10-06T09:58:00Z 'please do not /auto-review yet')" \
+    "$(cmd 800 2026-10-06T09:58:40Z /auto-review NONE)" "$(cmd 900 2026-10-06T09:59:12Z)" > "$1/comments.json"; }
+run_case "Q: no earlier maintainer command on THIS PR — reviews" true case_no_earlier_command
+
+# The elder live run belongs to another PR (different title), or to another
+# workflow (claude.yml fires on every comment too).
+case_other_title() { seed_twin_commands "$1"; job_payload in_progress "" > "$1/jobs-100.json"
+  printf '{"workflow_runs":[%s,%s]}\n' "$(crun 100 2026-10-06T09:58:43Z in_progress 'fix: something else')" \
+    "$(crun 101 2026-10-06T09:58:43Z in_progress "$TITLE" 99)" > "$1/comment-runs.json"
+  job_payload in_progress "" > "$1/jobs-101.json"; }
+run_case "R: a live run for another PR or workflow is not a twin" true case_other_title
+
+# Bot progress comments start issue_comment runs too; their review job skips.
+case_twin_skipped() { seed_twin_commands "$1"; job_payload completed skipped > "$1/jobs-100.json"; }
+run_case "S: an elder comment run that skipped its review is not a reviewer" true case_twin_skipped
+
+# The head's push time comes from this commit's pull_request runs. None found
+# (or the read refused): the elder's head is unknowable, so review.
+case_push_unknown() { seed_twin_commands "$1"; job_payload in_progress "" > "$1/jobs-100.json"
+  echo '{"workflow_runs":[]}' > "$1/runs.json"; }
+run_case "T: no record of when the head was pushed — reviews" true case_push_unknown
+
+case_comments_refused() { seed_twin_commands "$1"; job_payload in_progress "" > "$1/jobs-100.json"
+  echo "$FORBIDDEN" > "$1/comments.json.err"; }
+run_case "U: a refused comment listing reviews rather than risking no review" true case_comments_refused
+if grep -q '^::warning::' "$LAST_DIR/log"; then ok "U: warns"; else bad "U: warns" "log: $(tr '\n' ' ' < "$LAST_DIR/log")"; fi
 
 # --- I: an ineligible run passes through untouched -------------------------
 case_ineligible() { seed_self "$1"; export ELIGIBLE=false; }
@@ -244,7 +335,6 @@ else ok "I: an ineligible event costs no API calls"; fi
 # `actions: read` this step failed open on EVERY private repo and every
 # `--label`ed PR got two reviews that could disagree — apple-swift-mcp#160
 # got `pass` and `warn` on one commit, and nothing on the run said why.
-FORBIDDEN='gh: Resource not accessible by personal access token (HTTP 403)'
 case_api_down() {
   echo '{"workflow_runs":[]}' > "$1/runs.json"
   echo "$FORBIDDEN" > "$1/run-200.json.err"
