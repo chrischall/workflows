@@ -326,24 +326,7 @@
       "release_config": "none"
     },
     {
-      "repo": "nullnet-app/aikidsbook-backend",
-      "pat_secret": "NULLNET_RELEASE_PAT",
-      "ci": "custom",
-      "release": "none",
-      "dependabot": "gradle",
-      "release_config": "none",
-      "dependabot_ignore": "spring-boot"
-    },
-    {
       "repo": "nullnet-app/nullnet",
-      "pat_secret": "NULLNET_RELEASE_PAT",
-      "ci": "none",
-      "release": "none",
-      "dependabot": "actions",
-      "release_config": "none"
-    },
-    {
-      "repo": "nullnet-app/aikidsbook",
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "none",
       "release": "none",
