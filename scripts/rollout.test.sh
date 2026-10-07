@@ -1377,5 +1377,15 @@ if grep -qi 'connector\|worker' "$HERE/templates/fragments/deploy-fly-job.yml"; 
   bad "HH: deploy-fly-job.yml" "its comment still assumes a Worker job follows"
 else ok "HH: deploy-fly-job.yml stands alone"; fi
 
+# --- II: archived repos leave fleet.json --------------------------------------
+# nullnet-app/aikidsbook and nullnet-app/aikidsbook-backend were archived
+# (2026-10-07). An archived repo rejects pushes, so a sweep that still lists one
+# fails on it; like mcp-connector (HH), they leave fleet.json.
+for r in nullnet-app/aikidsbook nullnet-app/aikidsbook-backend; do
+  if jq -e --arg r "$r" '.repos[] | select(.repo == $r)' "$HERE/fleet.json" >/dev/null; then
+    bad "II: fleet.json" "still lists the archived $r"
+  else ok "II: fleet.json has no $r entry"; fi
+done
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
