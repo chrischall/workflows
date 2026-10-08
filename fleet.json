@@ -558,6 +558,13 @@
       "version_files": "src/version.ts",
       "bump_minor_pre_major": "true",
       "initial_version": "0.1.0"
+    },
+    {
+      "repo": "chrischall/alexa-mcp",
+      "package_name": "@chrischall/alexa-mcp",
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     }
   ]
 }
