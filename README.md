@@ -120,7 +120,9 @@ the `context` job checks `author_association` before anything runs — so a fork
 own author cannot trigger a review of their own PR. That command IS the gate:
 unlike the same-repo path, no event starts a fork review on its own.
 
-A fork verdict ARMS on `pass`/`warn`, exactly as a same-repo one does — the
+A fork verdict ARMS on `pass` only — unlike a same-repo PR, a `warn` holds it:
+a fork's nits are the contributor's to fix, and after the merge nobody will, so
+they are cleared on the PR and `/auto-review` re-run until it passes. The
 command is the human gate, and a fork reaches the review no other way. Arming
 is what starts a fork's CI: the arm-gate stops deferring, the real build runs,
 and `ci-fork-status` posts the true `ci-gated`. It arms ONE commit: the review
