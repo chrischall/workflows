@@ -565,6 +565,14 @@
       "version_files": "src/version.ts",
       "bump_minor_pre_major": "true",
       "initial_version": "0.1.0"
+    },
+    {
+      "repo": "chrischall/concur-mcp",
+      "test_command": "npm run test:coverage",
+      "package_name": "@chrischall/concur-mcp",
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     }
   ]
 }
