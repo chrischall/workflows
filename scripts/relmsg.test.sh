@@ -12,8 +12,8 @@
 # such commits across 13 repos, ten of them feat/fix.
 #
 # The step therefore has to reconstruct the message GitHub will actually
-# create, which is NOT one thing across this fleet: of the 83 repos in
-# fleet.json, 43 squash with COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, 39 with
+# create, which is NOT one thing across this fleet: of the 84 repos in
+# fleet.json, 43 squash with COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, 40 with
 # PR_TITLE/PR_BODY and one with a mixed PR_TITLE/COMMIT_MESSAGES — so the same
 # PR yields a different commit depending on the repo. Most of these cases are
 # about that reconstruction; the parse itself is one library call.
