@@ -38,7 +38,8 @@ name: Reusable PR auto-review
 # its own, and unlike the same-repo path there is no event that triggers it
 # automatically.
 #
-# A fork verdict ARMS, on `pass`/`warn`, exactly as a same-repo one does. The
+# A fork verdict ARMS on `pass` only — a `warn` holds it, because a fork's
+# nits are the contributor's to fix and nobody fixes them after the merge. The
 # human gate did not move: the command itself is it, and a fork can reach the
 # review job no other way. What arming buys a fork is CI — the arm-gate stops
 # deferring and the real build runs, then ci-fork-status posts the true
@@ -1518,7 +1519,8 @@ jobs:
         # workflow runs for GITHUB_TOKEN-triggered events, so a label added
         # that way would not fire the auto-merge workflow.
         # `warn` arms too (nits don't block — tracked via the follow-up issue);
-        # only `fail` keeps the human-in-the-loop gate.
+        # only `fail` keeps the human-in-the-loop gate. Except on a fork, which
+        # arms on `pass` only (see the run script).
         # Arms a fork too, but ONLY down the `/auto-review` path — the sole
         # route a fork has to this job, and one `context` has already gated on
         # `author_association` (OWNER/MEMBER/COLLABORATOR). So a fork is armed
@@ -1648,6 +1650,14 @@ jobs:
           fi
 
           if [ "$IS_FORK" = "true" ]; then
+            # A fork arms on `pass` only. A same-repo `warn` arms because its
+            # nits ride the follow-up issue to a fix the owner makes later; a
+            # fork's nits are the contributor's to fix, and after the merge
+            # nobody will. Held, not de-armed: "not yet" is not "red".
+            if [ "$VERDICT" != "pass" ]; then
+              echo "Verdict=$VERDICT on a fork PR — not arming; forks arm on **pass** only. Clear the nits (see the follow-up issue), then comment /auto-review again."
+              exit 0
+            fi
             if [ -z "$REVIEWED_SHA" ]; then
               echo "::error::no reviewed commit recorded — not arming this fork PR; a fork is armed only for the exact commit auto-review passed."
               exit 1

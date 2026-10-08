@@ -212,7 +212,15 @@ r_line="$(line_of '--remove-label')"
 if [ -n "$r_line" ] && [ -n "$l_line" ] && [ "$r_line" -lt "$l_line" ]; then
   ok "$CASE: removes the label before re-adding it, so labeled fires"
 else bad "$CASE: removes the label before re-adding it, so labeled fires" "remove line=$r_line label line=$l_line"; fi
-fork_case "fork warn" warn "$WARN_COMMENT"; armed yes; posted_armed yes success
+# A fork arms on `pass` ONLY. A same-repo `warn` arms because its nits ride a
+# follow-up issue the owner fixes later; a fork's nits are a stranger's to fix,
+# and once the PR merges nobody will. So `warn` holds a fork until the
+# contributor (or the maintainer) clears the nits and `/auto-review` passes.
+fork_case "fork warn (nits hold a fork)" warn "$WARN_COMMENT"; armed no
+posted_armed no success; reached "not arming"
+# Not a de-arm either: a fork warn says "not yet", not "red". Another commit's
+# arming is already scoped to that commit by its status.
+unarmed no
 # No record, no arming: the label without the status arms nothing any more,
 # and adding it anyway would only mislead a reader of the PR.
 STATUS_POST_FAILS=1 fork_case "fork pass, status post fails" pass "$PASS_COMMENT"; armed no
