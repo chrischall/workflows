@@ -13,7 +13,7 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 | `.github/workflows/reusable-fly-deploy.yml` | reusable workflow | repos with a Fly.io backend |
 | `.github/workflows/reusable-dependabot-lockfix.yml` | reusable workflow | repos with derived lockfiles dependabot can't refresh |
 | `.github/workflows/reusable-release-please.yml` | reusable workflow | MCP repos by default (via `templates/release-please-reusable.yml`; `reusable_release: ""` opts out) |
-| `.github/actions/arm-gate` | composite action | bespoke-CI repos (gradle, swift) |
+| `.github/actions/arm-gate` | composite action | bespoke-CI repos (gradle, swift), and `reusable-mcp-ci.yml`'s gate job |
 | `templates/ci-gradle.yml` | starter template | Gradle/KMP repos |
 | `templates/dependabot-lockfix-{npm,gradle}.yml` | stub templates | repos with `lockfix` set in `fleet.json` |
 | `templates/dependabot-{npm,gradle,actions}.yml` | repo-config template | renders `.github/dependabot.yml`; ecosystem picked by `dependabot` in `fleet.json` |
@@ -78,9 +78,11 @@ unreported `ci-gated` context blocked the merge anyway — but `ci-fork-status.y
 now reports that context, and running unreviewed fork code before a maintainer
 has looked is the thing worth not doing. A fork waits for `ready-to-merge`
 exactly as a same-repo PR does — plus, being a fork, the reviewed-commit status
-described under "Reviewing a fork PR" below. The decision lives in TWO places that must stay
-in step: `.github/actions/arm-gate/action.yml` and the inlined copy in
-`.github/workflows/reusable-mcp-ci.yml`; `scripts/gate.test.sh` exercises both.
+described under "Reviewing a fork PR" below. The decision lives in ONE place,
+`.github/actions/arm-gate/action.yml`: `reusable-mcp-ci.yml`'s gate job calls it
+with `defer-failure: true` (fail mode then hands `msg` to the `ci` job instead of
+failing the gate job). `scripts/gate.test.sh` pins that wiring and runs the
+action's matrix both ways.
 
 **Confirm-gate lint.** After build and tests, `reusable-mcp-ci.yml` starts
 every MCP server the repo builds over stdio and runs mcp-utils'
