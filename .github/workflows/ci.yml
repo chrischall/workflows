@@ -2,7 +2,7 @@ name: CI
 
 # This repo's own check: lint every workflow + parse every action/template.
 # Runs on every PR event (not deferred) so reusable-workflow changes are
-# validated immediately — changes here affect 78 repos.
+# validated immediately — changes here affect every repo in fleet.json.
 
 on:
   pull_request:
