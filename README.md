@@ -16,7 +16,7 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 | `.github/actions/arm-gate` | composite action | bespoke-CI repos (gradle, swift), and `reusable-mcp-ci.yml`'s gate job |
 | `templates/ci-gradle.yml` | starter template | Gradle/KMP repos |
 | `templates/dependabot-lockfix-{npm,gradle}.yml` | stub templates | repos with `lockfix` set in `fleet.json` |
-| `templates/dependabot-{npm,gradle,actions}.yml` | repo-config template | renders `.github/dependabot.yml`; ecosystem picked by `dependabot` in `fleet.json` |
+| `templates/dependabot-{npm,gradle,swift,uv,actions}.yml` | repo-config template | renders `.github/dependabot.yml`; ecosystem picked by `dependabot` in `fleet.json` |
 | `templates/release-please-config.json` | repo-config template | renders `release-please-config.json`; repos with `release_config: mcp` |
 | `templates/release-notes.yml` | repo-config template | renders `.github/release.yml`; all repos unless `release_notes: none` |
 | `.github/actions/mcp-publish` | composite action | MCP publishers |
@@ -389,14 +389,19 @@ nothing.
 
 **Choosing `dependabot`**: by the repo's BUILD MANIFEST, not by what it
 happens to have. `npm` for a root `package.json`, `gradle` for a root
-`build.gradle(.kts)`, `actions` only when there is neither. The initial
+`build.gradle(.kts)`, `swift` for a root `Package.swift`, `uv` for a root
+`pyproject.toml` with a committed `uv.lock`, `actions` only when there is
+none of those. The initial
 classification was a one-time heuristic that checked for `package.json` and
 fell through to `actions` — which silently gave `encore` and
 `aikidsbook-backend` an actions-only config despite root `build.gradle.kts`,
-leaving every Kotlin/AGP/Compose dependency untracked. A wrong value here is
-invisible: the config is valid and dependabot simply watches nothing.
+leaving every Kotlin/AGP/Compose dependency untracked. The same fall-through
+left `apple-swift-mcp` and the three `swift-*-automation` packages on
+`actions` with SwiftPM dependencies, and `outlook-to-pdf` with a uv project
+(fleet-audit#360, #640). A wrong value here is invisible: the config is valid
+and dependabot simply watches nothing.
 
-`fleet.json` keys: `dependabot` (`npm`|`gradle`|`actions`|`none`),
+`fleet.json` keys: `dependabot` (`npm`|`gradle`|`swift`|`uv`|`actions`|`none`),
 `dependabot_ignore` (a fragment name, see below), `dependabot_extra`
 (comma-separated `<ecosystem>:<directory>`, see below),
 `dependabot_extra_ignore` (comma-separated `<ecosystem>:<fragment>`, see
@@ -470,7 +475,10 @@ out of the minor/patch groups (a major is never a drive-by merge) but get
 groups of their own rather than none — before, each major was its own PR and
 curtaincall's first multi-directory run opened 11. npm has `production-majors`
 and `dev-majors` (split by dependency type so the prefix stays `fix`/`chore`),
-gradle `majors`, github-actions `actions-majors`. The `vitest` group still
+gradle, swift and uv `majors`, github-actions `actions-majors`. Swift and uv
+split by update type alone: dependabot documents `dependency-type` groups for
+neither, and swift has no `prefix-development` either, so every swift bump is
+`fix`. The `vitest` group still
 wins vitest and `@vitest/coverage-v8` majors: its exact names score 1000
 against a pattern-less group's 500. Every entry also has a `security` group
 (`applies-to: security-updates`, `patterns: ["*"]`) so a same-day advisory

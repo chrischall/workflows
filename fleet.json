@@ -257,28 +257,28 @@
       "repo": "chrischall/apple-swift-mcp",
       "ci": "custom",
       "release": "custom",
-      "dependabot": "actions",
+      "dependabot": "swift",
       "release_config": "none"
     },
     {
       "repo": "chrischall/outlook-to-pdf",
       "ci": "custom",
       "release": "custom",
-      "dependabot": "actions",
+      "dependabot": "uv",
       "release_config": "none"
     },
     {
       "repo": "chrischall/swift-mail-automation",
       "ci": "custom",
       "release": "custom",
-      "dependabot": "actions",
+      "dependabot": "swift",
       "release_config": "none"
     },
     {
       "repo": "chrischall/swift-notes-automation",
       "ci": "custom",
       "release": "custom",
-      "dependabot": "actions",
+      "dependabot": "swift",
       "release_config": "none"
     },
     {
@@ -400,7 +400,7 @@
       "repo": "chrischall/swift-photos-automation",
       "ci": "custom",
       "release": "custom",
-      "dependabot": "actions",
+      "dependabot": "swift",
       "release_config": "none"
     },
     {

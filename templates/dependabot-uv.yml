@@ -1,0 +1,76 @@
+# Thin config — the fleet-wide shape lives in chrischall/workflows.
+# Renders to: .github/dependabot.yml
+# Regenerate with: scripts/rollout.sh <owner/repo> --execute --only dependabot
+#
+# For repos with a root pyproject.toml managed by uv (a committed uv.lock).
+# `uv`, not `pip`: the uv ecosystem is the one that keeps uv.lock in step with
+# pyproject.toml.
+#
+# uv documents `prefix-development` but not `dependency-type` inside groups,
+# so the groups split by update type alone.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    # Dependabot INFERS a commit prefix from recent history when this is unset.
+    # `fix` for runtime dependencies, so a bump that changes what SHIPS cuts a
+    # patch release; `chore` for dev dependencies, which ship nothing.
+    # release-please reads the squash subject, and the squash subject is this.
+    commit-message:
+      prefix: "fix"
+      prefix-development: "chore"
+      include: "scope"
+    # __DEPENDABOT_IGNORE__
+    groups:
+      uv-dependencies:
+        update-types:
+          - minor
+          - patch
+      # A major is never a drive-by merge, but a week's majors are one PR to
+      # review rather than one PR each.
+      majors:
+        update-types:
+          - major
+      # SECURITY fixes, as ONE PR per update entry. `applies-to` is what
+      # scopes it: a group without that key defaults to version-updates, so
+      # none of the groups above ever collects an advisory, and this one never
+      # collects a routine bump. `*` rather than a dependency type so a
+      # same-day advisory across runtime and dev dependencies still lands as a
+      # single PR.
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # __DEPENDABOT_EXTRA__
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # `ci`, not `fix`: an action version ships nothing to a consumer, so it
+    # belongs in the hidden CI section rather than cutting a patch release.
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch
+      actions-majors:
+        update-types:
+          - major
+      # SECURITY fixes, as ONE PR per update entry. `applies-to` is what
+      # scopes it: a group without that key defaults to version-updates, so
+      # none of the groups above ever collects an advisory, and this one never
+      # collects a routine bump. `*` rather than a dependency type so a
+      # same-day advisory across runtime and dev dependencies still lands as a
+      # single PR.
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
