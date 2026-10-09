@@ -228,7 +228,7 @@ jobs:
         # first failure 22:19:42Z, with no change on our side in between.
         # Stays an exact tag: the fleet pins every third-party action to one
         # (scripts/action-pins.test.sh rejects `@v1`), and dependabot bumps it.
-        uses: anthropics/claude-code-action@v1.0.240
+        uses: anthropics/claude-code-action@v1.0.244
         with:
           # Auth via the user's Claude Max plan (OAuth token from
           # `claude setup-token`). Counts against the Max subscription's
