@@ -181,7 +181,7 @@ entries.each do |repo, entry|
         # Only `security` may carry applies-to — a version group that did
         # would swallow advisories into a PR full of unrelated majors.
         majors = { 'npm' => %w[production-majors dev-majors], 'gradle' => %w[majors],
-                   'github-actions' => %w[actions-majors] }
+                   'github-actions' => %w[actions-majors], 'swift' => %w[majors], 'uv' => %w[majors] }
         (doc['updates'] || []).each do |u|
           at = "#{repo}/#{rel}: #{u['package-ecosystem']} #{dirs.(u).inspect}"
           failures << "#{at}: has both directory and directories" if u.key?('directory') && u.key?('directories')

@@ -57,6 +57,10 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # loudly: an unknown fragment, no `<ecosystem>:` prefix, one ecosystem named
 # twice, no extra entry in that ecosystem, and an ecosystem whose extras merged
 # into the root entry.
+# FAKE/sw is a SwiftPM package and FAKE/uv a uv-managed Python project
+# (fleet-audit#360, #640): both used to fall through to the actions-only
+# variant, which is valid config that watches none of their dependencies.
+# FAKE/swi is FAKE/sw with a dependabot_ignore hold.
 # FAKE/n opts out of both repo-config templates, which is the only way to prove
 # an opt-out renders NOTHING rather than an empty file.
 # FAKE/p is a pre-1.0 repo: it sets the two optional release-please keys the
@@ -124,6 +128,12 @@ jq '{defaults: .defaults,
              {repo: "FAKE/mxroot", dependabot_extra: "npm:/web",
               dependabot_extra_ignore: "npm:next-lint-peers",
               ci: "none", release: "none", package_name: "fake-mxroot"},
+             {repo: "FAKE/sw", dependabot: "swift", ci: "none", release: "none",
+              package_name: "fake-sw"},
+             {repo: "FAKE/uv", dependabot: "uv", ci: "none", release: "none",
+              package_name: "fake-uv"},
+             {repo: "FAKE/swi", dependabot: "swift", dependabot_ignore: "vitest-major",
+              ci: "none", release: "none", package_name: "fake-swi"},
              {repo: "FAKE/n", dependabot: "none", release_config: "none",
               release_notes: "none"},
              {repo: "FAKE/r", reusable_release: "true", fly_dir: "server",
@@ -667,6 +677,8 @@ while IFS= read -r t; do
   case "$tname" in
     dependabot-gradle.yml)  repo=FAKE/g ;;
     dependabot-actions.yml) repo=FAKE/a ;;
+    dependabot-swift.yml)   repo=FAKE/sw ;;
+    dependabot-uv.yml)      repo=FAKE/uv ;;
     *)                      repo=FAKE/x ;;
   esac
   rm -rf "$TMP/only-q"
@@ -1286,6 +1298,7 @@ ARGV.each do |f|
            when 'npm' then { 'production-majors' => 'production', 'dev-majors' => 'development' }
            when 'gradle' then { 'majors' => nil }
            when 'github-actions' then { 'actions-majors' => nil }
+           when 'swift', 'uv' then { 'majors' => nil }
            else {}
            end
     want.each do |n, dt|
@@ -1309,8 +1322,12 @@ ARGV.each do |f|
 end
 abort errs.join("\n") unless errs.empty?
 RUBY
+# The SwiftPM and uv variants (JJ) render here too, so the grouping contract
+# covers every root template, not just the ones that predate them.
+bash "$ROLLOUT" FAKE/sw --render "$TMP/swift" --only dependabot >/dev/null 2>&1
+bash "$ROLLOUT" FAKE/uv --render "$TMP/uv" --only dependabot >/dev/null 2>&1
 files=()
-for case in paths gradle actions-only multi multi-actions multi-root multi-act; do
+for case in paths gradle actions-only multi multi-actions multi-root multi-act swift uv; do
   files+=("$TMP/$case/.github/dependabot.yml")
 done
 if ruby "$TMP/gg.rb" "${files[@]}" 2>"$TMP/gg.err"; then
@@ -1385,6 +1402,68 @@ for r in nullnet-app/aikidsbook nullnet-app/aikidsbook-backend; do
   if jq -e --arg r "$r" '.repos[] | select(.repo == $r)' "$HERE/fleet.json" >/dev/null; then
     bad "II: fleet.json" "still lists the archived $r"
   else ok "II: fleet.json has no $r entry"; fi
+done
+
+# --- JJ: SwiftPM and uv repos watch their own manifests ----------------------
+# fleet-audit#360 (apple-swift-mcp) and #640 (outlook-to-pdf): with only
+# npm/gradle/actions variants, a Package.swift or a pyproject.toml/uv.lock repo
+# rendered the actions-only config. That config is VALID, which is the problem:
+# dependabot ran green every week and never looked at a single dependency.
+for spec in "FAKE/sw:swift" "FAKE/uv:uv"; do
+  repo="${spec%%:*}"; eco="${spec##*:}"
+  DIR="$TMP/$eco"
+  bash "$ROLLOUT" "$repo" --render "$DIR" --only dependabot >/dev/null 2>"$TMP/jj.err"
+  f="$DIR/.github/dependabot.yml"
+  [ -f "$f" ] || { bad "JJ: $eco" "no rendered dependabot.yml: $(cat "$TMP/jj.err")"; continue; }
+  if grep -q '__[A-Z_]*__' "$f"; then
+    bad "JJ: $eco markers" "a placeholder rendered literally: $(grep -n '__[A-Z_]*__' "$f")"
+  else ok "JJ: $eco renders with every marker consumed"; fi
+  if ruby -ryaml -e '
+      eco = ARGV[1]
+      u = YAML.safe_load(File.read(ARGV[0]))["updates"] || []
+      got = u.map { |x| x["package-ecosystem"] }
+      abort "ecosystems #{got.inspect}, want [#{eco}, github-actions]" unless got == [eco, "github-actions"]
+      e = u[0]
+      abort "#{eco} watches #{e["directory"].inspect}, want /" unless e["directory"] == "/"
+      cm = e["commit-message"] or abort "no commit-message (dependabot would infer one from git history)"
+      abort "prefix #{cm["prefix"].inspect}, want fix — a bump changes what ships" unless cm["prefix"] == "fix"
+      abort "no scope" unless cm["include"] == "scope"
+      # Only uv documents prefix-development; swift does not, so the swift
+      # entry must not carry a key dependabot would reject or ignore.
+      want_dev = eco == "uv" ? "chore" : nil
+      abort "prefix-development #{cm["prefix-development"].inspect}, want #{want_dev.inspect}" unless cm["prefix-development"] == want_dev
+      g = e["groups"] || {}
+      mp = g["#{eco}-dependencies"] or abort "no #{eco}-dependencies group"
+      abort "#{eco}-dependencies update-types #{mp["update-types"].inspect}" unless mp["update-types"] == %w[minor patch]
+      # Neither ecosystem documents `dependency-type` in groups (npm and pip
+      # do), so a production/development split would be config dependabot
+      # does not honour — every group here must be type-agnostic.
+      g.each { |n, x| abort "group #{n} sets dependency-type, unsupported for #{eco}" if x.key?("dependency-type") }
+    ' "$f" "$eco" 2>"$TMP/jj2.err"; then
+    ok "JJ: $eco watches / with fix-prefixed, type-agnostic groups beside github-actions"
+  else
+    bad "JJ: $eco" "$(cat "$TMP/jj2.err")"
+  fi
+done
+
+# A hold has to reach these entries too, or a SwiftPM/uv repo needing one is
+# pushed back to `dependabot: none` — the opt-out the fragments replaced.
+bash "$ROLLOUT" FAKE/swi --render "$TMP/jj-ign" --only dependabot >/dev/null 2>&1
+if ruby -ryaml -e '
+    u = YAML.safe_load(File.read(ARGV[0]))["updates"].find { |x| x["package-ecosystem"] == "swift" }
+    abort "ignore did not splice onto the swift entry" if (u["ignore"] || []).empty?
+  ' "$TMP/jj-ign/.github/dependabot.yml" 2>/dev/null; then
+  ok "JJ: dependabot_ignore splices onto the swift entry"
+else bad "JJ: swift ignore" "the __DEPENDABOT_IGNORE__ marker is missing from dependabot-swift.yml"; fi
+
+# The audit's repos, pinned: each one's ROOT manifest decides its variant.
+for spec in chrischall/apple-swift-mcp:swift chrischall/swift-mail-automation:swift \
+            chrischall/swift-notes-automation:swift chrischall/swift-photos-automation:swift \
+            chrischall/outlook-to-pdf:uv; do
+  r="${spec%%:*}"; want="${spec##*:}"
+  got=$(jq -r --arg r "$r" '.repos[] | select(.repo == $r) | .dependabot // .defaults.dependabot' "$HERE/fleet.json")
+  if [ "$got" = "$want" ]; then ok "JJ: $r selects dependabot: $want"
+  else bad "JJ: $r" "fleet.json selects dependabot: ${got:-<missing>}, want $want"; fi
 done
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
