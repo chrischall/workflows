@@ -121,6 +121,15 @@ if (src.includes('CONFIRM_BOOLEAN')) {
   process.exit(1);
 }
 console.log('confirm gates   confirm-boolean 0   ungated writes 0');
+// mcp-utils >= 3.0.0 prints its surface checks after the summary: one count
+// line, then GitHub `::warning` lines that leave the exit code alone unless
+// --strict is passed.
+if (src.includes('SURFACE_WARNINGS')) {
+  console.log('surface checks   annotations 1   manifest-tools 1   env 0');
+  console.log('::warning::x_get_thing has no explicit openWorldHint;   read        x_ghost');
+  console.log('::warning file=manifest.json::manifest.json lists x_ghost, which the server does not serve.');
+  if (process.argv.includes('--strict')) process.exit(1);
+}
 JS
 export FAKE_FS_AUDIT="$TMP/fake-fs-audit.mjs"
 cat > "$FAKE_FS_AUDIT" <<'JS'
@@ -201,6 +210,13 @@ expect "a boolean confirm input fails the step" 1 "dist/index.js"
 if printf '%s\n' "$OUT" | grep -qF '::error::dist/index.js failed the confirm-gate lint'; then
   ok "the failure is annotated with the entry and what to do"
 else bad "the failure is annotated with the entry and what to do" "$OUT"; fi
+
+F="$TMP/surface"; pkg "$F" "{\"name\":\"w-mcp\",\"bin\":{\"w-mcp\":\"dist/index.js\"},$SDK}"; server "$F/dist/index.js" SURFACE_WARNINGS
+run_case "$F"
+expect "surface-check warnings (mcp-utils 3.x) are advisory: the step passes (no --strict)" 0 "dist/index.js"
+if printf '%s\n' "$OUT" | grep -qF '::warning file=manifest.json::' && ! printf '%s\n' "$OUT" | grep -q '::error'; then
+  ok "the warnings reach the log as annotations, and nothing is raised to an error"
+else bad "the warnings reach the log as annotations, and nothing is raised to an error" "$OUT"; fi
 
 F="$TMP/unbuilt"; pkg "$F" "{\"name\":\"u-mcp\",\"bin\":{\"u-mcp\":\"dist/index.js\"},$SDK}"
 run_case "$F"
