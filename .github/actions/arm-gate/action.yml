@@ -71,7 +71,8 @@ description: >
   fleet's deferred-merge gate; it lives here so the fix is defined once and
   consumed by every repo via @main — including bespoke (gradle, swift, …) CI
   jobs that can't use a reusable workflow because they carry repo-specific
-  build steps.
+  build steps — and reusable-mcp-ci.yml's own gate job, which calls it with
+  `defer-failure: true` rather than keep a second copy (fleet-audit#1142).
 
 inputs:
   mode:
@@ -80,6 +81,15 @@ inputs:
       pending `ci-gated` commit status and set output run=false instead).
     required: false
     default: fail
+  defer-failure:
+    description: >-
+      Fail mode only. "true": on an un-armed PR, publish the message as output
+      `msg` and exit 0 instead of failing this step — for a caller that fails
+      its required check from a LATER job (reusable-mcp-ci.yml's gate job, whose
+      `ci` job fails `ci / ci`). Off by default: a bespoke CI job uses this
+      action as its first step, and that job's own red check is the block.
+    required: false
+    default: "false"
 
 outputs:
   is_fork:
@@ -93,6 +103,10 @@ outputs:
       "true" when real CI should run; "false" when the gate blocked (status
       mode) or suppressed a duplicate run. Guard every build step with it.
     value: ${{ steps.gate.outputs.run }}
+  msg:
+    description: >-
+      On an un-armed PR, why CI was deferred and what arms it. Empty otherwise.
+    value: ${{ steps.gate.outputs.msg }}
 
 runs:
   using: composite
@@ -103,6 +117,7 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
         MODE: ${{ inputs.mode }}
+        DEFER_FAILURE: ${{ inputs.defer-failure }}
         EVENT_NAME: ${{ github.event_name }}
         EVENT_ACTION: ${{ github.event.action }}
         EVENT_LABEL: ${{ github.event.label.name }}
@@ -141,7 +156,8 @@ runs:
         # when a run was created, not whether it built, so every run created
         # after the arming has to build.
         #
-        # KEEP IN SYNC with the `Arm gate` step in reusable-mcp-ci.yml.
+        # The only copy: reusable-mcp-ci.yml's gate job calls this action
+        # (fleet-audit#1142), so a fix here reaches every repo.
         if [ "$ARMED" = "true" ] && [ "$IS_FORK" = "true" ]; then
           if ! REVIEWED_AT="$(gh api "repos/$REPO/commits/$HEAD_SHA/statuses?per_page=100" \
                 --jq 'map(select(.context=="auto-review/armed")) | .[0] | select(.state=="success") | .created_at')"; then
@@ -199,6 +215,7 @@ runs:
             MSG="CI is deferred until auto-review arms this PR with the 'ready-to-merge' label."
             DESC="CI deferred until auto-review arms this PR (ready-to-merge)" ;;
         esac
+        echo "msg=$MSG" >> "$GITHUB_OUTPUT"
         if [ "$MODE" = "status" ]; then
           # Block via a pending commit status; the job itself stays green.
           # If this POST fails (missing statuses:write grant), the step — and
@@ -231,6 +248,12 @@ runs:
             -f state=pending -f context=ci-gated \
             -f description="$DESC" >/dev/null
           echo "un-armed → posted 'ci-gated: pending' (blocks merge); job stays green. $MSG"
+          exit 0
+        fi
+        if [ "$DEFER_FAILURE" = "true" ]; then
+          # The caller fails its required check from a later job (see the
+          # defer-failure input), so this step stays green and hands it `msg`.
+          echo "un-armed (fail mode) → the caller's required check will fail red. $MSG"
           exit 0
         fi
         echo "::error::$MSG This failing check is expected and clears once the PR is armed."

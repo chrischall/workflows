@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Unit tests for reusable-mcp-ci.yml's `Arm gate` and `Report ci-gated status`
-# scripts — the two places that decide whether CI runs and whether the required
-# `ci-gated` context gets posted.
+# Unit tests for the arm-gate action (which reusable-mcp-ci.yml's `Arm gate`
+# step calls) and reusable-mcp-ci.yml's `Report ci-gated status` script — the
+# two places that decide whether CI runs and whether the required `ci-gated`
+# context gets posted.
 #
 # Both are pure bash over env vars with a single external dependency (`gh`), so
 # they can be tested hermetically the same way `rollout.test.sh` tests the
@@ -39,23 +40,26 @@ PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf 'ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf 'FAIL %s\n     %s\n' "$1" "$2"; }
 
-# --- extract the two scripts from the shipped workflow ---------------------
-ruby -ryaml -e '
+# --- extract the scripts from the shipped workflow and actions -------------
+# The arming decision exists ONCE, in the arm-gate composite action
+# (fleet-audit#1142). reusable-mcp-ci.yml's `Arm gate` step used to carry an
+# inline copy marked KEEP IN SYNC, and every gate fix (#283) had to land twice.
+# Its gate job now calls the action; what is extracted from the workflow is
+# that wiring (checked below), plus the reporter, which is still inline.
+ruby -ryaml -rjson -e '
   wf = YAML.load_file(ARGV[0])
   gate = wf["jobs"]["gate"]["steps"].find { |s| s["name"] == "Arm gate" }
   rep  = wf["jobs"]["ci"]["steps"].find { |s| s["name"] == "Report ci-gated status" }
   abort("could not find `Arm gate` step") unless gate
   abort("could not find `Report ci-gated status` step") unless rep
-  File.write(ARGV[1], gate["run"])
+  File.write(ARGV[1], JSON.generate({ "step" => gate, "outputs" => wf["jobs"]["gate"]["outputs"] }))
   File.write(ARGV[2], rep["run"])
 
-  # The composite action carries the same gate rule for bespoke-CI repos
-  # (Gradle/KMP, Swift), which cannot call a reusable workflow. It has drifted
-  # from the workflow before, so it is tested against the same matrix.
   act = YAML.load_file(ARGV[3])
   step = act["runs"]["steps"].find { |s| s["run"] }
   abort("could not find a run step in arm-gate") unless step
   File.write(ARGV[4], step["run"])
+  File.write(ARGV[7], JSON.generate({ "inputs" => act["inputs"], "outputs" => act["outputs"], "env" => step["env"], "id" => step["id"] }))
 
   # The fork reporter posts the SAME required context from a different repo
   # context, so it is the third place that can satisfy or block a merge.
@@ -63,7 +67,7 @@ ruby -ryaml -e '
   fstep = fork["runs"]["steps"].find { |s| s["run"] }
   abort("could not find a run step in fork-ci-status") unless fstep
   File.write(ARGV[6], fstep["run"])
-' "$WF" "$TMP/gate.sh" "$TMP/report.sh" "$ACT" "$TMP/armgate.sh" "$FORK" "$TMP/fork.sh" \
+' "$WF" "$TMP/gate.json" "$TMP/report.sh" "$ACT" "$TMP/armgate.sh" "$FORK" "$TMP/fork.sh" "$TMP/armgate.json" \
   || { echo "FAIL: could not extract steps from $WF / $ACT"; exit 1; }
 
 # --- fake gh ---------------------------------------------------------------
@@ -140,7 +144,7 @@ gate_case() {
   unset EXISTING_CI_GATED CI_GATED_READ_FAILS ARMED_AT ARMED_READ_FAILS
   export GH_TOKEN=x MODE=status EVENT_NAME=pull_request EVENT_ACTION=synchronize \
          EVENT_LABEL="" USER_TYPE=User HEAD_REF=feature HEAD_SHA=deadbeef \
-         PR_HEAD_REPO="$BASE" LABELS="" REPO="$BASE"
+         PR_HEAD_REPO="$BASE" LABELS="" REPO="$BASE" DEFER_FAILURE="$GATE_DEFER"
   local kv; for kv in "$@"; do export "${kv?}"; done
 
   bash $GATE_SHELL_FLAGS "$GATE_SCRIPT" >"$dir/log" 2>&1
@@ -175,7 +179,37 @@ report_case() {
   fi
 }
 
-GATE_SCRIPT="$TMP/gate.sh"; GATE_SHELL_FLAGS="-e"
+echo "── reusable-mcp-ci.yml's gate job calls the one arm-gate action ──"
+# A run: block here is the old inline copy coming back (fleet-audit#1142).
+wiring() { jq -r "$1" "$TMP/gate.json"; }
+if [ "$(wiring '.step.uses // ""')" = "chrischall/workflows/.github/actions/arm-gate@main" ]; then
+  ok "gate job: Arm gate uses chrischall/workflows/.github/actions/arm-gate@main"
+else bad "gate job: Arm gate uses the arm-gate action" "uses: $(wiring '.step.uses // "(none)"')"; fi
+if [ "$(wiring '.step | has("run")')" = "false" ]; then ok "gate job: no inline copy of the gate script"
+else bad "gate job: no inline copy of the gate script" "the Arm gate step still has a run: block"; fi
+if [ "$(wiring '.step.id // ""')" = "gate" ]; then ok "gate job: step id is gate"
+else bad "gate job: step id is gate" "id: $(wiring '.step.id // "(none)"')"; fi
+if [ "$(wiring '.step.with.mode // ""')" = '${{ inputs.gate-mode }}' ]; then ok "gate job: passes gate-mode through as mode"
+else bad "gate job: passes gate-mode through as mode" "mode: $(wiring '.step.with.mode // "(none)"')"; fi
+# fail mode: the reusable shape fails `ci / ci` from the ci job, not the gate
+# job, so the action must hand back the message and exit 0 here.
+if [ "$(wiring '.step.with["defer-failure"] // "" | tostring')" = "true" ]; then ok "gate job: defers the fail-mode failure to the ci job"
+else bad "gate job: defers the fail-mode failure to the ci job" "defer-failure: $(wiring '.step.with["defer-failure"] // "(none)" | tostring')"; fi
+for o in run msg; do
+  if [ "$(wiring ".outputs.$o // \"\"")" = "\${{ steps.gate.outputs.$o }}" ]; then ok "gate job: output $o comes from the action"
+  else bad "gate job: output $o comes from the action" "$o: $(wiring ".outputs.$o // \"(none)\"")"; fi
+done
+act() { jq -r "$1" "$TMP/armgate.json"; }
+if [ "$(act '.inputs["defer-failure"].default // "" | tostring')" = "false" ]; then ok "arm-gate: defer-failure is optional and off by default"
+else bad "arm-gate: defer-failure is optional and off by default" "$(act '.inputs["defer-failure"] // "(none)" | tostring')"; fi
+if [ "$(act '.env.DEFER_FAILURE // ""')" = '${{ inputs.defer-failure }}' ]; then ok "arm-gate: the script reads defer-failure"
+else bad "arm-gate: the script reads defer-failure" "env DEFER_FAILURE: $(act '.env.DEFER_FAILURE // "(none)"')"; fi
+if [ "$(act '.outputs.msg.value // ""')" = "\${{ steps.$(act .id).outputs.msg }}" ]; then ok "arm-gate: publishes msg"
+else bad "arm-gate: publishes msg" "$(act '.outputs.msg // "(none)" | tostring')"; fi
+
+# The reusable workflow's rows run the action's script with defer-failure on,
+# exactly as the gate job invokes it.
+GATE_SCRIPT="$TMP/armgate.sh"; GATE_SHELL_FLAGS="-eo pipefail"; GATE_DEFER=true
 echo "── Arm gate (reusable-mcp-ci.yml), status mode ──"
 gate_case "same-repo un-armed → blocked by pending"  false pending
 gate_case "same-repo armed → run, gate posts nothing" true none    LABELS=ready-to-merge
@@ -252,11 +286,10 @@ gate_case "armed, ci-gated failure → still run CI"   true  none    LABELS=read
 # fail mode posts nothing at all, so it cannot clobber and must not read.
 gate_case "fail mode, ci-gated success → no post"    false none    MODE=fail EXISTING_CI_GATED=success
 
-echo "── arm-gate composite (same rule, bespoke-CI repos) ──"
-# Row-for-row the same matrix as the reusable workflow above. Keep them in
-# lockstep: a row that exists on only one side is exactly how the two drifted
-# apart before, and a divergence here is invisible until it wedges a repo.
-GATE_SCRIPT="$TMP/armgate.sh"; GATE_SHELL_FLAGS="-eo pipefail"
+echo "── arm-gate composite as bespoke-CI repos call it (defer-failure off) ──"
+# The same script as above, invoked the other way. Row-for-row the same matrix,
+# because defer-failure must change nothing but fail mode's un-armed exit.
+GATE_SCRIPT="$TMP/armgate.sh"; GATE_SHELL_FLAGS="-eo pipefail"; GATE_DEFER=false
 gate_case "same-repo un-armed → blocked by pending"  false pending
 gate_case "same-repo armed → run"                    true  none    LABELS=ready-to-merge
 gate_case "armed + non-arming label → no duplicate"  false none    LABELS=ready-to-merge EVENT_ACTION=labeled EVENT_LABEL=documentation
@@ -288,6 +321,35 @@ gate_case "un-armed, status read fails → post"       false pending CI_GATED_RE
 gate_case "armed, ci-gated success → still run CI"   true  none    LABELS=ready-to-merge EXISTING_CI_GATED=success
 gate_case "armed, ci-gated failure → still run CI"   true  none    LABELS=ready-to-merge EXISTING_CI_GATED=failure
 gate_case "fail mode, ci-gated success → no post"    false none    MODE=fail EXISTING_CI_GATED=success
+
+# fail mode's un-armed exit, both ways the action is invoked. Bespoke-CI repos
+# use the action as the first step of the job whose check gates the merge, so
+# it must fail that job itself. The reusable workflow's gate job instead hands
+# the message to the ci job, which fails `ci / ci` — a red gate job there
+# would skip ci and leave the required check never reported.
+failmode_case() { # failmode_case <name> <defer> <want rc 0|1>
+  local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
+  export GITHUB_OUTPUT="$dir/out" GH_CALLS="$dir/gh"; : > "$GITHUB_OUTPUT"; : > "$GH_CALLS"
+  unset EXISTING_CI_GATED CI_GATED_READ_FAILS ARMED_AT ARMED_READ_FAILS
+  export GH_TOKEN=x MODE=fail EVENT_NAME=pull_request EVENT_ACTION=synchronize \
+         EVENT_LABEL="" USER_TYPE=User HEAD_REF=feature HEAD_SHA=deadbeef \
+         PR_HEAD_REPO="$BASE" LABELS="" REPO="$BASE" DEFER_FAILURE="$2"
+  bash -eo pipefail "$TMP/armgate.sh" >"$dir/log" 2>&1
+  local rc=$? want="$3"
+  if { [ "$want" = 0 ] && [ "$rc" -eq 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -ne 0 ]; }; then ok "fail mode, $1: exit $want"
+  else bad "fail mode, $1: exit $want" "rc=$rc log: $(tr '\n' ' ' < "$dir/log")"; fi
+  if grep -q '^msg=CI is deferred until auto-review arms this PR' "$GITHUB_OUTPUT"; then ok "fail mode, $1: publishes msg"
+  else bad "fail mode, $1: publishes msg" "$(cat "$GITHUB_OUTPUT")"; fi
+  local errs=no; grep -q '::error::' "$dir/log" && errs=yes
+  local want_err=yes; [ "$want" = 0 ] && want_err=no
+  if [ "$errs" = "$want_err" ]; then ok "fail mode, $1: ::error:: in its own log=$want_err"
+  else bad "fail mode, $1: ::error:: in its own log=$want_err" "log: $(tr '\n' ' ' < "$dir/log")"; fi
+  if [ "$(posted_state "$GH_CALLS")" = none ]; then ok "fail mode, $1: posts nothing"
+  else bad "fail mode, $1: posts nothing" "$(cat "$GH_CALLS")"; fi
+}
+failmode_case "bespoke job (defer-failure off) fails itself"       false 1
+failmode_case "reusable gate job (defer-failure on) defers to ci" true  0
+failmode_case "defer-failure unset behaves as off"                 ""    1
 
 # The composite's contract with a consumer's reporter step: `is_fork` must be
 # published on EVERY path, or a reporter guarding on it 403s on a fork.

@@ -10,14 +10,30 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
       - name: actionlint
+        # A pinned release asset, SHA-256 checked (fail-closed) — the way
+        # install-mcp-publisher installs its binary. This used to pipe
+        # download-actionlint.bash from actionlint's `main` branch into bash
+        # (fleet-audit#805). To bump: new version + the linux_amd64 line of
+        # that release's actionlint_<version>_checksums.txt.
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
         run: |
-          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.7
+          set -euo pipefail
+          tarball="${RUNNER_TEMP}/actionlint.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar xzf "$tarball" actionlint
           ./actionlint -color
       - name: validate composite actions and templates parse
         run: |

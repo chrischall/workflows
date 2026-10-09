@@ -135,6 +135,67 @@ else
   bad "unpinned npx in a composite action (pin an exact version, e.g. pkg@1.2.3)" "$npx_hits"
 fi
 
+# Dependabot must see every pin it is meant to bump (fleet-audit#806). The
+# github-actions ecosystem's `directory: /` means .github/workflows only, so a
+# composite action's own `uses:` (mcp-publish's setup-node runs in the publish
+# job of every fleet repo) was never raised and drifted behind the workflows.
+# Every .github/actions/* directory must appear in .github/dependabot.yml.
+# shellcheck disable=SC2016  # ruby source, not shell
+uncovered=$(ruby -ryaml -e '
+  cfg = YAML.load_file(".github/dependabot.yml")
+  dirs = cfg["updates"].select { |u| u["package-ecosystem"] == "github-actions" }
+           .flat_map { |u| [u["directory"], *Array(u["directories"])].compact }
+  Dir.glob(".github/actions/*/action.y{a,}ml").map { |f| "/" + File.dirname(f) }.sort.each do |d|
+    puts d unless dirs.include?(d)
+  end' 2>&1)
+if [ -z "$uncovered" ]; then
+  ok "dependabot covers every composite action directory"
+else
+  bad "composite action directories dependabot never bumps (add them to .github/dependabot.yml directories:)" "$uncovered"
+fi
+
+# Remote scripts executed straight off the network (fleet-audit#805). CI here
+# installed actionlint with `bash <(curl -s …/main/scripts/download-actionlint.bash)`:
+# whatever sat on a third party's branch that minute ran in the job, and `-s`
+# without `-f` would feed an HTTP error page to bash. A tool is installed the
+# way install-mcp-publisher does it — a pinned release asset, SHA-256 checked.
+piped_remote() {
+  printf '%s\n' "$1" | grep -E '(bash|sh)[[:space:]]+<\([[:space:]]*(curl|wget)|(curl|wget)[^|#]*\|[[:space:]]*(sudo[[:space:]]+)?(ba)?sh([[:space:]]|$)' || true
+}
+for line in \
+  'bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.7' \
+  'curl -fsSL https://example.com/install.sh | bash' \
+  'curl -sL https://example.com/install.sh | sudo sh' \
+  'wget -qO- https://example.com/i.sh | sh -s -- 1.2.3'; do
+  if [ -n "$(piped_remote "$line")" ]; then ok "remote-script check catches: $line"
+  else bad "remote-script check misses a piped remote script" "$line"; fi
+done
+for line in \
+  'curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v1.7.12/x.tar.gz" -o "$tarball"' \
+  'echo "${SHA}  ${tarball}" | sha256sum -c -' \
+  'gh api user --jq .login | head -1'; do
+  if [ -n "$(piped_remote "$line")" ]; then bad "remote-script check flags a safe line" "$line"
+  else ok "remote-script check allows: $line"; fi
+done
+remote_hits=$(grep -rEn --include='*.yml' --include='*.yaml' '(curl|wget)' .github templates 2>/dev/null \
+  | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*#' | while IFS= read -r hit; do
+      [ -n "$(piped_remote "${hit#*:*:}")" ] && printf '%s\n' "$hit"
+    done)
+if [ -z "$remote_hits" ]; then
+  ok "no workflow pipes a downloaded script into a shell"
+else
+  bad "a downloaded script is piped into a shell (download a pinned release asset and verify its SHA-256)" "$remote_hits"
+fi
+# The same finding: this repo's own CI ran on the repo-default token. It only
+# reads the checkout, so it asks for exactly that.
+# shellcheck disable=SC2016  # ruby source, not shell
+ci_perms=$(ruby -ryaml -e 'print YAML.load_file(".github/workflows/ci.yml")["permissions"].inspect')
+if [ "$ci_perms" = '{"contents"=>"read"}' ] || [ "$ci_perms" = '{"contents" => "read"}' ]; then
+  ok "ci.yml runs on a read-only token (permissions: contents: read)"
+else
+  bad "ci.yml runs on a read-only token" "top-level permissions: $ci_perms"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

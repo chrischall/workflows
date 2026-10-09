@@ -14,14 +14,24 @@
 # nothing in EITHER repo would have raised the bump
 # (chrischall/workflows#283, mcp-host's beta review M5).
 #
-# Scope: `directory: /` is the github-actions ecosystem's way of saying
-# `.github/workflows`. The composite actions under `.github/actions/*` are NOT
-# covered by it; add an entry per action directory if one of their pins ever
-# becomes load-bearing the way the release-please pin is.
+# Scope: `/` is the github-actions ecosystem's way of saying
+# `.github/workflows`; it does NOT reach the composite actions, so each
+# `.github/actions/*` directory is listed too. Their pins run inside every
+# fleet repo's jobs (mcp-publish's setup-node runs in the publish job), and an
+# unlisted one silently fell behind the workflows (fleet-audit#806).
+# scripts/action-pins.test.sh fails CI when a new action directory is missing
+# here. templates/ and skills/ are not files dependabot can parse; the pin
+# guard holds them to exact release tags instead.
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/arm-gate
+      - /.github/actions/credit-contributors
+      - /.github/actions/fork-ci-status
+      - /.github/actions/install-mcp-publisher
+      - /.github/actions/mcp-publish
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
