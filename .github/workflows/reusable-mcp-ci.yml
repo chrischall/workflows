@@ -131,6 +131,17 @@ on:
         type: boolean
         required: false
         default: true
+      strict-surface-lint:
+        description: >-
+          Run the confirm-gate lint's audit-annotations.mjs with --strict, so
+          its surface warnings (annotations, manifest.json tool roster,
+          env-var drift, plugin MCP config) fail CI instead of only being
+          annotated. On by default; set false only as a per-repo emergency
+          opt-out while the warnings are fixed (the warnings still show).
+          Has no effect when confirm-gate-lint is false.
+        type: boolean
+        required: false
+        default: true
 
 jobs:
   # Always runs. Decides whether real CI should run, and in status mode posts
@@ -254,6 +265,14 @@ jobs:
       # same tagged clone, before any server starts, and a failure there
       # still lets the served lint run so one push shows every problem.
       # Each half has its own input so a repo can opt out of one.
+      #
+      # Surface checks: since mcp-utils 3.0.0 audit-annotations.mjs also
+      # prints `::warning` lines for missing annotation hints, a manifest.json
+      # tools[] roster that differs from the served tools, env vars read but
+      # undeclared (or declared but dead), and plugin MCP config mistakes.
+      # They fail CI because this step passes --strict (all fleet repos were
+      # clean under 3.0.2 when it was turned on); strict-surface-lint: false
+      # is the per-repo emergency opt-out that makes them advisory again.
       # scripts/confirm-gate-lint.test.sh runs this exact script.
       - name: MCP lints (confirm gates, fs confinement)
         if: needs.gate.outputs.run == 'true' && (inputs.confirm-gate-lint || inputs.fs-confinement-lint)
@@ -261,6 +280,7 @@ jobs:
           MCP_UTILS_LINT_TAG: v3.0.2
           CONFIRM_GATE_LINT: ${{ inputs.confirm-gate-lint }}
           FS_CONFINEMENT_LINT: ${{ inputs.fs-confinement-lint }}
+          STRICT_SURFACE_LINT: ${{ inputs.strict-surface-lint }}
         run: |
           set -euo pipefail
           LINT="$RUNNER_TEMP/confirm-gate-lint"
@@ -373,6 +393,9 @@ jobs:
           npm install --prefix "$LINT/run" --ignore-scripts --no-audit --no-fund --no-package-lock \
             "@modelcontextprotocol/client@$CLIENT_VERSION" >/dev/null
 
+          AUDIT_ARGS=()
+          if [ "$STRICT_SURFACE_LINT" = true ]; then AUDIT_ARGS+=(--strict); fi
+
           while IFS= read -r entry; do
             if [ ! -f "$entry" ]; then
               echo "::error::$entry is an MCP server bin in package.json but the build did not produce it, so its tools cannot be linted."
@@ -381,17 +404,24 @@ jobs:
             echo "::group::confirm-gate lint: $entry"
             status=0
             env -i PATH="$PATH" HOME="$HOME" ${SERVER_ENV[@]+"${SERVER_ENV[@]}"} timeout 120 \
-              node "$LINT/run/scripts/audit-annotations.mjs" "$entry" </dev/null >"$LINT/out.txt" 2>&1 || status=$?
+              node "$LINT/run/scripts/audit-annotations.mjs" "$entry" ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} </dev/null >"$LINT/out.txt" 2>&1 || status=$?
             cat "$LINT/out.txt"
             echo "::endgroup::"
             # Per-tool lines of audit-annotations.mjs: "  <class> <name>...".
             # Since 3.0.0 it also prints surface-check `::warning` lines after
-            # its summary. They never match this sed, and they leave the exit
-            # code alone because this step does not pass --strict.
+            # its summary. They never match this sed. Under --strict they exit
+            # 1 — only once the confirm-boolean check has passed — after a
+            # "--strict: N surface warning(s) above." line, which is how a
+            # surface failure is told apart from a confirm boolean or a crash.
             tools="$(sed -nE 's/^  (read|additive|DESTRUCTIVE) +([^ ]+).*/\2/p' "$LINT/out.txt")"
             real="$(printf '%s\n' "$tools" | grep -Ev '(^|_)healthcheck$' | grep -c . || true)"
+            surface="$(sed -nE 's/^--strict: ([0-9]+) surface warning.*/\1/p' "$LINT/out.txt" | head -n 1)"
             if [ "$status" -eq 124 ]; then
               echo "::error::$entry did not answer tools/list over stdio within 120s."
+              rc=1
+            elif [ "$status" -ne 0 ] && [ -n "$surface" ]; then
+              counts="$(grep -m 1 '^surface checks' "$LINT/out.txt" | sed -E 's/^surface checks +//; s/ +/ /g' || true)"
+              echo "::error::$entry failed the strict surface lint: $surface surface warning(s) (${counts:-see above}), annotated above. Fix each one: give the tool an explicit destructiveHint / openWorldHint, make manifest.json tools[] match the served tools, declare every env var the server reads (and drop dead ones) in manifest.json / server.json / .mcp.json, and fix the plugin MCP config. If the fleet cannot wait, set strict-surface-lint: false in this repo's CI stub as an emergency opt-out (the warnings stay visible)."
               rc=1
             elif [ "$status" -ne 0 ]; then
               echo "::error::$entry failed the confirm-gate lint: a tool takes a boolean \`confirm\` input (gate it with confirmToken + requireConfirmationWithFallback, or drop the gate), or the server did not start. The group above says which."

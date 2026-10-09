@@ -50,13 +50,13 @@ ruby -ryaml -e '
   t = steps.index { |x| x["run"].to_s.include?("inputs.test-command") } or abort("no test step")
   File.write(ARGV[5], "#{i} #{t}")
   inputs = (wf["on"] || wf[true])["workflow_call"]["inputs"]
-  lines = %w[confirm-gate-lint fs-confinement-lint].map do |name|
+  lines = %w[confirm-gate-lint fs-confinement-lint strict-surface-lint].map do |name|
     inp = inputs[name] or abort("no #{name} input")
     "#{name} #{inp["type"]} #{inp["default"]} #{inp["required"]}"
   end
   File.write(ARGV[6], lines.join("\n") + "\n")
   env = s["env"] || {}
-  File.write(ARGV[7], "#{env["CONFIRM_GATE_LINT"]}\n#{env["FS_CONFINEMENT_LINT"]}\n")
+  File.write(ARGV[7], "#{env["CONFIRM_GATE_LINT"]}\n#{env["FS_CONFINEMENT_LINT"]}\n#{env["STRICT_SURFACE_LINT"]}\n")
 ' "$WF" "$STEP_NAME" "$TMP/step.sh" "$TMP/if.txt" "$TMP/tag.txt" "$TMP/order.txt" "$TMP/input.txt" "$TMP/env.txt" \
   || { echo "FAIL: could not extract the confirm-gate lint step from $WF"; exit 1; }
 
@@ -66,16 +66,18 @@ if grep -qF "needs.gate.outputs.run == 'true'" "$TMP/if.txt" && grep -qF 'inputs
   ok "runs only when the gate armed CI, and only while one of the lint inputs is on"
 else bad "runs only when the gate armed CI, and only while one of the lint inputs is on" "if: $(cat "$TMP/if.txt")"; fi
 if [ "$(cat "$TMP/env.txt")" = '${{ inputs.confirm-gate-lint }}
-${{ inputs.fs-confinement-lint }}' ]; then
+${{ inputs.fs-confinement-lint }}
+${{ inputs.strict-surface-lint }}' ]; then
   ok "each input reaches the script as its own switch"
 else bad "each input reaches the script as its own switch" "$(cat "$TMP/env.txt")"; fi
 read -r lint_i test_i < "$TMP/order.txt"
 if [ "$lint_i" -gt "$test_i" ]; then ok "runs after the build and the tests (it lints the built server)"
 else bad "runs after the build and the tests (it lints the built server)" "lint step $lint_i, test step $test_i"; fi
 if [ "$(cat "$TMP/input.txt")" = "confirm-gate-lint boolean true false
-fs-confinement-lint boolean true false" ]; then
-  ok "confirm-gate-lint and fs-confinement-lint are optional booleans, on by default (no stub change needed)"
-else bad "confirm-gate-lint and fs-confinement-lint are optional booleans, on by default (no stub change needed)" "$(cat "$TMP/input.txt")"; fi
+fs-confinement-lint boolean true false
+strict-surface-lint boolean true false" ]; then
+  ok "confirm-gate-lint, fs-confinement-lint and strict-surface-lint are optional booleans, on by default (no stub change needed)"
+else bad "confirm-gate-lint, fs-confinement-lint and strict-surface-lint are optional booleans, on by default (no stub change needed)" "$(cat "$TMP/input.txt")"; fi
 
 echo "── the rule is read from a release tag ──"
 TAG="$(cat "$TMP/tag.txt")"
@@ -109,7 +111,8 @@ export FAKE_AUDIT="$TMP/fake-audit.mjs"
 cat > "$FAKE_AUDIT" <<'JS'
 import fs from 'node:fs';
 const entry = process.argv[2];
-fs.appendFileSync('.lint-calls', JSON.stringify({ entry, leaked: process.env.LEAK_ME ?? null, placeholder: process.env.X_BASE_URL ?? null }) + '\n');
+const strict = process.argv.includes('--strict');
+fs.appendFileSync('.lint-calls', JSON.stringify({ entry, leaked: process.env.LEAK_ME ?? null, placeholder: process.env.X_BASE_URL ?? null, strict }) + '\n');
 const src = fs.readFileSync(entry, 'utf8');
 // Mirrors the real script's per-tool lines ("  <class> <name>"), which the
 // step reads to spot a server that served nothing but its healthcheck.
@@ -123,12 +126,18 @@ if (src.includes('CONFIRM_BOOLEAN')) {
 console.log('confirm gates   confirm-boolean 0   ungated writes 0');
 // mcp-utils >= 3.0.0 prints its surface checks after the summary: one count
 // line, then GitHub `::warning` lines that leave the exit code alone unless
-// --strict is passed.
+// --strict is passed — then it exits 1 after this exact stderr line (3.0.2's
+// audit-annotations.mjs). A confirm boolean exits above, before this check.
 if (src.includes('SURFACE_WARNINGS')) {
   console.log('surface checks   annotations 1   manifest-tools 1   env 0');
   console.log('::warning::x_get_thing has no explicit openWorldHint;   read        x_ghost');
   console.log('::warning file=manifest.json::manifest.json lists x_ghost, which the server does not serve.');
-  if (process.argv.includes('--strict')) process.exit(1);
+  if (strict) {
+    console.error('\n--strict: 2 surface warning(s) above. Fix them, or drop --strict to keep them advisory.');
+    process.exit(1);
+  }
+} else {
+  console.log('surface checks   annotations 0   manifest-tools 0   env 0');
 }
 JS
 export FAKE_FS_AUDIT="$TMP/fake-fs-audit.mjs"
@@ -169,7 +178,7 @@ run_case() {
   export CALLS="$TMP/calls.$N"; : > "$CALLS"
   rm -f "$dir/.lint-calls" "$dir/.fs-calls"
   OUT="$(cd "$dir" && env PATH="$TMP/bin:$PATH" RUNNER_TEMP="$TMP/runner.$N" HOME="$TMP" \
-          MCP_UTILS_LINT_TAG="$TAG" CONFIRM_GATE_LINT=true FS_CONFINEMENT_LINT=true \
+          MCP_UTILS_LINT_TAG="$TAG" CONFIRM_GATE_LINT=true FS_CONFINEMENT_LINT=true STRICT_SURFACE_LINT=true \
           LEAK_ME=runner-secret "$@" bash -e "$TMP/step.sh" 2>&1)"
   RC=$?
   CALLS_LOG="$(cat "$CALLS")"
@@ -199,6 +208,8 @@ if printf '%s\n' "$CALLS_LOG" | grep -E '^npm install' | grep -qF '@modelcontext
 else bad "installs the MCP client at the version the tag's lockfile pins" "$CALLS_LOG"; fi
 if grep -qF '"leaked":null' "$F/.lint-calls"; then ok "the server under test gets none of the runner's environment"
 else bad "the server under test gets none of the runner's environment" "$(cat "$F/.lint-calls")"; fi
+if grep -qF '"strict":true' "$F/.lint-calls"; then ok "the audit runs with --strict by default"
+else bad "the audit runs with --strict by default" "$(cat "$F/.lint-calls")"; fi
 
 F="$TMP/bundle"; pkg "$F" "{\"name\":\"b-mcp\",\"bin\":\"dist/bundle.js\",\"devDependencies\":{\"@modelcontextprotocol/sdk\":\"^1.0.0\"}}"; server "$F/dist/bundle.js"
 run_case "$F"
@@ -211,12 +222,34 @@ if printf '%s\n' "$OUT" | grep -qF '::error::dist/index.js failed the confirm-ga
   ok "the failure is annotated with the entry and what to do"
 else bad "the failure is annotated with the entry and what to do" "$OUT"; fi
 
+echo "── surface checks (mcp-utils 3.x) fail CI under --strict ──"
 F="$TMP/surface"; pkg "$F" "{\"name\":\"w-mcp\",\"bin\":{\"w-mcp\":\"dist/index.js\"},$SDK}"; server "$F/dist/index.js" SURFACE_WARNINGS
 run_case "$F"
-expect "surface-check warnings (mcp-utils 3.x) are advisory: the step passes (no --strict)" 0 "dist/index.js"
-if printf '%s\n' "$OUT" | grep -qF '::warning file=manifest.json::' && ! printf '%s\n' "$OUT" | grep -q '::error'; then
-  ok "the warnings reach the log as annotations, and nothing is raised to an error"
-else bad "the warnings reach the log as annotations, and nothing is raised to an error" "$OUT"; fi
+expect "surface-check warnings fail the step by default (--strict)" 1 "dist/index.js"
+if printf '%s\n' "$OUT" | grep -qF '::warning file=manifest.json::'; then
+  ok "the warnings still reach the log as annotations at the offending file"
+else bad "the warnings still reach the log as annotations at the offending file" "$OUT"; fi
+if printf '%s\n' "$OUT" | grep -qF '::error::dist/index.js failed the strict surface lint: 2 surface warning(s)' \
+   && printf '%s\n' "$OUT" | grep -qF 'strict-surface-lint: false'; then
+  ok "the failure names the surface warnings, says how to fix them, and names the opt-out"
+else bad "the failure names the surface warnings, says how to fix them, and names the opt-out" "$OUT"; fi
+if ! printf '%s\n' "$OUT" | grep -qF 'boolean `confirm`'; then
+  ok "a surface failure is never blamed on a confirm boolean"
+else bad "a surface failure is never blamed on a confirm boolean" "$OUT"; fi
+run_case "$F" STRICT_SURFACE_LINT=false
+expect "strict-surface-lint: false keeps the warnings advisory: the step passes" 0 "dist/index.js"
+if grep -qF '"strict":false' "$F/.lint-calls" && printf '%s\n' "$OUT" | grep -qF '::warning file=manifest.json::' \
+   && ! printf '%s\n' "$OUT" | grep -q '::error'; then
+  ok "and the audit runs without --strict, its warnings logged and nothing raised to an error"
+else bad "and the audit runs without --strict, its warnings logged and nothing raised to an error" "$(cat "$F/.lint-calls")
+$OUT"; fi
+F="$TMP/surface-confirm"; pkg "$F" "{\"name\":\"v-mcp\",\"bin\":{\"v-mcp\":\"dist/index.js\"},$SDK}"; server "$F/dist/index.js" 'CONFIRM_BOOLEAN SURFACE_WARNINGS'
+run_case "$F"
+expect "a confirm boolean alongside surface warnings fails" 1 "dist/index.js"
+if printf '%s\n' "$OUT" | grep -qF '::error::dist/index.js failed the confirm-gate lint' \
+   && ! printf '%s\n' "$OUT" | grep -qF 'strict surface lint'; then
+  ok "and is reported as the confirm-gate failure it is"
+else bad "and is reported as the confirm-gate failure it is" "$OUT"; fi
 
 F="$TMP/unbuilt"; pkg "$F" "{\"name\":\"u-mcp\",\"bin\":{\"u-mcp\":\"dist/index.js\"},$SDK}"
 run_case "$F"
