@@ -258,7 +258,7 @@ jobs:
       - name: MCP lints (confirm gates, fs confinement)
         if: needs.gate.outputs.run == 'true' && (inputs.confirm-gate-lint || inputs.fs-confinement-lint)
         env:
-          MCP_UTILS_LINT_TAG: v2.7.0
+          MCP_UTILS_LINT_TAG: v3.0.0
           CONFIRM_GATE_LINT: ${{ inputs.confirm-gate-lint }}
           FS_CONFINEMENT_LINT: ${{ inputs.fs-confinement-lint }}
         run: |
@@ -385,6 +385,9 @@ jobs:
             cat "$LINT/out.txt"
             echo "::endgroup::"
             # Per-tool lines of audit-annotations.mjs: "  <class> <name>...".
+            # Since 3.0.0 it also prints surface-check `::warning` lines after
+            # its summary. They never match this sed, and they leave the exit
+            # code alone because this step does not pass --strict.
             tools="$(sed -nE 's/^  (read|additive|DESTRUCTIVE) +([^ ]+).*/\2/p' "$LINT/out.txt")"
             real="$(printf '%s\n' "$tools" | grep -Ev '(^|_)healthcheck$' | grep -c . || true)"
             if [ "$status" -eq 124 ]; then
