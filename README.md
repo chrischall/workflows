@@ -99,6 +99,17 @@ cloned from mcp-utils at the release tag in the step's `MCP_UTILS_LINT_TAG`, so 
 rule change reaches the fleet only when that line is bumped.
 `confirm-gate-lint: false` opts a repo out.
 
+**Surface lint (strict).** The same audit also prints mcp-utils' surface
+checks as `::warning` annotations: a tool without an explicit
+`destructiveHint`/`openWorldHint`, a `manifest.json` `tools[]` roster that
+differs from the served tools, env vars the server reads but no manifest /
+`server.json` / `.mcp.json` declares (or declares but never reads), and plugin
+MCP config mistakes. CI runs it with `--strict`, so any of these fails the
+build with an error naming the surface warnings (every fleet repo was clean
+under mcp-utils v3.0.2 when this was turned on). `strict-surface-lint: false`
+is the per-repo emergency opt-out: the warnings stay visible but no longer
+fail CI.
+
 **FS-confinement lint.** The same step, in a repo that ships a server, also
 runs mcp-utils' `scripts/audit-fs-confinement.mjs` over the repo's source (tests,
 `node_modules` and build output skipped). A call to `fileBlob`, `readFileHead` or
