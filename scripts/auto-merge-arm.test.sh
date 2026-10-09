@@ -424,6 +424,85 @@ recheck_case no  "already merged"          "$(live "autorelease: pending,ready-t
 recheck_case no  "merged, label gone"      "$(live "autorelease: pending" MERGED)"
 recheck_case no  "closed, label gone"      "$(live "autorelease: pending" CLOSED)"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Who applied the label (fleet-audit#807).
+#
+# The labeled arm used to run `gh pr merge --auto` with the owner's PAT for
+# whoever added `ready-to-merge`. In an org repo a triage-only member can label
+# but cannot merge — so they could label any same-repo PR (a `fail` verdict, a
+# WIP branch) and the PAT would merge it once CI went green. The arm now
+# requires the labeler to be the release identity (the pipeline's own label,
+# applied with the PAT) or someone who could merge anyway (admin/write; GitHub
+# reports maintain as write and triage as read). Any doubt → do not arm.
+# ─────────────────────────────────────────────────────────────────────────────
+LABELER_STEP="Gate a ready-to-merge label by who applied it"
+echo "── labeler gate: step wiring ──"
+LABELER_ID=$(step_id "$LABELER_STEP")
+if [ -n "$LABELER_ID" ]; then ok "labeler gate has an id ($LABELER_ID)"; else bad "labeler gate has an id" "missing step or id"; fi
+lif=$(step_if "$LABELER_STEP")
+if [ "$lif" = "github.event.action == 'labeled'" ]; then ok "labeler gate runs on the labeled path"
+else bad "labeler gate runs on the labeled path" "if: $lif"; fi
+aif=$(step_if "$LABEL_STEP")
+if [ -n "$LABELER_ID" ] && printf '%s' "$aif" | grep -qF "steps.$LABELER_ID.outputs.allowed == 'true'"; then
+  ok "arm step: the labeled path requires the labeler gate's say-so"
+else bad "arm step: the labeled path requires the labeler gate's say-so" "if: $aif"; fi
+# The re-arm path must not be reachable via a bare labeled event any more.
+if printf '%s' "$aif" | grep -qE "^github\.event\.action == 'labeled' \|\|"; then
+  bad "arm step: a labeled event alone no longer arms" "if: $aif"
+else ok "arm step: a labeled event alone no longer arms"; fi
+
+extract "$LABELER_STEP" "$TMP/labeler.sh" "$TMP/labeler.env" || bad "extract $LABELER_STEP" "missing"
+
+cat > "$TMP/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "$CALLS"
+case "$*" in
+  "api user"*)
+    [ -n "${PAT_LOGIN:-}" ] || exit 1
+    printf '%s\n' "$PAT_LOGIN"; exit 0 ;;
+  "api repos/"*"/collaborators/"*"/permission"*)
+    [ "${PERM:-}" = "__FAILS__" ] && exit 1
+    printf '%s\n' "${PERM:-}"; exit 0 ;;
+  "pr merge"*) exit 0 ;;
+esac
+exit 0
+STUB
+chmod +x "$TMP/bin/gh"
+
+# labeler_case <want true|false> <name> [VAR=value ...] — defaults: the
+# pipeline's own label, applied with the release PAT.
+labeler_case() {
+  local want="$1" name="$2"; shift 2
+  local dir; dir="$(mktemp -d "$TMP/labeler.XXXXXX")"; : > "$dir/out"; : > "$dir/calls"
+  (
+    set -a
+    # shellcheck disable=SC1090  # the extracted step env
+    . "$TMP/labeler.env"
+    export GH_TOKEN=x REPO=nullnet-app/encore-ios SENDER=chrischall PAT_LOGIN=chrischall PERM=admin
+    export GITHUB_OUTPUT="$dir/out" CALLS="$dir/calls"
+    for kv in "$@"; do export "${kv?}"; done
+    set +a
+    bash -e "$TMP/labeler.sh"
+  ) >"$dir/log" 2>&1
+  local rc=$? got; got=$(sed -n 's/^allowed=//p' "$dir/out" | tail -1)
+  if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then ok "labeler: $name → allowed=$want"
+  else bad "labeler: $name → allowed=$want" "rc=$rc allowed=[$got] log: $(tr '\n' ' ' < "$dir/log")"; fi
+  if grep -q '^pr merge' "$dir/calls"; then bad "labeler: $name: never merges or arms itself" "$(tr '\n' '|' < "$dir/calls")"; fi
+  if [ "$want" = false ] && ! grep -q '::warning::' "$dir/log"; then bad "labeler: $name: warns why it did not arm" "log: $(tr '\n' ' ' < "$dir/log")"; fi
+}
+echo "── labeler gate: who may arm ──"
+labeler_case true  "the pipeline (release identity) labelled it"
+labeler_case true  "a nullnet release identity labelled it" SENDER=nullnet-bot PAT_LOGIN=nullnet-bot PERM=none
+labeler_case true  "an admin labelled it"           SENDER=owner2 PERM=admin
+labeler_case true  "a writer (or maintainer) labelled it" SENDER=dev PERM=write
+labeler_case true  "release identity unreadable, labeler is a writer" SENDER=dev PAT_LOGIN= PERM=write
+echo "── labeler gate: never arm for someone who could not merge (security) ──"
+labeler_case false "a triage-only member labelled it" SENDER=triager PERM=read
+labeler_case false "a non-collaborator labelled it"   SENDER=stranger PERM=none
+labeler_case false "permission lookup fails"          SENDER=dev PERM=__FAILS__
+labeler_case false "permission is something unexpected" SENDER=dev PERM=
+labeler_case false "no sender in the payload"         SENDER= PERM=admin
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

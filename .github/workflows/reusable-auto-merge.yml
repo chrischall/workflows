@@ -424,8 +424,46 @@ jobs:
           echo "Release PR rewritten by $SENDER and still carries \`$ARM_LABEL\` — re-arming auto-merge."
           decide true
 
+      # Path (1) only. The PAT below can merge; the person who added the label
+      # may not be able to (fleet-audit#807). In an org repo a triage-only
+      # member can apply labels but not merge, and arming for them would let
+      # them merge any same-repo PR — a `fail` verdict, a WIP branch — through
+      # the owner's token. So the label arms only when it came from the
+      # release identity (the review pipeline labels with the PAT) or from
+      # someone with write/admin, who could merge it themselves. GitHub
+      # reports maintain as `write` and triage as `read`. Any doubt → do not
+      # arm; the worst case is a label that needs re-adding by the owner.
+      - name: Gate a ready-to-merge label by who applied it
+        id: labeler
+        if: github.event.action == 'labeled'
+        env:
+          GH_TOKEN: ${{ secrets.release_pat }}
+          REPO: ${{ github.repository }}
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          set -uo pipefail
+          decide() { echo "allowed=$1" >> "$GITHUB_OUTPUT"; }
+          [ -n "$SENDER" ] || { echo "::warning::not arming: the labeled event names no sender"; decide false; exit 0; }
+
+          releaser="$(gh api user --jq .login 2>/dev/null || true)"
+          if [ -n "$releaser" ] && [ "$SENDER" = "$releaser" ]; then
+            echo "ready-to-merge applied by the release identity ($releaser) — arming."
+            decide true; exit 0
+          fi
+          perm="$(gh api "repos/$REPO/collaborators/$SENDER/permission" --jq .permission 2>/dev/null || true)"
+          case "$perm" in
+            admin|write)
+              echo "ready-to-merge applied by $SENDER ($perm), who can merge this PR themselves — arming."
+              decide true ;;
+            *)
+              echo "::warning::not arming: ready-to-merge was applied by $SENDER (permission '${perm:-unreadable}'), who cannot merge this PR. The owner or a writer must apply it."
+              decide false ;;
+          esac
+
       - name: Arm auto-merge on ready-to-merge label
-        if: github.event.action == 'labeled' || steps.rearm.outputs.rearm == 'true'
+        if: >-
+          (github.event.action == 'labeled' && steps.labeler.outputs.allowed == 'true') ||
+          steps.rearm.outputs.rearm == 'true'
         env:
           GH_TOKEN: ${{ secrets.release_pat }}
           PR_URL: ${{ github.event.pull_request.html_url }}
