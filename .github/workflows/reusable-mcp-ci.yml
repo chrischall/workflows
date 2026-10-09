@@ -258,7 +258,7 @@ jobs:
       - name: MCP lints (confirm gates, fs confinement)
         if: needs.gate.outputs.run == 'true' && (inputs.confirm-gate-lint || inputs.fs-confinement-lint)
         env:
-          MCP_UTILS_LINT_TAG: v3.0.1
+          MCP_UTILS_LINT_TAG: v3.0.2
           CONFIRM_GATE_LINT: ${{ inputs.confirm-gate-lint }}
           FS_CONFINEMENT_LINT: ${{ inputs.fs-confinement-lint }}
         run: |
