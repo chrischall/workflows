@@ -135,6 +135,25 @@ else
   bad "unpinned npx in a composite action (pin an exact version, e.g. pkg@1.2.3)" "$npx_hits"
 fi
 
+# Dependabot must see every pin it is meant to bump (fleet-audit#806). The
+# github-actions ecosystem's `directory: /` means .github/workflows only, so a
+# composite action's own `uses:` (mcp-publish's setup-node runs in the publish
+# job of every fleet repo) was never raised and drifted behind the workflows.
+# Every .github/actions/* directory must appear in .github/dependabot.yml.
+# shellcheck disable=SC2016  # ruby source, not shell
+uncovered=$(ruby -ryaml -e '
+  cfg = YAML.load_file(".github/dependabot.yml")
+  dirs = cfg["updates"].select { |u| u["package-ecosystem"] == "github-actions" }
+           .flat_map { |u| [u["directory"], *Array(u["directories"])].compact }
+  Dir.glob(".github/actions/*/action.y{a,}ml").map { |f| "/" + File.dirname(f) }.sort.each do |d|
+    puts d unless dirs.include?(d)
+  end' 2>&1)
+if [ -z "$uncovered" ]; then
+  ok "dependabot covers every composite action directory"
+else
+  bad "composite action directories dependabot never bumps (add them to .github/dependabot.yml directories:)" "$uncovered"
+fi
+
 # Remote scripts executed straight off the network (fleet-audit#805). CI here
 # installed actionlint with `bash <(curl -s …/main/scripts/download-actionlint.bash)`:
 # whatever sat on a third party's branch that minute ran in the job, and `-s`
