@@ -54,8 +54,9 @@ ruby -ryaml -e '
   anc = steps.find { |s| s["id"] == "ancestry" } or abort("no ancestry step")
   File.write(ARGV[6], anc["run"])
   File.write(ARGV[7], "#{review["timeout-minutes"]}\n#{job["timeout-minutes"]}\n")
+  File.write(ARGV[8], review["with"]["track_progress"].to_s)
 ' "$WF" "$TMP/args.txt" "$TMP/prompt.txt" "$TMP/env.txt" "$TMP/steps.txt" \
-    "$TMP/neutralize.sh" "$TMP/ancestry.sh" "$TMP/timeouts.txt" \
+    "$TMP/neutralize.sh" "$TMP/ancestry.sh" "$TMP/timeouts.txt" "$TMP/track.txt" \
   || { echo "FAIL: could not extract the review job from $WF"; exit 1; }
 
 # The --allowedTools / --disallowedTools values, one rule per line.
@@ -77,7 +78,10 @@ no_rule() { # no_rule <allow|deny> <rule> <why>
 
 echo "── allowlist ──"
 no_rule   allow 'Bash(gh pr comment:*)' "unscoped: posts on any PR number"
-want_rule allow 'Bash(gh pr comment ${{ needs.context.outputs.number }}:*)' "scoped to the PR under review"
+# The model posts no top-level comment at all: its review renders inside the
+# pipeline's verdict comment, so a PR gets ONE comment (infinitecampus-mcp#257).
+no_rule   allow 'Bash(gh pr comment ${{ needs.context.outputs.number }}:*)' "review text goes in structured output, not a comment"
+want_rule allow 'mcp__github_inline_comment__create_inline_comment' "line-specific findings stay inline"
 no_rule   allow 'Bash(jq:*)'   "jq -n env dumps the environment; gh --jq covers parsing"
 no_rule   allow 'Bash(find:*)' "find -L lists through a committed symlink"
 want_rule allow 'Bash(git ls-files:*)' "absence checks without find"
@@ -116,15 +120,26 @@ else bad "review job lets bwrap create its user namespace (ubuntu 24.04 AppArmor
 echo "── prompt matches the allowlist ──"
 if grep -qF '`find`' "$TMP/prompt.txt"; then bad "prompt no longer tells the model to use find" "still mentions \`find\`"
 else ok "prompt no longer tells the model to use find"; fi
-if grep -qF 'gh pr comment ${{ needs.context.outputs.number }} --body' "$TMP/prompt.txt"; then
-  ok "prompt shows the scoped gh pr comment form"
-else bad "prompt shows the scoped gh pr comment form" "no 'gh pr comment <N> --body' in the prompt"; fi
-# The -F / --body-file deny rules match the whole command, --body text
-# included, so a summary that merely mentions either flag is refused. The
-# prompt has to warn the model off writing them anywhere (workflows#309).
-if grep -F 'TOOLS:' "$TMP/prompt.txt" | grep -qF 'anywhere in the command, including inside the comment text'; then
-  ok "prompt warns that -F/--body-file are refused even inside the comment text"
-else bad "prompt warns that -F/--body-file are refused even inside the comment text" "$(grep -F 'TOOLS:' "$TMP/prompt.txt")"; fi
+if grep -qF 'gh pr comment' "$TMP/prompt.txt"; then
+  bad "prompt no longer tells the model to post a comment" "$(grep -nF 'gh pr comment' "$TMP/prompt.txt")"
+else ok "prompt no longer tells the model to post a comment"; fi
+if grep -qF '`review`' "$TMP/prompt.txt"; then
+  ok "prompt puts the review text in the structured \`review\` field"
+else bad "prompt puts the review text in the structured \`review\` field" "no \`review\` in the prompt"; fi
+# The verdict-line fallback reads the model's FINAL MESSAGE out of the
+# execution log, so the prompt must still ask for that line — now at the end
+# of the final message rather than of a comment.
+if grep -qF '**Verdict:** pass' "$TMP/prompt.txt"; then
+  ok "prompt still asks for a final **Verdict:** line (the recovery fallback)"
+else bad "prompt still asks for a final **Verdict:** line (the recovery fallback)" "missing"; fi
+if grep -qE '"required":\[[^]]*"review"' "$TMP/args.txt"; then
+  ok "json schema requires the review field"
+else bad "json schema requires the review field" "$(grep -oE -- '--json-schema .*' "$TMP/args.txt" | head -c 300)"; fi
+# track_progress makes claude-code-action post its own progress comment — the
+# second duplicate. Off for every event.
+if [ "$(cat "$TMP/track.txt")" = "false" ]; then
+  ok "track_progress is off (no progress comment)"
+else bad "track_progress is off (no progress comment)" "track_progress: $(cat "$TMP/track.txt")"; fi
 # The ancestry report quotes commit subjects the PR author wrote. It goes in
 # the prompt fenced as data, never as bare instruction text.
 if grep -B1 -F '${{ steps.ancestry.outputs.report }}' "$TMP/prompt.txt" | head -1 | grep -qE '^[[:space:]]*```'; then
