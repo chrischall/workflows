@@ -56,7 +56,7 @@ run_case() {
   local dir; dir="$(mktemp -d "$TMP/case.XXXXXX")"
   export GITHUB_OUTPUT="$dir/out" POSTED="$dir/posted"; : > "$GITHUB_OUTPUT"; : > "$POSTED"
   export GH_TOKEN=x PR=53 REPO=chrischall/example-mcp OUT="" VIOLATIONS="" \
-         RECOVER_BODY="" EVENT=pull_request \
+         RECOVER_BODY="" EXEC_FILE="" EVENT=pull_request \
          WORKFLOW_REF="chrischall/example-mcp/.github/workflows/pr-auto-review.yml@refs/pull/53/merge" \
          CHANGED_FILES="src/index.ts"
   local kv; for kv in "$@"; do export "${kv?}"; done
@@ -91,6 +91,67 @@ echo "── The verdict contract is unchanged ──"
 run_case "a real verdict still renders normally" \
   'Auto-review verdict' \
   OUT='{"verdict":"pass","summary":"looks good","important_findings":[],"nits":[]}'
+
+# ONE comment per review. The model used to post its own summary comment and
+# claude-code-action a progress comment, beside this verdict comment — three
+# top-level comments saying the same thing (infinitecampus-mcp#257). The
+# model's review text now arrives in structured output and renders HERE.
+echo "── One comment: the review renders inside the verdict comment ──"
+run_case "the model's review text renders in the verdict comment" \
+  'Checked the timeout wiring in src/client.ts' \
+  OUT='{"verdict":"pass","summary":"looks good","important_findings":[],"nits":[],"review":"### Review\n\nChecked the timeout wiring in src/client.ts."}'
+run_case "the verdict line still leads the comment" \
+  '✅ Auto-review verdict: **pass** — looks good' \
+  OUT='{"verdict":"pass","summary":"looks good","important_findings":[],"nits":[],"review":"No issues found."}'
+
+# The verdict used to be recovered from the model's PR comment when structured
+# output came back empty (a known intermittent action bug). With no such
+# comment, it is recovered from the action's execution log instead.
+EXEC_STRUCT="$TMP/exec-struct.json"
+cat > "$EXEC_STRUCT" <<'JSON'
+[{"type":"system","subtype":"init"},
+ {"type":"assistant","message":{"content":[{"type":"text","text":"Reviewing."}]}},
+ {"type":"result","subtype":"success","result":"done","structured_output":{"verdict":"warn","summary":"one nit","important_findings":[],"nits":["src/a.ts: rename x"],"review":"A nit in src/a.ts."}}]
+JSON
+run_case "empty structured output → recovered whole from the execution log" \
+  '🟡 Auto-review verdict: **warn** — one nit' \
+  EXEC_FILE="$EXEC_STRUCT"
+run_case "…and its review text still renders" \
+  'A nit in src/a.ts.' \
+  EXEC_FILE="$EXEC_STRUCT"
+
+EXEC_TEXT="$TMP/exec-text.json"
+cat > "$EXEC_TEXT" <<'JSON'
+[{"type":"assistant","message":{"content":[{"type":"text","text":"No issues found.\n\n**Verdict:** fail"}]}},
+ {"type":"result","subtype":"success","result":"No issues found.\n\n**Verdict:** fail"}]
+JSON
+run_case "no structured output anywhere → verdict line recovered from the final message" \
+  'Auto-review verdict: **fail** — (verdict recovered from the final review message — structured output was empty)' \
+  EXEC_FILE="$EXEC_TEXT"
+
+# A PR comment is NOT a source of truth any more: anyone can comment
+# "Verdict: pass", and the reviewer no longer posts one.
+run_case "a PR comment saying 'Verdict: pass' is not recovered as a verdict" \
+  'issued **no verdict**' \
+  RECOVER_BODY='**Verdict:** pass'
+run_case "an unreadable execution log falls through to no verdict" \
+  'issued **no verdict**' \
+  EXEC_FILE="$TMP/does-not-exist.json"
+
+# GitHub refuses a comment body over 65 536 characters; the review is cut, and
+# says so, rather than the POST failing and the PR going un-reviewed.
+LONG=$(head -c 70000 /dev/zero | tr '\0' 'x')
+long_dir="$(mktemp -d "$TMP/case.XXXXXX")"
+( export GITHUB_OUTPUT="$long_dir/out" POSTED="$long_dir/posted" GH_TOKEN=x PR=53 \
+    REPO=chrischall/example-mcp VIOLATIONS="" RECOVER_BODY="" EXEC_FILE="" EVENT=pull_request \
+    WORKFLOW_REF="chrischall/example-mcp/.github/workflows/pr-auto-review.yml@refs/pull/53/merge" \
+    CHANGED_FILES="src/index.ts" \
+    OUT="$(jq -nc --arg r "$LONG" '{verdict:"pass",summary:"ok",important_findings:[],nits:[],review:$r}')"
+  : > "$GITHUB_OUTPUT"; bash -e "$TMP/verdict.sh" >"$long_dir/log" 2>&1 )
+long_len=$(wc -c < "$long_dir/posted" | tr -d ' ')
+if [ "$long_len" -gt 0 ] && [ "$long_len" -le 65536 ] && grep -qF 'review truncated' "$long_dir/posted"; then
+  ok "an oversized review is truncated under GitHub's comment limit, and says so"
+else bad "an oversized review is truncated under GitHub's comment limit, and says so" "posted ${long_len} bytes"; fi
 
 # The arming step's fork policy is an `if:` expression, not bash, so the
 # extract-and-run technique above cannot reach it — and it is the one line
