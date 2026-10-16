@@ -61,11 +61,12 @@ types (`chore`/`ci`/`test`/`build`) only warn, since dropping one costs nothing.
 Fix the body and comment `/auto-review`; no push is needed.
 
 **Which text becomes the commit is a per-repo SETTING, not a convention.** The
-fleet is split three ways across the 81 repos in `fleet.json`: 42 squash with
-`COMMIT_OR_PR_TITLE`/`COMMIT_MESSAGES`, 38 with `PR_TITLE`/`PR_BODY`, and one
-with a mixed `PR_TITLE`/`COMMIT_MESSAGES`. So "the PR title is the release
-decision" is only
-true in the second group — in the first, a single-commit PR takes its COMMIT
+fleet is split three ways: roughly half the repos in `fleet.json` squash with
+`COMMIT_OR_PR_TITLE`/`COMMIT_MESSAGES`, most of the rest with
+`PR_TITLE`/`PR_BODY`, and at least one with a mixed
+`PR_TITLE`/`COMMIT_MESSAGES` (the counts move as repos join, so they are not
+written here — the check below is the authority). So "the PR title is the
+release decision" is only true in the second group — in the first, a single-commit PR takes its COMMIT
 subject, which is how `encore-ios`#39 shipped a major bump from a `refactor!:`
 commit under a `fix(android):` PR title. Check with:
 
@@ -148,6 +149,27 @@ fix; that was the bug.)
 `mcp-marketplace` catalog is produced by its `scripts/regen.py` reading each
 repo's own file — a version bump here doesn't reach the marketplace until that
 regen runs. Plugin `name`s must be unique across the whole catalog.
+
+### First-party dependency bumps
+
+A bump of a package published from a chrischall-owned repo
+(`@chrischall/mcp-utils`, `@chrischall/realty-core`, `@fetchproxy/*`, …) is
+not a chore **when it is a runtime dependency**: it delivers a real fix or
+feature through the consumer, so it is `fix(deps):` (or `feat(deps):`) and is
+labelled `bug`/`enhancement`, which files it under Bug Fixes/Features in the
+release notes rather than under Dependencies.
+
+**A first-party package that is only a `devDependency` is the exception:** it
+ships nothing, so it is `chore(deps-dev):`. A `fix(deps)` there cuts a release
+whose artifact is byte-identical to the last one — `realty-core` 0.6.1–0.6.3
+were three such no-op releases.
+
+Dependabot already implements this split: the templates set
+`commit-message.prefix: "fix"` with `prefix-development: "chore"` and
+`include: "scope"`, so a runtime bump arrives as `fix(deps)` and a dev bump as
+`chore(deps-dev)` without anyone choosing. The rule matters for bumps made by
+hand, and for relabelling a dependabot PR: label a runtime first-party bump
+`bug`/`enhancement`, and leave a dev-only one alone.
 
 ## Dependabot
 

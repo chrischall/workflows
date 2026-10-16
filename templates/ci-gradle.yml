@@ -28,10 +28,15 @@ name: CI
 # to the real outcome.
 #
 # Fork PRs: their token is read-only, so no `ci-gated` status can be posted at
-# all. The gate arms CI anyway (so the run shows a real result) and sets
-# `steps.gate.outputs.is_fork`; the reporter below skips its POST on that, or
-# it would 403 and fail an otherwise-green job. Nothing reports `ci-gated`, so
-# the required context stays unsatisfied and the merge stays blocked.
+# all, and the gate sets `steps.gate.outputs.is_fork`. An UN-ARMED fork is
+# deferred like any other PR — run=false, nothing builds — until a maintainer's
+# `/auto-review` passes that exact commit (fleet-audit#283; arm-gate/action.yml
+# says why: building unreviewed fork code is the thing worth not doing). An
+# ARMED fork builds, and the reporter below skips its POST on `is_fork`, or it
+# would 403 and fail an otherwise-green job. `ci-fork-status.yml`, which mirrors
+# a fork's result into `ci-gated`, is rendered only for `ci: standard` repos, so
+# in a Gradle repo nothing reports `ci-gated` for a fork: the required context
+# stays unsatisfied and the merge stays blocked until a maintainer lands it.
 
 on:
   pull_request:

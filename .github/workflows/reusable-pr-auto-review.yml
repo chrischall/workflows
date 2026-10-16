@@ -529,6 +529,13 @@ jobs:
           # depth-1 clone has no main history, producing false "broken link"
           # fails on release PRs whose CHANGELOG references older commits.
           fetch-depth: 0
+          # persist-credentials stays at its default (on) even for a fork,
+          # unlike reusable-claude.yml's checkout (fleet-audit#1402). Kept on
+          # because the ancestry step below may `git fetch origin <base sha>`,
+          # which needs a credential on a private repo. Leaving it in
+          # .git/config exposes nothing new: the same contents:read job token
+          # is deliberately left in the model's Bash env (GH_TOKEN, see the
+          # job env above) so `gh pr diff` works.
 
       # The exact commit this run reviews. The checkout resolved
       # refs/pull/N/head when it ran, which can be newer than the head_sha

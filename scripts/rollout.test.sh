@@ -358,6 +358,11 @@ assert_has   F3 "## Why this change"
 assert_has   F3 "Fleet-wide template correction."
 assert_has   F3 "- pr-auto-review: reusable"
 assert_has   F3 "After this PR is open, run"
+# fleet-audit#1353: the body is what the consumer's reviewer reads, and it
+# used to say "pass-only arming" while the pipeline arms same-repo PRs on pass
+# OR warn and holds only forks to pass (#336). Pin the true statement.
+assert_lacks F3 "pass-only arming"
+assert_has   F3 "pass/warn arming (forks: pass only)"
 
 # --- S: sanitize_release_message, and the sed range that removes it --------
 # The dependabot squash-body fix (#266) is opt-in per repo. Both directions
