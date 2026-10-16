@@ -565,7 +565,7 @@ pr_body() {
     echo ""
   fi
   if [ -z "$ONLY" ]; then
-    echo "- pr-auto-review: reusable (forced verdict + fail-loud + pass-only arming)"
+    echo "- pr-auto-review: reusable (forced verdict + fail-loud + pass/warn arming (forks: pass only))"
     echo "- auto-merge: reusable (dependabot + ready-to-merge label arms)"
     [ "$CI_MODE" = "standard" ] && echo "- ci: reusable node CI (deferred gate) — required check becomes \`ci / ci\`"
     if [ "$RELEASE_MODE" = "mcp" ] && [ -n "$REUSABLE_RELEASE" ]; then
