@@ -330,7 +330,7 @@
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "none",
       "release": "none",
-      "dependabot": "actions",
+      "dependabot": "none",
       "release_config": "none"
     },
     {
