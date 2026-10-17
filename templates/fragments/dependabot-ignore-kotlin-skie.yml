@@ -1,0 +1,17 @@
+    ignore:
+      # SKIE (co.touchlab.skie) is a Kotlin COMPILER plugin, so it refuses any
+      # Kotlin it was not built against — a configuration-time
+      # `SKIE <v> does not support Kotlin <v>`, before any task runs. Dependabot
+      # does not know SKIE exists, so every Kotlin patch past SKIE's ceiling
+      # arrives as a PR that cannot configure, and its lockfix job dies the same
+      # way (encore#226: Kotlin 2.4.21 against SKIE 0.10.15, whose list stops at
+      # 2.4.20).
+      #
+      # This holds the Kotlin family at the ceiling. When SKIE publishes support
+      # for a newer Kotlin, raise the bound below to that SKIE's highest Kotlin
+      # and bump SKIE in the same PR (the Kotlin bump cannot configure without
+      # it). Do NOT answer this with `skie { isEnabled = false }`: SKIE is what
+      # makes the generated Swift API usable.
+      - dependency-name: "org.jetbrains.kotlin*"
+        versions:
+          - ">= 2.4.21"
