@@ -726,7 +726,7 @@ else bad "S: commit body" "still names templates/\$ONLY.yml, which does not exis
 # also cost them the vitest pin and every future fix. The block is a fragment
 # now, so the config is templated AND the hold is kept. If this regresses, the
 # hold disappears silently: dependabot simply starts proposing bumps that
-# cannot install (mcp-host's pool-workers vitest ceiling) or that break the
+# cannot install (mcp-host's vitest ceiling) or that break the
 # build (curtaincall's javax-namespace JAXB pin).
 DIR="$TMP/ign-on"
 bash "$ROLLOUT" FAKE/i --render "$DIR" --only dependabot >/dev/null 2>&1
@@ -1470,6 +1470,27 @@ for spec in chrischall/apple-swift-mcp:swift chrischall/swift-mail-automation:sw
   if [ "$got" = "$want" ]; then ok "JJ: $r selects dependabot: $want"
   else bad "JJ: $r" "fleet.json selects dependabot: ${got:-<missing>}, want $want"; fi
 done
+
+# --- KK: a JSON stub drifts on content, not key order --------------------------
+# release-please-config.json is JSON: release-please reads keys, not their
+# order. alexa-mcp, concur-mcp and iaqualink-mcp held exactly the rendered
+# values with keys in another order, and the detector reported all three as
+# drift (workflows#315) — a "fix" PR for each would have changed nothing.
+DIR=$(fixtures kk)
+jq -S . "$DIR/release-please-config.json" > "$DIR/rpc.tmp" && mv "$DIR/rpc.tmp" "$DIR/release-please-config.json"
+if cmp -s "$DIR/release-please-config.json" "$CANON/release-please-config.json"; then
+  bad "KK: setup" "jq -S did not reorder the canonical config, so this case proves nothing"
+fi
+run_check "$DIR"
+assert_lacks KK "DRIFT    FAKE/x/release-please-config.json"
+assert_code  KK 0
+# ...but a changed VALUE is still drift, and its diff is still printed.
+jq '.packages["."]["release-type"] = "python"' "$CANON/release-please-config.json" > "$DIR/release-please-config.json"
+run_check "$DIR"
+assert_has  KK "DRIFT    FAKE/x/release-please-config.json"
+assert_has  KK "python"
+assert_code KK 1
+assert_clean_stderr KK
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

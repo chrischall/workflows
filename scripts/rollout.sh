@@ -630,6 +630,18 @@ if [ "$EXECUTE" = "--check" ]; then
     # comparison IS the normalized comparison — and unlike `diff -q` it cannot
     # abandon a half-written pipe (see below).
     want=$(cat "$f")
+    # A JSON stub (release-please-config.json) drifts on CONTENT, not key
+    # order: release-please reads keys, so a repo holding exactly the rendered
+    # values in another order is not drift (alexa/concur/iaqualink, #315).
+    # Both sides are compared key-sorted; if either fails to parse, the raw
+    # comparison below stands and reports it.
+    if [ "$actual" != "$want" ] && [ "${name##*.}" = json ]; then
+      if a_sorted=$(printf '%s' "$actual" | jq -S . 2>/dev/null) &&
+         w_sorted=$(printf '%s' "$want" | jq -S . 2>/dev/null) &&
+         [ "$a_sorted" = "$w_sorted" ]; then
+        continue
+      fi
+    fi
     if [ "$actual" != "$want" ]; then
       echo "DRIFT    $REPO/$name"
       # `|| true` is load-bearing: `diff` exits 1 BY DESIGN when the files
