@@ -88,6 +88,17 @@ jobs:
         # PR body must be amended throughout.
         run: python3 scripts/credit.test.py
 
+      - name: fleet catalog builder unit tests
+        # The catalog is a PUBLIC document the gateway refuses WHOLE on one
+        # bad row, so both of the builder's failure modes are quiet and
+        # expensive: a private repo on a public page, or one padded/bidi
+        # string taking every Verified badge off the page. Pins the fail-closed
+        # visibility filter, the cleaning and the gateway's rules.
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/catalog-venv"
+          "${RUNNER_TEMP}/catalog-venv/bin/pip" install --quiet -r scripts/fleet-catalog.requirements.txt
+          "${RUNNER_TEMP}/catalog-venv/bin/python" scripts/fleet-catalog.test.py
+
       - name: contributor-credit action tests
         # The embedded bash around amend_changelog.py — who counts as
         # external, which of the two targets still needs crediting, whether
