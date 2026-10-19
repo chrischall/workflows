@@ -1,27 +1,22 @@
     ignore:
-      # VITEST IS ONE VERSION ACROSS THIS REPO, AND THE POOL PICKS IT.
+      # VITEST IS ONE VERSION ACROSS THIS REPO, AND THE PLUGIN PICKS IT.
       #
-      # `@cloudflare/vitest-pool-workers` (in `packages/gateway`) pins
-      # `peer vitest@"^4.1.0"`. The gateway suite runs inside workerd through
-      # that pool, so a vitest major it does not support is not a slow
-      # migration — the suite does not start. Bumping to 5.0.0 gave 100+
-      # `jsg.SyntaxError: Unexpected identifier 'file'` out of workerd before a
-      # single gateway assertion ran (mcp-host#716).
+      # `@cloudflare/vitest-plugin` (in `packages/gateway`, the successor to the
+      # deprecated `@cloudflare/vitest-pool-workers`) peers on
+      # `vitest@"^4.1.0 || ^5.0.0"`. The gateway suite runs inside workerd
+      # through it, so a vitest major it does not support is not a slow
+      # migration — the suite does not start (vitest 5 under the old pool gave
+      # 100+ `jsg.SyntaxError`s before a single assertion ran, mcp-host#716).
       #
       # And it cannot be taken one workspace at a time. Dependabot treats
-      # vitest as ONE repo-wide version: a split that put four workspaces on 5
-      # and left the gateway on 4 was flattened by the next ordinary patch
-      # bump, which is why that repo's CLAUDE.md says all five move together
-      # or none do.
+      # vitest as ONE repo-wide version: a split was flattened by the next
+      # ordinary patch bump, which is why that repo's CLAUDE.md says all five
+      # move together or none do. All five moved to 5 together
+      # (fleet-audit#1283). Lift this ceiling when the plugin's peer range
+      # admits vitest 6: the thing to read is that peer range, not vitest's
+      # changelog.
       #
-      # This is the fleet's only pool-workers consumer, so this is the only
-      # vitest ceiling. Lift it when the pool's peer range admits vitest 5: the
-      # thing to read is that peer range, not vitest's changelog.
-      #
-      # A ceiling, not a freeze. 4.x minors and patches flow normally, which is
-      # where the security fixes are. Only `vitest` is named: this repo declares
-      # no `@vitest/*` package of its own — they arrive transitively under the
-      # pool, and dependabot proposes bumps only for what is declared.
+      # A ceiling, not a freeze. 5.x minors and patches flow normally.
       - dependency-name: vitest
         versions:
-          - ">=5.0.0"
+          - ">=6.0.0"
