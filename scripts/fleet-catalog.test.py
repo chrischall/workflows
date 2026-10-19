@@ -200,10 +200,10 @@ print("\n── display text is cleaned to the gateway's rules ──")
 long_summary = "word " * 60
 f = FakeFetcher({"o/x-mcp": pub()}, {("o/x-mcp", "mint.yaml"): json.dumps({
     "version": 1,
-    "name": "  X‮ \u0007 Tool  ",
+    "name": "  X\u202e \u0007 Tool  ",
     "summary": long_summary,
-    "examples": [{"prompt": " ​ ", "note": "dropped with its prompt"},
-                 {"prompt": "  Ask\tthis\n please ", "note": " ⁦ "}],
+    "examples": [{"prompt": " \u200b ", "note": "dropped with its prompt"},
+                 {"prompt": "  Ask\tthis\n please ", "note": " \u2066 "}],
 })})
 cat, rep = build(fleet({"repo": "o/x-mcp", "package_name": "x-mcp"}), f)
 x = cat["servers"][0]
@@ -216,12 +216,38 @@ check("the cleaning is noted in the summary", any(w["repo"] == "o/x-mcp" for w i
 check("still passes the gateway's rules", mod.validate_catalog(cat), [])
 
 f = FakeFetcher({"o/y-mcp": pub()}, {("o/y-mcp", "mint.yaml"): json.dumps({
-    "version": 1, "name": "​", "summary": " ‏ ", "examples": [{"prompt": "​"}]})})
+    "version": 1, "name": "\u200b", "summary": " \u200f ", "examples": [{"prompt": "\u200b"}]})})
 cat, rep = build(fleet({"repo": "o/y-mcp", "package_name": "y-mcp"}), f)
 y = cat["servers"][0]
 check("a name that cleans to empty falls back to the repo name", y["name"], "y-mcp")
 check("a summary that cleans to empty becomes null", y["summary"], None)
 check("all examples dropped => key omitted", "examples" in y, False)
+
+print("\n── caps are UTF-16 code units, as zod counts them ──")
+def u16(t):
+    return len(t.encode("utf-16-le")) // 2
+astral = "\U0001F3B5"  # one code point, two UTF-16 units (a surrogate pair)
+t = mod.clean_text(astral * 250, 200)
+check("an astral run is truncated to <= 200 UTF-16 units", u16(t) <= 200, True)
+check("and ends with the ellipsis, no lone surrogate", (t.endswith("\u2026"), t[:-1] == astral * (len(t) - 1)), (True, True))
+t = mod.clean_text("a" + astral * 100, 200)
+check("201 units is truncated (100 astral + 1)", u16(t) <= 200 and t.endswith("\u2026"), True)
+check("exactly 200 units is kept as is", mod.clean_text(astral * 100, 200), astral * 100)
+check("words: cut lands before a word, by units",
+      u16(mod.clean_text((astral * 3 + " ") * 60, 200)) <= 200, True)
+check("validate_catalog refuses an astral summary over 200 units",
+      len(mod.validate_catalog({"generatedAt": NOW, "servers": [dict(
+          {"name": "N", "slug": "n", "pkg": "@s/n", "kind": "K", "bridge": False, "repo": "o/n"},
+          summary=astral * 101)]})) > 0, True)
+check("validate_catalog accepts an astral summary of exactly 200 units",
+      mod.validate_catalog({"generatedAt": NOW, "servers": [dict(
+          {"name": "N", "slug": "n", "pkg": "@s/n", "kind": "K", "bridge": False, "repo": "o/n"},
+          summary=astral * 100)]}), [])
+f = FakeFetcher({"o/e-mcp": pub()}, {("o/e-mcp", "mint.yaml"): json.dumps({
+    "version": 1, "name": astral * 40, "summary": astral * 150,
+    "examples": [{"prompt": astral * 150, "note": astral * 100}]})})
+cat, rep = build(fleet({"repo": "o/e-mcp", "package_name": "e-mcp"}), f)
+check("a built row of astral text near every cap passes the gateway's rules", mod.validate_catalog(cat), [])
 
 print("\n── uniqueness: one duplicate would refuse the whole document ──")
 f = FakeFetcher({"o/a-mcp": pub(), "p/a-mcp": pub(), "o/b-mcp": pub()},
@@ -241,7 +267,7 @@ check("an offset datetime passes", mod.validate_catalog({"generatedAt": "2026-10
 bads = {
     "bad generatedAt": {"generatedAt": "yesterday", "servers": []},
     "padded name": {"generatedAt": NOW, "servers": [dict(good, name=" N")]},
-    "bidi in kind": {"generatedAt": NOW, "servers": [dict(good, kind="K‮")]},
+    "bidi in kind": {"generatedAt": NOW, "servers": [dict(good, kind="K\u202e")]},
     "summary too long": {"generatedAt": NOW, "servers": [dict(good, summary="s" * 201)]},
     "summary key missing": {"generatedAt": NOW, "servers": [{k: v for k, v in good.items() if k != "summary"}]},
     "empty examples": {"generatedAt": NOW, "servers": [dict(good, examples=[])]},

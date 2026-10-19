@@ -67,16 +67,22 @@ DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-
 # core catalog-listing.ts REWRITES_THE_LINE: C0/C1 controls (bar \t-\r), ALM,
 # zero-width space, LRM/RLM, the embedding/override and isolate controls.
 REWRITES_THE_LINE = re.compile(
-    "[\u0000-\u0008\u000e-\u001f\u007f-\u009f؜​‎‏‪-‮⁦-⁩]"
+    "[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069]"
 )
 # JS String.prototype.trim() also trims U+FEFF, which Python's \s does not match.
-EXTRA_TRIM = re.compile("﻿")
+EXTRA_TRIM = re.compile("\ufeff")
+
+
+def utf16_len(text):
+    """Length in UTF-16 code units: what JS `.length` and zod `.min()/.max()` count.
+    An astral character (most emoji) is ONE Python code point but TWO units."""
+    return len(text.encode("utf-16-le")) // 2
 
 
 def _is_display_text(value, max_len):
     return (
         isinstance(value, str)
-        and 1 <= len(value) <= max_len
+        and 1 <= utf16_len(value) <= max_len
         and value.strip() == value
         and EXTRA_TRIM.search(value) is None
         and value.strip() != ""
@@ -159,12 +165,20 @@ def _clean(value, max_len):
     text = re.sub(r"\s+", " ", stripped).strip()
     if text == "":
         return None, changes
-    if len(text) > max_len:
-        cut = text[: max_len - 1]
+    if utf16_len(text) > max_len:
+        # Keep whole code points (never half a surrogate pair) within
+        # max_len - 1 units, leaving one unit for the ellipsis.
+        cut, units = [], 0
+        for ch in text:
+            units += 2 if ord(ch) > 0xFFFF else 1
+            if units > max_len - 1:
+                break
+            cut.append(ch)
+        cut = "".join(cut)
         if " " in cut:
             cut = cut[: cut.rindex(" ")]
         text = cut.rstrip() + "…"
-        changes.append(f"truncated to {max_len} characters")
+        changes.append(f"truncated to {max_len} UTF-16 units")
     return text, changes
 
 
