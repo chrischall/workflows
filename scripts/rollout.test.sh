@@ -1215,15 +1215,19 @@ done
 # `dependabot_ignore` lands on the ROOT entry only; a separate extra entry never
 # inherits it, because a hold is written for one ecosystem (a gradle JAXB hold
 # means nothing to npm). So curtaincall's /web — which cannot take TypeScript 7
-# or ESLint 10 until typescript-eslint and eslint-plugin-react support them —
-# had no way to hold them, and got the same failing majors every week (#375).
+# until typescript-eslint admits it — had no way to hold it, and got the same
+# failing major every week (#375). The fragment once held ESLint 10 too;
+# curtaincall#402 took ESLint 10 by pinning `settings.react.version`, and the
+# hold then kept 10.x patches out of /web for two weeks, so the fragment must
+# name only what is still unloadable.
 DIR="$TMP/multi-xign"
 bash "$ROLLOUT" FAKE/mx --render "$DIR" --only dependabot >/dev/null 2>"$TMP/ff2x0.err"
 if ruby -ryaml -e '
     u = YAML.safe_load(File.read(ARGV[0]))["updates"] || []
     npm = u.find { |x| x["package-ecosystem"] == "npm" } or abort "no npm entry"
     names = (npm["ignore"] || []).map { |i| i["dependency-name"] }
-    abort "npm ignore #{names.inspect}, want typescript and eslint" unless names.include?("typescript") && names.include?("eslint")
+    abort "npm ignore #{names.inspect}, want typescript" unless names.include?("typescript")
+    abort "npm ignore #{names.inspect}: the eslint hold was lifted by curtaincall#402" if names.include?("eslint")
     abort "the gradle hold leaked onto npm" if names.any? { |n| n.include?("jaxb") }
     g = u.find { |x| x["package-ecosystem"] == "gradle" }
     gn = (g["ignore"] || []).map { |i| i["dependency-name"] }
