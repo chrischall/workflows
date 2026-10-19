@@ -1,0 +1,86 @@
+name: Fleet catalog
+
+# Builds catalog.json — the fleet manifest mcp-host's public /catalog page
+# reads from FLEET_CATALOG_URL to mark servers "Verified" and show their
+# examples — and publishes it to this repo's GitHub Pages site:
+#
+#   https://chrischall.github.io/workflows/catalog.json
+#
+# This repo's OWN schedule. It is not a reusable workflow, no consumer repo
+# calls it, and nothing in the fleet renders it.
+#
+# The catalog is PUBLIC. scripts/build-fleet-catalog.py lists only fleet repos
+# the API reports as exactly "public" (unreadable counts as not public), and
+# reads them with this job's GITHUB_TOKEN, which cannot see a private repo in
+# the first place. The one private read is the mint manifest schema, which
+# mcp-host (a private repo) publishes; RELEASE_PAT fetches that file only.
+#
+# A repo with no mint.yaml or an invalid one is reported in the job summary
+# and left out — not a failure. The run fails, and the live catalog stays as it
+# was, only when the schema cannot be fetched or the finished document would
+# be refused by the gateway (which refuses it whole on one bad row).
+
+on:
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+# One Pages deployment at a time; never cancel one mid-flight.
+concurrency:
+  group: fleet-catalog-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Fetch the mint manifest schema from mcp-host main
+        env:
+          SCHEMA_URL: https://raw.githubusercontent.com/chrischall/mcp-host/main/packages/core/schemas/mint-manifest.schema.json
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --proto '=https' -H "Authorization: token ${RELEASE_PAT}" \
+            -o "${RUNNER_TEMP}/mint-manifest.schema.json" "$SCHEMA_URL"
+          # The file names itself; a different $id means the URL served
+          # something other than the schema this job was written against.
+          test "$(jq -r '."$id"' "${RUNNER_TEMP}/mint-manifest.schema.json")" = "$SCHEMA_URL"
+
+      - name: Install the builder's dependencies
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/venv"
+          "${RUNNER_TEMP}/venv/bin/pip" install --quiet -r scripts/fleet-catalog.requirements.txt
+
+      - name: Build catalog.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          "${RUNNER_TEMP}/venv/bin/python" scripts/build-fleet-catalog.py \
+            --fleet fleet.json \
+            --kinds catalog-kinds.json \
+            --schema "${RUNNER_TEMP}/mint-manifest.schema.json" \
+            --out site/catalog.json \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}catalog.json
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5.0.1
