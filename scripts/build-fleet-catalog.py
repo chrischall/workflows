@@ -3,10 +3,20 @@
 public /catalog page reads from FLEET_CATALOG_URL.
 
 For every repo in fleet.json that is PUBLIC (checked against the GitHub API,
-fail-closed: anything unreadable or not exactly "public" is left out), fetch
-its mint.yaml at the default branch, validate it against the mint manifest
-JSON Schema that mcp-host publishes, and emit one row per valid repo in
-exactly the shape mcp-host core's `fleetCatalogSchema` accepts
+fail-closed: anything unreadable or not exactly "public" is left out), list
+its files at the default branch (one git-trees call) to find its manifests:
+
+  * a root mint.yaml is ONE server: slug = the repo name, pkg = the repo's
+    package_name in fleet.json;
+  * failing that, each packages/<dir>/mint.yaml of a monorepo is its own
+    server: slug = <dir>, pkg = the name in packages/<dir>/package.json, and a
+    `"private": true` package is skipped (it is never published);
+  * no mint.yaml anywhere means the repo is not an MCP (a library, a plugin,
+    an app): COUNTED in the summary, not reported.
+
+Each manifest is validated against the mint manifest JSON Schema that
+mcp-host publishes, and every valid one becomes a row in exactly the shape
+mcp-host core's `fleetCatalogSchema` accepts
 (packages/core/src/public-catalog.ts):
 
     {"generatedAt": ISO datetime,
@@ -20,8 +30,10 @@ cap) and then re-checks the finished document against the same rules
 `@mcp-host/core` is a private, unpublished package; the trim, bidi and
 uniqueness checks could not be expressed in JSON Schema anyway.
 
-A repo with no mint.yaml, a mint.yaml that fails the schema, or no npm package
-in fleet.json is REPORTED in the job summary and left out — never fatal. What
+A mint.yaml that fails the schema, a root mint.yaml with no package_name in
+fleet.json, a package_name with no mint.yaml, or a monorepo package with no
+usable package.json is REPORTED in the job summary and left out — never
+fatal. What
 IS fatal is anything that would publish an unvalidated document: an invalid
 schema, or a finished catalog that fails `validate_catalog`.
 
@@ -211,6 +223,18 @@ class GhFetcher:
         except (FetchError, ValueError):
             return None  # unreadable is treated exactly like private: left out
 
+    def tree(self, repo, ref):
+        """(every file path at `ref`, truncated?) from ONE git-trees call."""
+        body = self._api(f"repos/{repo}/git/trees/{urllib.parse.quote(ref, safe='')}?recursive=1")
+        if body is None:
+            raise FetchError(f"no tree at {ref}")
+        try:
+            doc = json.loads(body)
+            paths = [t["path"] for t in doc["tree"] if t.get("type") == "blob"]
+        except (ValueError, KeyError, TypeError) as e:
+            raise FetchError(f"unreadable tree listing ({e.__class__.__name__})")
+        return paths, bool(doc.get("truncated"))
+
     def file(self, repo, path, ref):
         return self._api(f"repos/{repo}/contents/{path}?ref={urllib.parse.quote(ref, safe='')}", raw=True)
 
@@ -223,6 +247,7 @@ class Report:
         self.reported = []  # [{repo, reason}] — public repos left out
         self.warnings = []  # [{repo, warning}] — listed, but something was changed or defaulted
         self.non_public = 0
+        self.not_mcp = 0  # public, but no mint.yaml anywhere: not a server, nothing to report
 
     def skip(self, repo, reason):
         self.reported.append({"repo": repo, "reason": reason})
@@ -247,52 +272,31 @@ def build_catalog(fleet, kinds, schema, fetcher, generated_at):
     servers = []
     by_slug, by_pkg = {}, {}
 
-    for entry in fleet.get("repos", []):
-        repo = entry["repo"]
-        info = fetcher.repo_info(repo)
-        # Fail-closed: only an explicit "public" passes.
-        if not isinstance(info, dict) or info.get("visibility") != "public":
-            report.non_public += 1
-            continue
-        if info.get("archived"):
-            report.skip(repo, "archived")
-            continue
-        name_part = repo.split("/", 1)[1]
-        slug = name_part
-        if not SLUG_RE.match(slug):
-            report.skip(repo, f"repo name is not a catalog slug: {name_part}")
-            continue
-        pkg = entry.get("package_name", defaults.get("package_name", "")) or ""
-        if not pkg:
-            report.skip(repo, "no package_name in fleet.json")
-            continue
-        if len(pkg) > 214 or not NPM_RE.match(pkg):
-            report.skip(repo, f"package_name is not a valid npm name: {pkg}")
-            continue
+    def list_server(repo, label, prefix, fetch_path, ref, slug, pkg, name_fallback):
+        """Fetch, validate and clean one manifest into a row. Returns the row,
+        or reports why not (prefixed with the package path in a monorepo)."""
         if slug in by_slug:
-            report.skip(repo, f"slug {slug} is already listed by {by_slug[slug]}")
-            continue
+            report.skip(repo, f"{prefix}slug {slug} is already listed by {by_slug[slug]}")
+            return
         if pkg in by_pkg:
-            report.skip(repo, f"package {pkg} is already listed by {by_pkg[pkg]}")
-            continue
-
+            report.skip(repo, f"{prefix}package {pkg} is already listed by {by_pkg[pkg]}")
+            return
         try:
-            text = fetcher.file(repo, "mint.yaml", info.get("default_branch") or "main")
+            text = fetcher.file(repo, fetch_path, ref)
         except FetchError as e:
-            report.skip(repo, f"could not fetch mint.yaml: {e}")
-            continue
+            report.skip(repo, f"{prefix}could not fetch mint.yaml: {e}")
+            return
         if text is None:
-            report.skip(repo, "no mint.yaml on the default branch")
-            continue
+            report.skip(repo, f"{prefix}no mint.yaml on the default branch")
+            return
         try:
             doc = yaml.safe_load(text)
         except yaml.YAMLError as e:
-            report.skip(repo, f"mint.yaml is not valid YAML: {str(e).splitlines()[0]}")
-            continue
-        errors = list(validator.iter_errors(doc))
-        if errors:
-            report.skip(repo, _schema_error(validator, doc))
-            continue
+            report.skip(repo, f"{prefix}mint.yaml is not valid YAML: {str(e).splitlines()[0]}")
+            return
+        if list(validator.iter_errors(doc)):
+            report.skip(repo, prefix + _schema_error(validator, doc))
+            return
 
         changes = []
 
@@ -301,7 +305,7 @@ def build_catalog(fleet, kinds, schema, fetcher, generated_at):
             changes.extend(f"{field}: {w}" for w in what)
             return cleaned
 
-        name = take(doc.get("name"), MAX_NAME, "name") or name_part
+        name = take(doc.get("name"), MAX_NAME, "name") or name_fallback
         summary = take(doc.get("summary"), MAX_SUMMARY, "summary")
         examples = []
         for i, ex in enumerate(doc.get("examples") or []):
@@ -327,10 +331,94 @@ def build_catalog(fleet, kinds, schema, fetcher, generated_at):
             server["examples"] = examples
         server.update({"kind": kind, "bridge": bridge, "repo": repo})
         servers.append(server)
-        by_slug[slug] = repo
-        by_pkg[pkg] = repo
+        by_slug[slug] = label
+        by_pkg[pkg] = label
         for c in changes:
-            report.warn(repo, c)
+            report.warn(repo, prefix + c)
+
+    for entry in fleet.get("repos", []):
+        repo = entry["repo"]
+        info = fetcher.repo_info(repo)
+        # Fail-closed: only an explicit "public" passes.
+        if not isinstance(info, dict) or info.get("visibility") != "public":
+            report.non_public += 1
+            continue
+        if info.get("archived"):
+            report.skip(repo, "archived")
+            continue
+        ref = info.get("default_branch") or "main"
+        pkg = entry.get("package_name", defaults.get("package_name", "")) or ""
+
+        # One git-trees call finds every manifest: the root mint.yaml, or a
+        # monorepo's packages/<dir>/mint.yaml.
+        try:
+            paths, truncated = fetcher.tree(repo, ref)
+        except FetchError as e:
+            report.skip(repo, f"could not list the repo's files: {e}")
+            continue
+        present = set(paths)
+        package_dirs = sorted(
+            p.split("/")[1] for p in present
+            if p.startswith("packages/") and p.endswith("/mint.yaml") and p.count("/") == 2
+        )
+
+        if "mint.yaml" in present:
+            name_part = repo.split("/", 1)[1]
+            if not SLUG_RE.match(name_part):
+                report.skip(repo, f"repo name is not a catalog slug: {name_part}")
+                continue
+            if not pkg:
+                report.skip(repo, "no package_name in fleet.json")
+                continue
+            if len(pkg) > 214 or not NPM_RE.match(pkg):
+                report.skip(repo, f"package_name is not a valid npm name: {pkg}")
+                continue
+            list_server(repo, repo, "", "mint.yaml", ref, name_part, pkg, name_part)
+            continue
+
+        if not package_dirs:
+            if truncated:
+                report.skip(repo, "the file tree is truncated and no mint.yaml was found in what was listed")
+            elif pkg:
+                # It publishes an npm package as a fleet MCP, yet has no manifest.
+                report.skip(repo, "no mint.yaml on the default branch")
+            else:
+                report.not_mcp += 1
+            continue
+
+        # A monorepo: each packages/<dir>/mint.yaml is its own server, named
+        # by its package.json and slugged by its directory.
+        for d in package_dirs:
+            base = f"packages/{d}"
+            prefix = f"{base}: "
+            if not SLUG_RE.match(d):
+                report.skip(repo, f"{prefix}directory name is not a catalog slug: {d}")
+                continue
+            if f"{base}/package.json" not in present:
+                report.skip(repo, f"{prefix}no package.json beside mint.yaml")
+                continue
+            try:
+                pj_text = fetcher.file(repo, f"{base}/package.json", ref)
+            except FetchError as e:
+                report.skip(repo, f"{prefix}could not fetch package.json: {e}")
+                continue
+            if pj_text is None:
+                report.skip(repo, f"{prefix}no package.json beside mint.yaml")
+                continue
+            try:
+                pj = json.loads(pj_text)
+            except ValueError:
+                pj = None
+            if not isinstance(pj, dict):
+                report.skip(repo, f"{prefix}package.json is not valid JSON")
+                continue
+            if pj.get("private") is True:
+                continue  # never published: nothing to install, nothing to list
+            pkg_name = pj.get("name")
+            if not (isinstance(pkg_name, str) and len(pkg_name) <= 214 and NPM_RE.match(pkg_name)):
+                report.skip(repo, f"{prefix}package.json name is not a valid npm name: {pkg_name}")
+                continue
+            list_server(repo, f"{repo} ({base})", prefix, f"{base}/mint.yaml", ref, d, pkg_name, d)
 
     return {"generatedAt": generated_at, "servers": servers}, report
 
@@ -344,6 +432,7 @@ def render_summary(catalog, report):
         f"- {n} servers listed ({with_examples} with examples, {n - with_examples} summary only)",
         f"- {report.non_public} non-public or unreadable fleet repos left out "
         "(counted, not named: this summary is public)",
+        f"- {report.not_mcp} public repos are not MCPs (no mint.yaml)",
         f"- {len(report.reported)} public repos reported and left out",
         "",
     ]

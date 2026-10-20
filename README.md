@@ -21,7 +21,7 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 | `templates/release-notes.yml` | repo-config template | renders `.github/release.yml`; all repos unless `release_notes: none` |
 | `.github/actions/mcp-publish` | composite action | MCP publishers |
 | `.github/actions/install-mcp-publisher` | composite action | via mcp-publish |
-| `.github/workflows/fleet-catalog.yml` | this repo's own nightly schedule | none — builds `catalog.json` from each public fleet repo's `mint.yaml` (`scripts/build-fleet-catalog.py`, kinds in `catalog-kinds.json`) and publishes it to https://chrischall.github.io/workflows/catalog.json, mcp-host's `FLEET_CATALOG_URL` |
+| `.github/workflows/fleet-catalog.yml` | this repo's own nightly schedule | none — builds `catalog.json` from each public fleet repo's `mint.yaml`, or each `packages/*/mint.yaml` of a monorepo (`scripts/build-fleet-catalog.py`, kinds in `catalog-kinds.json`) and publishes it to https://chrischall.github.io/workflows/catalog.json, mcp-host's `FLEET_CATALOG_URL` |
 
 The pipeline contract: non-release PR → auto-review emits a mandatory
 `pass|warn|fail` verdict → `pass` or `warn` adds `ready-to-merge` → label arms
