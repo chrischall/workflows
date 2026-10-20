@@ -77,17 +77,33 @@ SCHEMA = {
 
 
 class FakeFetcher:
-    """repos: {repo: info-dict | None}; files: {(repo, path): text}."""
+    """repos: {repo: info-dict | None}; files: {(repo, path): text}.
 
-    def __init__(self, repos, files, errors=()):
+    The repo's file tree is every path in `files` for that repo, unless
+    `trees` overrides it with {repo: (paths, truncated)}. `errors` makes the
+    repo's file reads fail; `tree_errors` makes its tree listing fail."""
+
+    def __init__(self, repos, files, errors=(), trees=None, tree_errors=()):
         self.repos, self.files, self.errors = repos, files, set(errors)
+        self.trees, self.tree_errors = trees or {}, set(tree_errors)
         self.file_calls = []
+        self.file_paths = []
+        self.tree_calls = []
 
     def repo_info(self, repo):
         return self.repos.get(repo)
 
+    def tree(self, repo, ref):
+        self.tree_calls.append((repo, ref))
+        if repo in self.tree_errors:
+            raise mod.FetchError("HTTP 409")
+        if repo in self.trees:
+            return self.trees[repo]
+        return sorted(p for (r, p) in self.files if r == repo), False
+
     def file(self, repo, path, ref):
         self.file_calls.append(repo)
+        self.file_paths.append((repo, path))
         if repo in self.errors:
             raise mod.FetchError("HTTP 502")
         return self.files.get((repo, path))
@@ -167,12 +183,14 @@ f = FakeFetcher(
      ("o/list-mcp", "mint.yaml"): "- version: 1\n",
      ("o/zillow-mcp", "mint.yaml"): "version: 1\nsummary: Zillow listings\n"},
     errors={"o/err-mcp"},
+    trees={"o/err-mcp": (["mint.yaml"], False)},
 )
 cat, rep = build(fleet(*[{"repo": r, "package_name": r.split("/")[1]} for r in
                          ("o/none-mcp", "o/bad-mcp", "o/yaml-mcp", "o/err-mcp", "o/list-mcp", "o/zillow-mcp")]), f)
 check("only the valid repo is listed", [s["repo"] for s in cat["servers"]], ["o/zillow-mcp"])
 reasons = {r["repo"]: r["reason"] for r in rep.reported}
-check("missing mint.yaml is reported", reasons.get("o/none-mcp"), "no mint.yaml on the default branch")
+check("missing mint.yaml on a repo WITH a package_name is reported (an MCP missing its manifest)",
+      reasons.get("o/none-mcp"), "no mint.yaml on the default branch")
 check("a schema failure is reported with the path", reasons.get("o/bad-mcp", "").startswith("mint.yaml fails the schema at version"), True)
 check("unparseable YAML is reported", reasons.get("o/yaml-mcp", "").startswith("mint.yaml is not valid YAML"), True)
 check("a non-mapping document is reported", reasons.get("o/list-mcp", "").startswith("mint.yaml fails the schema"), True)
@@ -190,11 +208,148 @@ cat, rep = build(fleet({"repo": "o/nopkg-mcp"},
                        {"repo": "o/Bad_Slug", "package_name": "bad-slug"},
                        {"repo": "o/badpkg-mcp", "package_name": "Not A Package"}), f)
 reasons = {r["repo"]: r["reason"] for r in rep.reported}
-check("no package_name is reported and skipped before fetching",
+check("a root mint.yaml with no package_name is reported, and mint.yaml is never fetched",
       (reasons.get("o/nopkg-mcp"), "o/nopkg-mcp" in f.file_calls), ("no package_name in fleet.json", False))
 check("a repo name that is not a slug is reported", reasons.get("o/Bad_Slug", "").startswith("repo name is not a catalog slug"), True)
 check("an invalid npm name is reported", reasons.get("o/badpkg-mcp", "").startswith("package_name is not a valid npm name"), True)
 check("none listed", cat["servers"], [])
+
+print("\n── a repo with no mint.yaml anywhere is not an MCP ──")
+f = FakeFetcher({"o/lib": pub(), "o/tool": pub()},
+                {("o/lib", "package.json"): '{"name": "lib"}', ("o/lib", "README.md"): "# lib\n"})
+cat, rep = build(fleet({"repo": "o/lib"}, {"repo": "o/tool"}), f)
+check("nothing listed", cat["servers"], [])
+check("nothing reported", rep.reported, [])
+check("both are counted as not an MCP", rep.not_mcp, 2)
+check("one tree call per repo, no file reads", (len(f.tree_calls), f.file_calls), (2, []))
+summary = mod.render_summary(cat, rep)
+check("the summary carries the not-an-MCP count", "2 public repos are not MCPs (no mint.yaml)" in summary, True)
+check("and no warning rows for them", ("o/lib" in summary, "o/tool" in summary), (False, False))
+
+print("\n── the file tree is read once per repo, at the default branch ──")
+f = FakeFetcher({"o/zillow-mcp": pub("trunk")}, {("o/zillow-mcp", "mint.yaml"): "version: 1\n"})
+cat, rep = build(fleet({"repo": "o/zillow-mcp", "package_name": "zillow-mcp"}), f)
+check("tree read at the default branch", f.tree_calls, [("o/zillow-mcp", "trunk")])
+f = FakeFetcher({"o/t-mcp": pub(), "o/u-mcp": pub()}, {}, tree_errors={"o/t-mcp"},
+                trees={"o/u-mcp": (["src/index.ts"], True)})
+cat, rep = build(fleet({"repo": "o/t-mcp", "package_name": "t-mcp"}, {"repo": "o/u-mcp"}), f)
+reasons = {r["repo"]: r["reason"] for r in rep.reported}
+check("a tree fetch error is reported, not fatal", reasons.get("o/t-mcp"), "could not list the repo's files: HTTP 409")
+check("a truncated tree with no manifest found is reported, not called 'not an MCP'",
+      (reasons.get("o/u-mcp"), rep.not_mcp),
+      ("the file tree is truncated and no mint.yaml was found in what was listed", 0))
+f = FakeFetcher({"o/v-mcp": pub()}, {("o/v-mcp", "mint.yaml"): "version: 1\n"},
+                trees={"o/v-mcp": (["mint.yaml"], True)})
+cat, rep = build(fleet({"repo": "o/v-mcp", "package_name": "v-mcp"}), f)
+check("a truncated tree that still shows a root mint.yaml lists it", [s["repo"] for s in cat["servers"]], ["o/v-mcp"])
+
+print("\n── a monorepo lists each packages/*/mint.yaml as its own server ──")
+MONO = "o/gog-mcp"
+mono_files = {
+    (MONO, "package.json"): '{"name": "gog-root", "private": true}',
+    (MONO, "packages/gog-mcp/package.json"): '{"name": "gog-mcp"}',
+    (MONO, "packages/gog-mcp/mint.yaml"): (
+        "version: 1\nname: Google (gogcli)\nsummary: All of Google\n"
+        "examples:\n  - prompt: Find my unread mail\ntransport:\n  bridge: false\n"),
+    (MONO, "packages/gog-mcp-gmail/package.json"): '{"name": "@s/gog-mcp-gmail", "private": false}',
+    (MONO, "packages/gog-mcp-gmail/mint.yaml"): "version: 1\nsummary: \"  Gmail\\u202e only \"\n",
+    # private: true — never published, never listed
+    (MONO, "packages/internal/package.json"): '{"name": "internal", "private": true}',
+    (MONO, "packages/internal/mint.yaml"): "version: 1\n",
+    # a package.json-less manifest, a broken package.json, a bad npm name,
+    # a manifest failing the schema, a dir that is not a slug, a dup pkg
+    (MONO, "packages/nopkgjson/mint.yaml"): "version: 1\n",
+    (MONO, "packages/brokenjson/package.json"): "{not json",
+    (MONO, "packages/brokenjson/mint.yaml"): "version: 1\n",
+    (MONO, "packages/badname/package.json"): '{"name": "Bad Name"}',
+    (MONO, "packages/badname/mint.yaml"): "version: 1\n",
+    (MONO, "packages/badschema/package.json"): '{"name": "badschema"}',
+    (MONO, "packages/badschema/mint.yaml"): "version: 2\n",
+    (MONO, "packages/Bad_Dir/package.json"): '{"name": "bad-dir"}',
+    (MONO, "packages/Bad_Dir/mint.yaml"): "version: 1\n",
+    (MONO, "packages/zdup/package.json"): '{"name": "gog-mcp"}',
+    (MONO, "packages/zdup/mint.yaml"): "version: 1\n",
+    # a package.json with no mint.yaml is just a library package
+    (MONO, "packages/core/package.json"): '{"name": "gog-core"}',
+    # deeper than packages/<dir>/ is not a package manifest
+    (MONO, "packages/gog-mcp/test/fixtures/mint.yaml"): "version: 1\n",
+}
+f = FakeFetcher({MONO: pub()}, mono_files)
+kinds = dict(KINDS, kinds=dict(KINDS["kinds"], **{MONO: "Productivity"}))
+cat, rep = build(fleet({"repo": MONO}), f, kinds=kinds)
+check("each valid, non-private package is a server, in path order",
+      [(s["slug"], s["pkg"]) for s in cat["servers"]],
+      [("gog-mcp", "gog-mcp"), ("gog-mcp-gmail", "@s/gog-mcp-gmail")])
+check("the package row, exactly", cat["servers"][0], {
+    "name": "Google (gogcli)", "slug": "gog-mcp", "pkg": "gog-mcp", "summary": "All of Google",
+    "examples": [{"prompt": "Find my unread mail"}],
+    "kind": "Productivity", "bridge": False, "repo": MONO,
+})
+check("a package's display text is cleaned like a root manifest's", cat["servers"][1]["summary"], "Gmail only")
+check("a package with no name falls back to its directory", cat["servers"][1]["name"], "gog-mcp-gmail")
+check("a monorepo needs no package_name in fleet.json", "no package_name in fleet.json" in
+      [r["reason"] for r in rep.reported], False)
+reasons = sorted(r["reason"] for r in rep.reported if r["repo"] == MONO)
+check("every bad package is reported against the repo, by path", reasons, sorted([
+    "packages/Bad_Dir: directory name is not a catalog slug: Bad_Dir",
+    "packages/badname: package.json name is not a valid npm name: Bad Name",
+    "packages/badschema: mint.yaml fails the schema at version: 1 was expected",
+    "packages/brokenjson: package.json is not valid JSON",
+    "packages/zdup: package gog-mcp is already listed by o/gog-mcp (packages/gog-mcp)",
+    "packages/nopkgjson: no package.json beside mint.yaml",
+]))
+check("a private package is skipped without a report row",
+      any("internal" in r["reason"] for r in rep.reported), False)
+check("a private package's mint.yaml is never fetched",
+      (MONO, "packages/internal/mint.yaml") in f.file_paths, False)
+check("cleaning in a package is noted against that package",
+      any(w["repo"] == MONO and w["warning"].startswith("packages/gog-mcp-gmail: summary:") for w in rep.warnings), True)
+check("the monorepo document passes the gateway's rules", mod.validate_catalog(cat), [])
+check("a monorepo is not 'not an MCP'", rep.not_mcp, 0)
+
+f = FakeFetcher({MONO: pub()}, mono_files)
+cat, rep = build(fleet({"repo": MONO}), f)
+check("an unmapped monorepo files every package under the default kind, noted per package",
+      ([s["kind"] for s in cat["servers"]],
+       sorted(w["warning"] for w in rep.warnings if "kind:" in w["warning"])),
+      (["Other", "Other"], ["packages/gog-mcp-gmail: kind: not in catalog-kinds.json, filed under Other",
+                            "packages/gog-mcp: kind: not in catalog-kinds.json, filed under Other"]))
+
+print("\n── package slugs and pkgs are unique across the WHOLE catalog ──")
+f = FakeFetcher(
+    {"o/gmail": pub(), MONO: pub(), "o/after-mcp": pub()},
+    {("o/gmail", "mint.yaml"): "version: 1\n",
+     (MONO, "packages/gmail/package.json"): '{"name": "gog-gmail"}',
+     (MONO, "packages/gmail/mint.yaml"): "version: 1\n",
+     (MONO, "packages/gog-mcp/package.json"): '{"name": "gog-mcp"}',
+     (MONO, "packages/gog-mcp/mint.yaml"): "version: 1\n",
+     ("o/after-mcp", "mint.yaml"): "version: 1\n"},
+)
+cat, rep = build(fleet({"repo": "o/gmail", "package_name": "gmail"}, {"repo": MONO},
+                       {"repo": "o/after-mcp", "package_name": "gog-mcp"}), f)
+check("first wins across repos and packages", [s["slug"] for s in cat["servers"]], ["gmail", "gog-mcp"])
+reasons = {r["reason"] for r in rep.reported}
+check("a package slug colliding with an earlier repo is reported",
+      "packages/gmail: slug gmail is already listed by o/gmail" in reasons, True)
+check("a root pkg colliding with an earlier package is reported",
+      "package gog-mcp is already listed by o/gog-mcp (packages/gog-mcp)" in reasons, True)
+check("still passes the gateway's rules", mod.validate_catalog(cat), [])
+
+print("\n── a root mint.yaml wins over packages/*/mint.yaml ──")
+f = FakeFetcher({"o/both-mcp": pub()},
+                {("o/both-mcp", "mint.yaml"): "version: 1\n",
+                 ("o/both-mcp", "packages/x/package.json"): '{"name": "x"}',
+                 ("o/both-mcp", "packages/x/mint.yaml"): "version: 1\n"})
+cat, rep = build(fleet({"repo": "o/both-mcp", "package_name": "both-mcp"}), f)
+check("only the root manifest is listed", [(s["slug"], s["pkg"]) for s in cat["servers"]], [("both-mcp", "both-mcp")])
+check("the package manifests are never read", [p for (_, p) in f.file_paths], ["mint.yaml"])
+f = FakeFetcher({"o/both-mcp": pub()},
+                {("o/both-mcp", "mint.yaml"): "version: 1\n",
+                 ("o/both-mcp", "packages/x/package.json"): '{"name": "x"}',
+                 ("o/both-mcp", "packages/x/mint.yaml"): "version: 1\n"})
+cat, rep = build(fleet({"repo": "o/both-mcp"}), f)
+check("a root mint.yaml with no package_name is still reported, packages notwithstanding",
+      ([r["reason"] for r in rep.reported], cat["servers"]), (["no package_name in fleet.json"], []))
 
 print("\n── display text is cleaned to the gateway's rules ──")
 long_summary = "word " * 60
@@ -294,7 +449,14 @@ path="$2"
 case "$path" in
   repos/o/pub-mcp) echo '{"visibility":"public","default_branch":"main","archived":false}' ;;
   repos/o/priv-mcp) echo '{"visibility":"private","default_branch":"main","archived":false}' ;;
+  repos/o/pub-mcp/git/trees/main\?recursive=1) echo '{"truncated":false,"tree":[{"path":"mint.yaml","type":"blob"},{"path":"src","type":"tree"}]}' ;;
   repos/o/pub-mcp/contents/mint.yaml\?ref=main) printf 'version: 1\nsummary: Public one\n' ;;
+  repos/o/mono) echo '{"visibility":"public","default_branch":"dev/x","archived":false}' ;;
+  repos/o/mono/git/trees/dev%2Fx\?recursive=1) echo '{"truncated":false,"tree":[{"path":"packages","type":"tree"},{"path":"packages/a","type":"tree"},{"path":"packages/a/mint.yaml","type":"blob"},{"path":"packages/a/package.json","type":"blob"}]}' ;;
+  repos/o/mono/contents/packages/a/package.json\?ref=dev%2Fx) echo '{"name":"@o/a"}' ;;
+  repos/o/mono/contents/packages/a/mint.yaml\?ref=dev%2Fx) printf 'version: 1\nsummary: Package A\n' ;;
+  repos/o/lib) echo '{"visibility":"public","default_branch":"main","archived":false}' ;;
+  repos/o/lib/git/trees/main\?recursive=1) echo '{"truncated":false,"tree":[{"path":"package.json","type":"blob"}]}' ;;
   repos/o/gone-mcp) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
@@ -303,7 +465,9 @@ esac
     (tmp / "fleet.json").write_text(json.dumps(fleet(
         {"repo": "o/pub-mcp", "package_name": "pub-mcp"},
         {"repo": "o/priv-mcp", "package_name": "priv-mcp"},
-        {"repo": "o/gone-mcp", "package_name": "gone-mcp"})))
+        {"repo": "o/gone-mcp", "package_name": "gone-mcp"},
+        {"repo": "o/mono"},
+        {"repo": "o/lib"})))
     (tmp / "kinds.json").write_text(json.dumps(KINDS))
     (tmp / "schema.json").write_text(json.dumps(SCHEMA))
     out = tmp / "site/catalog.json"
@@ -315,9 +479,13 @@ esac
                        env=env, capture_output=True, text=True)
     check("exits 0 with reported repos", p.returncode, 0)
     doc = json.loads(out.read_text()) if out.exists() else {}
-    check("emits only the public repo", [s["repo"] for s in doc.get("servers", [])], ["o/pub-mcp"])
+    check("emits the public repo and the monorepo's package",
+          [(s["repo"], s["slug"], s["pkg"]) for s in doc.get("servers", [])],
+          [("o/pub-mcp", "pub-mcp", "pub-mcp"), ("o/mono", "a", "@o/a")])
     s = summ.read_text() if summ.exists() else ""
     check("summary counts the non-public repos", "2 non-public or unreadable" in s, True)
+    check("summary counts the not-an-MCP repo", "1 public repos are not MCPs (no mint.yaml)" in s, True)
+    check("no gh call went unanswered", "unexpected gh call" in p.stderr, False)
     check("summary names neither the private nor the unreadable repo", ("priv-mcp" in s, "gone-mcp" in s), (False, False))
 
     # A schema that is not a valid JSON Schema is FATAL: no catalog is better

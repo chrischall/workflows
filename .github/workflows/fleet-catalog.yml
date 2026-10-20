@@ -15,8 +15,9 @@ name: Fleet catalog
 # the first place. The one private read is the mint manifest schema, which
 # mcp-host (a private repo) publishes; RELEASE_PAT fetches that file only.
 #
-# A repo with no mint.yaml or an invalid one is reported in the job summary
-# and left out — not a failure. The run fails, and the live catalog stays as it
+# A repo with no mint.yaml anywhere (root or packages/*/) is counted as not an
+# MCP; an invalid manifest is reported in the job summary and left out — not a
+# failure. The run fails, and the live catalog stays as it
 # was, only when the schema cannot be fetched or the finished document would
 # be refused by the gateway (which refuses it whole on one bad row).
 
