@@ -1172,6 +1172,9 @@ jobs:
           VIOLATIONS: ${{ steps.ancestry.outputs.violations }}
           UNPARSEABLE: ${{ steps.relmsg.outputs.unparseable }}
           EVENT: ${{ github.event_name }}
+          # Stamped into each verdict comment: every review posts its own, so
+          # the commit is what tells one round from the next.
+          HEAD_SHA: ${{ steps.reviewed.outputs.sha }}
           # Names the workflow that was initially triggered — the CALLER's
           # stub, not this reusable file — which is the copy the action
           # compares against the default branch.
@@ -1319,7 +1322,9 @@ jobs:
             case "$verdict" in pass) ICON="✅";; warn) ICON="🟡";; fail) ICON="🔴";; esac
             NEW_BODY="$MARKER
           $ICON Auto-review verdict: **$verdict**${summary:+ — $summary}${DISCARD_NOTE:+
-          $DISCARD_NOTE}"
+          $DISCARD_NOTE}${HEAD_SHA:+
+
+          Reviewed commit \`${HEAD_SHA:0:7}\`.}"
             if [ -n "$REVIEW" ]; then
               # GitHub refuses a comment over 65 536 characters, and a refused
               # POST would leave the PR with no verdict at all. The run summary
@@ -1349,17 +1354,13 @@ jobs:
           ⚠️ Auto-review issued **no verdict** — structured output was empty and no verdict line was found in the review comment. Treat this PR as un-reviewed."
           fi
 
-          # One comment per PR, updated in place on re-reviews (marker-matched).
-          # Marker is inlined in the jq program: gh --jq has no --arg support.
-          # head -n1 because --paginate runs the jq filter per page.
-          EXISTING=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-            --jq '[.[] | select(.body | startswith("<!-- auto-review-verdict -->"))][0].id // empty' \
-            | grep . | head -n1 || true)
-          if [ -n "$EXISTING" ]; then
-            gh api -X PATCH "repos/$REPO/issues/comments/$EXISTING" -f body="$NEW_BODY" >/dev/null
-          else
-            gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$NEW_BODY" >/dev/null
-          fi
+          # One comment per REVIEW, never edited afterwards. Updating a single
+          # comment in place erased each earlier verdict, so a PR's history read
+          # as one review, re-dated (ofw-mcp#391: a pass on d760647 overwrote
+          # the warn on 0559824). Readers of "the current verdict" take the
+          # LAST marker comment; the follow-up step links this one by id.
+          COMMENT_ID=$(gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$NEW_BODY" --jq .id)
+          echo "comment_id=$COMMENT_ID" >> "$GITHUB_OUTPUT"
 
           if [ -z "$verdict" ]; then
             if [ -n "$SELF_EDIT" ]; then
@@ -1402,6 +1403,8 @@ jobs:
           # Stamped into the body so a reader can tell whether a re-listed
           # finding was judged against their fix or against an older commit.
           HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          # This review's verdict comment — the one the tracking link goes on.
+          COMMENT_ID: ${{ steps.verdict.outputs.comment_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           MARKER="<!-- auto-review-followup:PR-${PR} -->"
@@ -1491,14 +1494,13 @@ jobs:
           fi
           [ -n "$NUM" ] && echo "issue=$NUM" >> "$GITHUB_OUTPUT"
 
-          # Prominently link the issue from the verdict marker comment so it is
-          # the first thing seen when addressing the PR. Drop any stale pointer
-          # line first, then append the fresh one (no leading indentation, or
-          # GitHub would render it as a code block).
-          CMARKER="<!-- auto-review-verdict -->"
-          CID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-            --jq "[.[] | select(.body != null and (.body | startswith(\"$CMARKER\")))][0].id // empty" \
-            | grep . | head -n1 || true)
+          # Prominently link the issue from THIS review's verdict comment so it
+          # is the first thing seen when addressing the PR. By id, not by
+          # searching: every review posts its own comment, and the first marker
+          # comment is the oldest round. Drop any stale pointer line first, then
+          # append the fresh one (no leading indentation, or GitHub would render
+          # it as a code block).
+          CID="${COMMENT_ID:-}"
           if [ -n "$CID" ] && [ -n "$NUM" ]; then
             CUR=$(gh api "repos/$REPO/issues/comments/$CID" --jq '.body')
             CLEAN=$(printf '%s\n' "$CUR" | grep -v '^📋 Tracking follow-ups:' || true)
@@ -1681,10 +1683,11 @@ jobs:
 
           # A last look at the recorded verdict before arming. Read what this
           # actually buys, because it is less than #209 claimed for it: there
-          # is only ONE marker comment per PR and `Post verdict to PR` UPSERTS
-          # it, so this run overwrote any concurrent `fail` with its own
-          # verdict seconds ago. The read can only catch a fail posted in the
-          # gap between that upsert and this line.
+          # is one marker comment per REVIEW, and `last` is the most recently
+          # posted — this run's own, seconds ago, unless a concurrent run posted
+          # after it. The read can only catch a fail posted in the gap between
+          # this run's POST and this line; one posted before it is no longer
+          # the last comment.
           #
           # It is kept because it is one API call and it fails safe, not
           # because it is the guard. The guards are `context` standing a

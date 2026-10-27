@@ -36,14 +36,18 @@ ruby -ryaml -e '
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
+[ -n "${CALLS:-}" ] && echo "gh $*" >> "$CALLS"
 # `gh pr diff <n> --repo <r> --name-only` -> the PR's changed files
 case "$*" in
   "pr diff"*--name-only*) printf '%s\n' "$CHANGED_FILES"; exit 0 ;;
   "pr view"*comments*)    printf '%s' "$RECOVER_BODY"; exit 0 ;;
-  *"issues/"*"/comments --paginate"*) exit 0 ;;   # no existing marker comment
+  # An earlier review's verdict comment, when the case sets one.
+  *"issues/"*"/comments --paginate"*) [ -n "${EXISTING_ID:-}" ] && echo "$EXISTING_ID"; exit 0 ;;
 esac
 # The POST that carries the rendered comment body.
 for a in "$@"; do case "$a" in body=*) printf '%s' "${a#body=}" > "$POSTED" ;; esac; done
+# A POST asked for the new comment's id gets one.
+case "$*" in *"-X POST"*"--jq .id"*) echo 4242 ;; esac
 exit 0
 STUB
 chmod +x "$TMP/bin/gh"
@@ -177,6 +181,30 @@ arm_case() {
 arm_case "same-repo PRs still arm" "is_fork == 'false'"
 arm_case "a fork arms down the /auto-review path" "github.event_name == 'issue_comment'"
 arm_case "a failed verdict step still cannot arm" '!cancelled()'
+
+# Each review gets its OWN comment. Editing one comment in place erased the
+# previous verdict: a PR's history read as one review, re-dated, and a reader
+# could not see what an earlier round said about an earlier commit
+# (ofw-mcp#391 — a pass on d760647 overwrote the warn on 0559824).
+echo "── A new comment per review ──"
+pr_dir="$(mktemp -d "$TMP/case.XXXXXX")"
+( export GITHUB_OUTPUT="$pr_dir/out" POSTED="$pr_dir/posted" CALLS="$pr_dir/calls" GH_TOKEN=x PR=53 \
+    REPO=chrischall/example-mcp VIOLATIONS="" RECOVER_BODY="" EXEC_FILE="" EVENT=issue_comment \
+    WORKFLOW_REF="chrischall/example-mcp/.github/workflows/pr-auto-review.yml@refs/heads/main" \
+    CHANGED_FILES="src/index.ts" EXISTING_ID=1111 HEAD_SHA=d760647b939199f2bfb5fb309379d3498051d397 \
+    OUT='{"verdict":"pass","summary":"ok","important_findings":[],"nits":[],"review":"No issues found."}'
+  : > "$GITHUB_OUTPUT"; : > "$CALLS"; bash -e "$TMP/verdict.sh" >"$pr_dir/log" 2>&1 )
+if grep -qF -- '-X PATCH' "$pr_dir/calls"; then
+  bad "a re-review does not edit the earlier verdict comment" "$(grep -F -- '-X PATCH' "$pr_dir/calls")"
+else ok "a re-review does not edit the earlier verdict comment"; fi
+if grep -qF -- "-X POST repos/chrischall/example-mcp/issues/53/comments" "$pr_dir/calls"; then
+  ok "a re-review posts a new verdict comment"
+else bad "a re-review posts a new verdict comment" "calls: $(tr '\n' ' ' < "$pr_dir/calls")"; fi
+if grep -qx 'comment_id=4242' "$pr_dir/out"; then ok "the new comment's id is a step output"
+else bad "the new comment's id is a step output" "outputs: $(tr '\n' ' ' < "$pr_dir/out")"; fi
+if grep -qF 'Reviewed commit `d760647`' "$pr_dir/posted"; then
+  ok "each verdict comment names the commit it reviewed"
+else bad "each verdict comment names the commit it reviewed" "body: $(head -c 300 "$pr_dir/posted")"; fi
 
 echo
 # The harness must run each extracted step under the flags GitHub gives it —

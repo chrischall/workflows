@@ -153,6 +153,26 @@ followup_case "an unticked prior item stays unticked" \
 ' "$FINDINGS" assert_fresh_unticked
 followup_case "empty structured output still produces a body" "" "" "" assert_fallback
 
+# The tracking link goes on THIS review's verdict comment. Every review now
+# posts its own, so "the first marker comment on the PR" is the oldest round —
+# the link would land on a stale verdict while the current one carried none.
+link_dir="$(mktemp -d "$TMP/case.XXXXXX")"
+: > "$link_dir/gh"; : > "$link_dir/existing"; : > "$link_dir/oldbody"; : > "$link_dir/captured"
+(
+  export PATH="$TMP/bin1:$PATH"
+  export GITHUB_OUTPUT="$link_dir/out" GH_CALLS="$link_dir/gh" \
+         FIX_EXISTING="$link_dir/existing" FIX_OLD_BODY="$link_dir/oldbody" CAPTURED="$link_dir/captured"
+  export GH_TOKEN=x PR=42 REPO="$REPO" PR_TITLE="a change" VERDICT=warn COMMENT_ID=777 \
+         HEAD_SHA=abcdef1234567890abcdef1234567890abcdef12 OUT="$FINDINGS"
+  bash -e "$TMP/followup.sh"
+) >"$link_dir/log" 2>&1
+if grep -qF -- "-X PATCH repos/$REPO/issues/comments/777 " "$link_dir/gh"; then
+  ok "followup: the tracking link goes on this review's verdict comment"
+else bad "followup: the tracking link goes on this review's verdict comment" "calls: $(tr '\n' ' ' < "$link_dir/gh")"; fi
+if grep -qF -- "issues/42/comments --paginate" "$link_dir/gh"; then
+  bad "followup: no search for an older verdict comment" "$(grep -F -- 'issues/42/comments --paginate' "$link_dir/gh")"
+else ok "followup: no search for an older verdict comment"; fi
+
 # ===========================================================================
 # 2. Orphan sweep
 # ===========================================================================
