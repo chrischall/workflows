@@ -361,6 +361,18 @@ injected instruction. A runtime `confirm: true` flag is defeatable by an
 instruction that passes `confirm: true`. Fail closed on unrecognized mode
 values. (`ofw`'s `OFW_WRITE_MODE`.)
 
+**Every write goes through the ONE path that judges its HTTP status.** A write
+that reaches the network some other way — a convenience method that calls the
+low-level send and parses the body directly — turns a 5xx after the request
+landed into a plain parse error that reads as safe-to-retry, instead of
+`WriteOutcomeUnknownError` / `status: "unknown"`. If the client has
+`submitFormJson`/`sendOnce`-style helpers, a write that bypasses them is a bug,
+not a style choice (`insync`'s insurance-card `upload()` did exactly this;
+chrischall/insync-mcp#4). A gate that depends on a listing (is this message
+unread? is this visit upcoming?) must fail closed when the listing was
+truncated — compare the total the API reports to the rows seen, and throw
+rather than guess (`insync`, same PR).
+
 **Sandboxed hosts often can't read files under `~/.cache`.** Default downloads
 to `~/Downloads/<repo>/`, and offer an inline mode returning bytes as MCP
 content blocks.
@@ -410,6 +422,15 @@ Note `ensureDomainTab` only opens a tab for the *first* declared domain.
 
 **The declared cookie key list is the security boundary, not HttpOnly status** —
 `chrome.cookies.get` sees HttpOnly cookies.
+
+**A multi-tenant SaaS suffix is not a trust boundary.** Every tenant shares
+`*.insynchcs.com`-style suffixes, so a redirect check of
+`hostname.endsWith('.suffix')` forwards THIS tenant's session cookie to another
+tenant's host. Pin redirects — including the FIRST hop of a login handoff — to
+the configured origin (scheme + host + port); keep the suffix check only for
+validating the env var at boot. Prefer mcp-utils'
+`createApiClient({ redirect: 'same-origin' })` / `CookieJar` over a hand-rolled
+jar and hop loop (`insync`, chrischall/insync-mcp#4 and #6).
 
 **Changing a capability requires re-pairing the extension.** Until the user
 re-pairs, the new capability path errors.
