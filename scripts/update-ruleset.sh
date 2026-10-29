@@ -185,7 +185,7 @@ if [ "$(ci_mode "$REPO")" = none ]; then
   [ -n "$EXECUTE" ] || { echo "(dry run)"; exit 0; }
   RID=$(jq -r '.[0].id // empty' <<<"$RULESETS")
   if [ -n "$RID" ]; then
-    jq -c --argjson add "$ADD_RULES" '.[0] | .rules += $add | {name, target, enforcement, conditions, rules}' <<<"$RULESETS" \
+    jq -c --argjson add "$ADD_RULES" '.[0] | .rules += $add | {name, target, enforcement, bypass_actors: (.bypass_actors // []), conditions, rules}' <<<"$RULESETS" \
     | gh api -X PUT "repos/$REPO/rulesets/$RID" --input - >/dev/null
     echo "Updated."
   else
@@ -205,11 +205,17 @@ if [ -n "$RID" ]; then
   echo "  before: $(jq -r 'map(.context) | join(", ") | if . == "" then "<none>" else . end' <<<"$CHECKS")"
   echo "  after:  $(jq -r 'map(.context) | join(", ")' <<<"$AFTER")"
   echo "  rules to add: $ADD_TYPES"
+  # A PUT replaces the whole ruleset, so it only happens when something
+  # differs, and it carries bypass_actors through — a projection without them
+  # would strip every bypass on every run.
+  if [ "$AFTER" = "$CHECKS" ] && [ "$ADD_TYPES" = none ]; then
+    echo "  nothing to change."; exit 0
+  fi
   [ -n "$EXECUTE" ] || { echo "(dry run)"; exit 0; }
   jq --arg ctx "$CONTEXT" --argjson gates "$GATE_CONTEXTS" --argjson add "$ADD_RULES" "$MIGRATE"'
     .rules = [.rules[] | if .type=="required_status_checks"
       then .parameters.required_status_checks |= migrate($ctx; $gates) else . end] + $add
-    | {name, target, enforcement, conditions, rules}' <<<"$FULL" \
+    | {name, target, enforcement, bypass_actors: (.bypass_actors // []), conditions, rules}' <<<"$FULL" \
   | gh api -X PUT "repos/$REPO/rulesets/$RID" --input - >/dev/null
   echo "Updated."
 else

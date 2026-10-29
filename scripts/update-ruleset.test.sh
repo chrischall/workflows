@@ -272,6 +272,35 @@ bash "$ROOT/scripts/update-ruleset.sh" FAKE/noci --execute > "$TMP/out" 2>&1; rc
   && ok "K2: a converged ci: none repo gets no write at all, and the waiver is printed" \
   || bad "K2: a converged ci: none repo gets no write at all, and the waiver is printed" "rc=$rc writes: $(cat "$TMP/writes" 2>/dev/null); out: $(cat "$TMP/out")"
 
+# --- L: bypass actors survive the PUT ---------------------------------------
+# The PUT replaces the whole ruleset; a projection that omits bypass_actors
+# silently strips them on every run, including a no-op one.
+BYPASS='[{"actor_id":5,"actor_type":"Integration","bypass_mode":"always"}]'
+fixture bypass "$GOOD_SETTINGS" '[{"id":9,"target":"branch"}]' \
+  9 "$(rs 9 ci "[{\"type\":\"deletion\"},$CHECK_CI]" | jq -c --argjson b "$BYPASS" '.bypass_actors = $b')"
+rm -f "$TMP/put.json" "$TMP/writes"
+bash "$HERE/scripts/update-ruleset.sh" FAKE/bypass --execute > "$TMP/out" 2>&1
+got=$(jq -c '.bypass_actors' "$TMP/put.json" 2>/dev/null)
+[ "$got" = "$BYPASS" ] && grep -q '^PUT repos/FAKE/bypass/rulesets/9$' "$TMP/writes" \
+  && ok "L: the ruleset PUT carries bypass_actors through unchanged" \
+  || bad "L: the ruleset PUT carries bypass_actors through unchanged" "got $got want $BYPASS; writes: $(cat "$TMP/writes" 2>/dev/null)"
+fixture nociprbp "$GOOD_SETTINGS" '[{"id":1,"target":"branch"}]' \
+  1 "$(rs 1 protect '[{"type":"deletion"},{"type":"non_fast_forward"}]' | jq -c --argjson b "$BYPASS" '.bypass_actors = $b')"
+jq '.repos += [{repo: "FAKE/nociprbp", ci: "none"}]' "$ROOT/fleet.json" > "$ROOT/fleet.tmp" && mv "$ROOT/fleet.tmp" "$ROOT/fleet.json"
+rm -f "$TMP/put.json" "$TMP/writes"
+bash "$ROOT/scripts/update-ruleset.sh" FAKE/nociprbp --execute > "$TMP/out" 2>&1
+got=$(jq -c '.bypass_actors' "$TMP/put.json" 2>/dev/null)
+[ "$got" = "$BYPASS" ] \
+  && ok "L2: the ci: none PUT carries bypass_actors through unchanged" \
+  || bad "L2: the ci: none PUT carries bypass_actors through unchanged" "got $got want $BYPASS; writes: $(cat "$TMP/writes" 2>/dev/null)"
+
+# --- M: a converged repo gets no write at all ------------------------------
+rm -f "$TMP/put.json" "$TMP/writes"
+bash "$HERE/scripts/update-ruleset.sh" FAKE/good --execute > "$TMP/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && [ ! -e "$TMP/writes" ] && grep -q 'nothing to change' "$TMP/out" \
+  && ok "M: --execute on a converged repo neither PATCHes nor PUTs, and says so" \
+  || bad "M: --execute on a converged repo neither PATCHes nor PUTs, and says so" "rc=$rc writes: $(cat "$TMP/writes" 2>/dev/null); out: $(cat "$TMP/out")"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
