@@ -86,10 +86,17 @@ change right before opening, and let a human merge it.
 default**; pass `--execute` to act. It deliberately does not merge and does not
 add the arming label — the pipeline does that.
 
-`scripts/update-ruleset.sh <repo> <context> --execute` sets the required check.
-The two gate modes need the stub and the ruleset changed **together** — see the
-README's gate-mode paragraph. Flipping one without the other either blocks
-every PR or lets un-armed PRs merge.
+`scripts/update-ruleset.sh <repo> --execute` converges a repo's merge
+protection on the fleet standard (the required `ci-gated` check, deletion and
+force-push blocked, pull request required, auto-merge on, squash-only, delete
+branch on merge) and `--audit` (one repo, or `--all` for fleet.json) reports
+the gaps read-only. Every gap fails silently: insync-mcp merged every PR before
+its armed CI run finished, with CI red for its whole history, because its
+ruleset required nothing but the status check. The two gate modes need the stub
+and the ruleset changed **together** — see the README's gate-mode paragraph.
+Flipping one without the other either blocks every PR or lets un-armed PRs
+merge. `scripts/update-ruleset.test.sh` runs the real script against stub `gh`
+fixtures; add a case there for any change to what is PUT, POSTed or reported.
 
 A repo not in `fleet.json` is rejected by `rollout.sh` by design. Adding a repo
 to the fleet means adding it here first.
