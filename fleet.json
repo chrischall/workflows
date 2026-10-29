@@ -582,6 +582,13 @@
       "version_files": "src/version.ts",
       "bump_minor_pre_major": "true",
       "initial_version": "0.1.0"
+    },
+    {
+      "repo": "chrischall/rxlocal-mcp",
+      "package_name": "rxlocal-mcp",
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
     }
   ]
 }
