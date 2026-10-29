@@ -63,13 +63,26 @@ fi
 # stub is what keeps a bare `--execute` from requiring a status that nothing
 # posts, which blocks every PR (workflows#364). An explicit context still
 # overrides, for the deliberate stub-and-ruleset flip.
-gate_context() {  # <owner/repo> -> context
+#
+# Only a 404 means "no stub". Any other failure to read ci.yml (rate limit,
+# 5xx, auth) is an error, not `ci / ci`: treating it as the legacy context
+# would let --execute migrate a ci-gated repo backwards on a bad day
+# (workflows#366). Callers run this BEFORE any write.
+GH_ERR="$(mktemp)"; trap 'rm -f "$GH_ERR"' EXIT
+gate_context() {  # <owner/repo> -> context; fails on an unreadable stub
   if [ -n "$CONTEXT_ARG" ]; then printf '%s' "$CONTEXT_ARG"; return; fi
-  if gh api -H 'Accept: application/vnd.github.raw' "repos/$1/contents/.github/workflows/ci.yml" 2>/dev/null \
-     | grep -qE '^[[:space:]]*(gate-mode|mode):[[:space:]]*["'"'"']?status'; then
-    printf 'ci-gated'
-  else
+  local stub
+  if stub=$(gh api -H 'Accept: application/vnd.github.raw' "repos/$1/contents/.github/workflows/ci.yml" 2>"$GH_ERR"); then
+    if grep -qE '^[[:space:]]*(gate-mode|mode):[[:space:]]*["'"'"']?status' <<<"$stub"; then
+      printf 'ci-gated'
+    else
+      printf 'ci / ci'
+    fi
+  elif grep -qE 'HTTP 404|Not Found' "$GH_ERR"; then
     printf 'ci / ci'
+  else
+    echo "$1: could not read .github/workflows/ci.yml, so the gate context is unknown: $(tr '\n' ' ' <"$GH_ERR")" >&2
+    return 1
   fi
 }
 
@@ -156,7 +169,10 @@ if [ -n "$AUDIT" ]; then
   rc=0
   for repo in $REPOS; do
     ci=$(ci_mode "$repo")
-    if ! found=$(gaps "$repo" "$(gate_context "$repo")" "$ci"); then
+    if ! ctx=$(gate_context "$repo"); then
+      echo "$repo: ERROR reading the CI stub (gate context unknown, not assumed)"; rc=1; continue
+    fi
+    if ! found=$(gaps "$repo" "$ctx" "$ci"); then
       echo "$repo: ERROR reading settings or rulesets"; rc=1; continue
     fi
     if [ -z "$found" ] && [ "$ci" = none ]; then
@@ -171,6 +187,11 @@ if [ -n "$AUDIT" ]; then
 fi
 
 REPO="$REPOS"
+
+# Resolve the gate context first: an unreadable stub aborts here, before any
+# write, rather than after the settings PATCH.
+CONTEXT=$(gate_context "$REPO")
+[ -n "$CONTEXT_ARG" ] || echo "$REPO gate context from the CI stub: '$CONTEXT' (pass a context to override)"
 
 # --- repo settings ---------------------------------------------------------
 SETTINGS=$(gh api "repos/$REPO")
@@ -190,8 +211,6 @@ fi
 
 # --- ruleset -----------------------------------------------------------------
 RULESETS=$(default_branch_rulesets "$REPO" "$(jq -r '.default_branch // "main"' <<<"$SETTINGS")")
-CONTEXT=$(gate_context "$REPO")
-[ -n "$CONTEXT_ARG" ] || echo "$REPO gate context from the CI stub: '$CONTEXT' (pass a context to override)"
 # The ruleset that carries the status check is the one edited; the standard
 # rules missing from the UNION of active rulesets are appended to it.
 RID=$(jq -r '[.[] | select(any(.rules[]; .type=="required_status_checks"))][0].id // empty' <<<"$RULESETS")

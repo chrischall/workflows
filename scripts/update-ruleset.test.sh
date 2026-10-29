@@ -47,11 +47,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 # The CI stub, raw. A fixture repo without ci.yml is a 404 (no stub at all);
-# the legacy no-fixture repo gets a status-mode stub.
+# a `ci.yml.error` marker makes the read fail some other way (rate limit,
+# 5xx); the legacy no-fixture repo gets a status-mode stub.
 case "$path" in
   repos/*/contents/.github/workflows/ci.yml)
     fx="$STUB_DIR/fx/$(printf '%s' "$path" | cut -d/ -f3)"
     if [ ! -d "$fx" ]; then echo "gate-mode: status"; exit 0; fi
+    [ -f "$fx/ci.yml.error" ] && { echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1; }
     [ -f "$fx/ci.yml" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
     cat "$fx/ci.yml"; exit 0 ;;
 esac
@@ -366,6 +368,27 @@ bash "$HERE/scripts/update-ruleset.sh" FAKE/developmain --audit > "$TMP/out" 2>&
 [ "$rc" = 1 ] && grep -q 'pull request' "$TMP/out" \
   && ok "O3: a ruleset on refs/heads/main protects nothing when the default branch is develop" \
   || bad "O3: a ruleset on refs/heads/main protects nothing when the default branch is develop" "rc=$rc out: $(cat "$TMP/out")"
+
+# --- P: an unreadable stub is an error, never "ci / ci" ----------------------
+# A rate limit or 5xx on ci.yml must not read as "no stub": on a ci-gated repo
+# a bare --execute would migrate the required check backwards (workflows#366).
+fixture flaky "$THIN_SETTINGS" '[{"id":1,"target":"branch"}]' \
+  1 "$(rs 1 ci "[{\"type\":\"deletion\"},{\"type\":\"non_fast_forward\"},$PR_RULE,$CHECK_GATED]")"
+touch "$TMP/fx/flaky/ci.yml.error"
+rm -f "$TMP/put.json" "$TMP/writes"
+bash "$HERE/scripts/update-ruleset.sh" FAKE/flaky --execute > "$TMP/out" 2>&1; rc=$?
+[ "$rc" != 0 ] && [ ! -e "$TMP/writes" ] && grep -q 'could not read .github/workflows/ci.yml' "$TMP/out" \
+  && ok "P: --execute aborts before ANY write (settings included) when the stub cannot be read" \
+  || bad "P: --execute aborts before ANY write (settings included) when the stub cannot be read" "rc=$rc writes: $(cat "$TMP/writes" 2>/dev/null); out: $(cat "$TMP/out")"
+bash "$HERE/scripts/update-ruleset.sh" FAKE/flaky --audit > "$TMP/out" 2>&1; rc=$?
+[ "$rc" = 1 ] && grep -q '^FAKE/flaky: ERROR reading the CI stub' "$TMP/out" && ! grep -q "ci / ci" "$TMP/out" \
+  && ok "P2: --audit reports the unreadable stub as an error and does not assume a context" \
+  || bad "P2: --audit reports the unreadable stub as an error and does not assume a context" "rc=$rc out: $(cat "$TMP/out")"
+rm -f "$TMP/put.json" "$TMP/writes"
+bash "$HERE/scripts/update-ruleset.sh" FAKE/flaky ci-gated --execute > "$TMP/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q '^PATCH repos/FAKE/flaky' "$TMP/writes" \
+  && ok "P3: an explicit context needs no stub read, so the flaky repo still converges" \
+  || bad "P3: an explicit context needs no stub read, so the flaky repo still converges" "rc=$rc writes: $(cat "$TMP/writes" 2>/dev/null); out: $(cat "$TMP/out")"
 
 echo
 echo "$PASS passed, $FAIL failed"
