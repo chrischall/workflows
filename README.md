@@ -56,7 +56,13 @@ required `ci / ci` job fails red until armed) or `status` (a yellow
 *skipped* while un-armed — no misleading green for a build that never ran, and
 red then only ever means a real failure). Status mode needs the stub to grant
 `statuses: write` and the ruleset to require the `ci-gated` context
-(`scripts/update-ruleset.sh <repo> ci-gated --execute`); flip both together.
+(`scripts/update-ruleset.sh <repo> --execute`, which also converges the rest of
+the fleet standard: deletion and force-push blocked, pull request required,
+auto-merge on, squash-only, delete branch on merge); flip both together.
+`scripts/update-ruleset.sh --audit --all` lists every fleet repo's gaps from
+that standard without changing anything — each gap is a silent failure mode,
+so run it after bootstrapping a repo and whenever a merge happens that the
+pipeline should have held.
 Status mode also suppresses the duplicate CI run a non-arming label would
 trigger on an already-armed PR (#12) — unsafe to suppress in fail mode, where
 a green skip would overwrite a legitimately red check on the same SHA.
