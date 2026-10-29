@@ -596,6 +596,24 @@
       "version_files": "src/version.ts",
       "bump_minor_pre_major": "true",
       "initial_version": "0.1.0"
+    },
+    {
+      "repo": "chrischall/apple-icloud-mcp",
+      "package_name": "apple-icloud-mcp",
+      "version_files": "src/version.ts",
+      "initial_version": "0.1.0"
+    },
+    {
+      "repo": "chrischall/insync-mcp",
+      "package_name": "@chrischall/insync-mcp",
+      "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
+      "initial_version": "0.1.0"
+    },
+    {
+      "repo": "chrischall/toasttab-mcp",
+      "package_name": "toasttab-mcp",
+      "version_files": "src/version.ts"
     }
   ]
 }
