@@ -42,9 +42,19 @@ while [ $# -gt 0 ]; do
     --jq) filter="$2"; shift 2 ;;
     --input) input="$2"; shift 2 ;;
     -F|-f) fields="$fields $2"; shift 2 ;;
+    -H) shift 2 ;;
     *) path="$1"; shift ;;
   esac
 done
+# The CI stub, raw. A fixture repo without ci.yml is a 404 (no stub at all);
+# the legacy no-fixture repo gets a status-mode stub.
+case "$path" in
+  repos/*/contents/.github/workflows/ci.yml)
+    fx="$STUB_DIR/fx/$(printf '%s' "$path" | cut -d/ -f3)"
+    if [ ! -d "$fx" ]; then echo "gate-mode: status"; exit 0; fi
+    [ -f "$fx/ci.yml" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+    cat "$fx/ci.yml"; exit 0 ;;
+esac
 if [ "$method" != GET ]; then
   [ "$input" = - ] && cat > "$STUB_DIR/put.json"
   echo "$method $path$fields" >> "$STUB_DIR/writes"
@@ -130,9 +140,13 @@ fi
 # `thin`: what `gh repo create` plus the OLD create path left behind — the
 # insync-mcp shape. One ruleset with deletion + a legacy `ci / ci` check, no
 # pull-request rule, auto-merge off, every merge method on.
+# Every fixture repo gets a status-mode CI stub unless a case overwrites or
+# removes ci.yml: that is the fleet norm, and what makes `ci-gated` the
+# derived default context.
 fixture() {  # fixture <name> <repo.json> <rulesets list> [<id> <ruleset json>]...
   local dir="$TMP/fx/$1"; shift
   mkdir -p "$dir"; printf '%s\n' "$1" > "$dir/repo.json"; printf '%s\n' "$2" > "$dir/rulesets.json"; shift 2
+  printf 'jobs:\n  ci:\n    uses: chrischall/workflows/.github/workflows/reusable-mcp-ci.yml@main\n    with:\n      gate-mode: status\n' > "$dir/ci.yml"
   while [ $# -gt 0 ]; do printf '%s\n' "$2" > "$dir/ruleset-$1.json"; shift 2; done
 }
 THIN_SETTINGS='{"allow_auto_merge":false,"allow_squash_merge":true,"allow_merge_commit":true,"allow_rebase_merge":true,"delete_branch_on_merge":false}'
@@ -300,6 +314,58 @@ bash "$HERE/scripts/update-ruleset.sh" FAKE/good --execute > "$TMP/out" 2>&1; rc
 [ "$rc" = 0 ] && [ ! -e "$TMP/writes" ] && grep -q 'nothing to change' "$TMP/out" \
   && ok "M: --execute on a converged repo neither PATCHes nor PUTs, and says so" \
   || bad "M: --execute on a converged repo neither PATCHes nor PUTs, and says so" "rc=$rc writes: $(cat "$TMP/writes" 2>/dev/null); out: $(cat "$TMP/out")"
+
+# --- N: the default context follows the CI stub's gate mode ----------------
+# A fail-mode stub posts no `ci-gated`; requiring it would block every PR
+# (workflows#364). Bare --execute keeps `ci / ci`; an explicit context flips.
+fixture legacy "$GOOD_SETTINGS" '[{"id":7,"target":"branch"}]' \
+  7 "$(rs 7 ci "[{\"type\":\"deletion\"},{\"type\":\"non_fast_forward\"},$PR_RULE,$CHECK_CI]")"
+printf 'jobs:\n  ci:\n    uses: chrischall/workflows/.github/workflows/reusable-mcp-ci.yml@main\n    with:\n      gate-mode: fail\n' > "$TMP/fx/legacy/ci.yml"
+rm -f "$TMP/put.json" "$TMP/writes"
+bash "$HERE/scripts/update-ruleset.sh" FAKE/legacy --execute > "$TMP/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && [ ! -e "$TMP/writes" ] && grep -q "gate context from the CI stub: 'ci / ci'" "$TMP/out" \
+  && ok "N: bare --execute on a fail-mode stub keeps 'ci / ci' and writes nothing" \
+  || bad "N: bare --execute on a fail-mode stub keeps 'ci / ci' and writes nothing" "rc=$rc writes: $(cat "$TMP/writes" 2>/dev/null); out: $(cat "$TMP/out")"
+bash "$HERE/scripts/update-ruleset.sh" FAKE/legacy --audit > "$TMP/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q '^FAKE/legacy: ok$' "$TMP/out" \
+  && ok "N2: --audit holds a fail-mode repo to 'ci / ci', not 'ci-gated'" \
+  || bad "N2: --audit holds a fail-mode repo to 'ci / ci', not 'ci-gated'" "rc=$rc out: $(cat "$TMP/out")"
+rm -f "$TMP/put.json" "$TMP/writes"
+bash "$HERE/scripts/update-ruleset.sh" FAKE/legacy ci-gated --execute > "$TMP/out" 2>&1
+got=$(put_checks 2>/dev/null)
+[ "$got" = '[{"context":"ci-gated"}]' ] \
+  && ok "N3: an explicit context still flips a fail-mode repo (the deliberate stub+ruleset migration)" \
+  || bad "N3: an explicit context still flips a fail-mode repo (the deliberate stub+ruleset migration)" "got $got; out: $(cat "$TMP/out")"
+# No ci.yml at all (404): nothing posts any status, so the legacy context is
+# assumed and the audit says which, rather than demanding ci-gated.
+fixture nostub "$GOOD_SETTINGS" '[{"id":7,"target":"branch"}]' \
+  7 "$(rs 7 ci "[{\"type\":\"deletion\"},{\"type\":\"non_fast_forward\"},$PR_RULE,$CHECK_CI]")"
+rm -f "$TMP/fx/nostub/ci.yml"
+bash "$HERE/scripts/update-ruleset.sh" FAKE/nostub --audit > "$TMP/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q '^FAKE/nostub: ok$' "$TMP/out" \
+  && ok "N4: a repo with no ci.yml is held to 'ci / ci', not to a status nothing would post" \
+  || bad "N4: a repo with no ci.yml is held to 'ci / ci', not to a status nothing would post" "rc=$rc out: $(cat "$TMP/out")"
+
+# --- O: rulesets scoped by ~ALL or the real default branch ref count -------
+fixture allref "$GOOD_SETTINGS" '[{"id":1,"target":"branch"}]' \
+  1 "$(rs 1 everything "[{\"type\":\"deletion\"},{\"type\":\"non_fast_forward\"},$PR_RULE,$CHECK_GATED]" active '["~ALL"]')"
+bash "$HERE/scripts/update-ruleset.sh" FAKE/allref --audit > "$TMP/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q '^FAKE/allref: ok$' "$TMP/out" \
+  && ok "O: a ~ALL ruleset covers the default branch" \
+  || bad "O: a ~ALL ruleset covers the default branch" "rc=$rc out: $(cat "$TMP/out")"
+DEVELOP_SETTINGS=$(jq -c '. + {default_branch: "develop"}' <<<"$GOOD_SETTINGS")
+fixture develop "$DEVELOP_SETTINGS" '[{"id":1,"target":"branch"}]' \
+  1 "$(rs 1 dev "[{\"type\":\"deletion\"},{\"type\":\"non_fast_forward\"},$PR_RULE,$CHECK_GATED]" active '["refs/heads/develop"]')"
+bash "$HERE/scripts/update-ruleset.sh" FAKE/develop --audit > "$TMP/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q '^FAKE/develop: ok$' "$TMP/out" \
+  && ok "O2: a ruleset on refs/heads/<default> counts when the default branch is not main" \
+  || bad "O2: a ruleset on refs/heads/<default> counts when the default branch is not main" "rc=$rc out: $(cat "$TMP/out")"
+fixture developmain "$DEVELOP_SETTINGS" '[{"id":1,"target":"branch"}]' \
+  1 "$(rs 1 mainonly "[{\"type\":\"deletion\"},{\"type\":\"non_fast_forward\"},$PR_RULE,$CHECK_GATED]" active '["refs/heads/main"]')"
+bash "$HERE/scripts/update-ruleset.sh" FAKE/developmain --audit > "$TMP/out" 2>&1; rc=$?
+[ "$rc" = 1 ] && grep -q 'pull request' "$TMP/out" \
+  && ok "O3: a ruleset on refs/heads/main protects nothing when the default branch is develop" \
+  || bad "O3: a ruleset on refs/heads/main protects nothing when the default branch is develop" "rc=$rc out: $(cat "$TMP/out")"
 
 echo
 echo "$PASS passed, $FAIL failed"
