@@ -267,6 +267,13 @@
       "release_config": "none"
     },
     {
+      "repo": "chrischall/swift-calendar-automation",
+      "ci": "custom",
+      "release": "custom",
+      "dependabot": "swift",
+      "release_config": "none"
+    },
+    {
       "repo": "chrischall/swift-mail-automation",
       "ci": "custom",
       "release": "custom",
