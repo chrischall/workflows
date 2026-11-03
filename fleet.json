@@ -423,6 +423,11 @@
       "version_files": "src/version.ts"
     },
     {
+      "repo": "chrischall/workvivo-mcp",
+      "package_name": "workvivo-mcp",
+      "version_files": "src/version.ts"
+    },
+    {
       "repo": "nullnet-app/allotmint",
       "pat_secret": "NULLNET_RELEASE_PAT",
       "ci": "custom",
