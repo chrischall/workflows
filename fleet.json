@@ -626,6 +626,13 @@
       "version_files": "src/version.ts",
       "test_command": "npm run test:coverage",
       "sanitize_release_message": "true"
+    },
+    {
+      "repo": "chrischall/juggle-mcp",
+      "package_name": "@chrischall/juggle-mcp",
+      "version_files": "src/version.ts",
+      "initial_version": "0.1.0",
+      "bump_minor_pre_major": "true"
     }
   ]
 }
