@@ -25,6 +25,7 @@
     "include_v_in_tag": "true",
     "include_component_in_tag": "false",
     "dependabot_ignore": "",
+    "dependabot_groups": "",
     "dependabot_extra": "",
     "dependabot_extra_ignore": "",
     "reusable_release": "true"
@@ -315,7 +316,8 @@
       "conventions_hint": "TDD project; XcodeGen-generated project rules; setlist.fm API-terms constraints; secrets handling. All in CLAUDE.md.",
       "dependabot": "gradle",
       "release_config": "none",
-      "dependabot_ignore": "kotlin-skie"
+      "dependabot_ignore": "kotlin-skie",
+      "dependabot_groups": "skie"
     },
     {
       "repo": "nullnet-app/PassMint",
