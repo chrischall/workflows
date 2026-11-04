@@ -33,6 +33,12 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
+# `gh repo list <owner> ...`: the owner's repos from $STUB_DIR/owners/<owner>
+# (one name per line, --jq ignored); an `<owner>.error` marker fails it.
+if [ "$1" = repo ] && [ "$2" = list ]; then
+  [ -f "$STUB_DIR/owners/$3.error" ] && { echo "gh: HTTP 502" >&2; exit 1; }
+  cat "$STUB_DIR/owners/$3" 2>/dev/null || true; exit 0
+fi
 [ "$1" = api ] || { echo "unexpected gh $*" >&2; exit 2; }
 shift
 method=GET path="" filter="" input="" fields=""
@@ -257,6 +263,35 @@ bash "$ROOT/scripts/update-ruleset.sh" --all > "$TMP/out" 2>&1; rc=$?
 [ "$rc" = 2 ] && [ ! -e "$TMP/writes" ] \
   && ok "J2: --all without --audit is refused — there is no fleet-wide execute" \
   || bad "J2: --all without --audit is refused — there is no fleet-wide execute" "rc=$rc out: $(cat "$TMP/out")"
+# --- J5: --all also sweeps the fleet owners' repos that fleet.json omits ---
+# mcp-host-app, workflows itself and four private tools were never in
+# fleet.json, so the audit never saw that they kept merged branches: ~500
+# dead head branches piled up there while every fleet.json repo read ok.
+# Out-of-fleet repos need not run the pipeline, so they are held to
+# delete-branch-on-merge only: no ruleset, CI or squash-only gaps. Forks and archived repos are excluded by
+# the listing itself (--source --no-archived).
+mkdir -p "$TMP/owners"
+printf 'FAKE/good\nFAKE/thin\nFAKE/bare\nFAKE/noci\nFAKE/stray\nFAKE/tidy\n' > "$TMP/owners/FAKE"
+fixture stray '{"allow_auto_merge":false,"allow_squash_merge":true,"allow_merge_commit":true,"allow_rebase_merge":false,"delete_branch_on_merge":false}' '[]'
+fixture tidy "$GOOD_SETTINGS" '[]'
+rm -f "$TMP/writes"
+bash "$ROOT/scripts/update-ruleset.sh" --audit --all > "$TMP/out" 2>&1; rc=$?
+if [ "$rc" = 1 ] && [ ! -e "$TMP/writes" ] \
+   && grep -q '^FAKE/stray (not in fleet.json: branch cleanup only)$' "$TMP/out" \
+   && grep -A1 '^FAKE/stray ' "$TMP/out" | grep -q 'merged branches are not deleted' \
+   && [ "$(grep -A9 '^FAKE/stray ' "$TMP/out" | grep -c '^  - ')" = 1 ] \
+   && grep -q '^FAKE/tidy: ok (not in fleet.json: branch cleanup only)$' "$TMP/out" \
+   && [ "$(grep -c '^FAKE/good' "$TMP/out")" = 1 ]; then
+  ok "J5: --audit --all checks delete-on-merge (only) on owner repos missing from fleet.json, once each"
+else
+  bad "J5: --audit --all checks delete-on-merge (only) on owner repos missing from fleet.json, once each" "rc=$rc out: $(cat "$TMP/out")"
+fi
+touch "$TMP/owners/FAKE.error"
+bash "$ROOT/scripts/update-ruleset.sh" --audit --all > "$TMP/out" 2>&1; rc=$?
+[ "$rc" = 1 ] && grep -q '^FAKE: ERROR listing repos' "$TMP/out" && grep -q '^FAKE/good: ok$' "$TMP/out" \
+  && ok "J6: a failed owner listing is an error, not a silent ok, and the fleet.json repos are still audited" \
+  || bad "J6: a failed owner listing is an error, not a silent ok, and the fleet.json repos are still audited" "rc=$rc out: $(cat "$TMP/out")"
+rm -rf "$TMP/owners"
 # Single-repo mode reads the same fleet.json: `ci: none` still waives the
 # status check, and the waiver is spelled out so nobody reads ok as "gated".
 bash "$ROOT/scripts/update-ruleset.sh" FAKE/noci --audit > "$TMP/out" 2>&1; rc=$?
