@@ -437,7 +437,10 @@
       "dependabot": "gradle",
       "dependabot_extra": "npm:/web",
       "dependabot_extra_ignore": "npm:next-lint-peers",
-      "release_config": "none"
+      "release_config": "none",
+      "lockfix": "gradle-verify",
+      "java_version": "25",
+      "lockfix_gradle_tasks": "-Pallotmint.iosKlibs :shared:build :backend:build :androidApp:build :androidApp:bundleRelease :shared:jsBrowserProductionLibraryDistribution :backend:collectReachabilityMetadata :backend:nativeCompileClasspathJar"
     },
     {
       "repo": "nullnet-app/contextmint-bridge",
