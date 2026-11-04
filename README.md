@@ -471,9 +471,9 @@ written for one ecosystem. The npm fragment carries the root template's
 
 A hold on a separate extra entry is `dependabot_extra_ignore`: `<ecosystem>:<name>`
 splices the same `templates/fragments/dependabot-ignore-<name>.yml` shape into
-that ecosystem's extra entry. `curtaincall` (`npm:next-lint-peers`) holds its
-Next.js app below TypeScript 7, which typescript-eslint cannot load yet
-(curtaincall#375). The hold covers every directory in the entry, so write it to
+that ecosystem's extra entry. `curtaincall` and `allotmint`
+(`npm:next-lint-peers`) hold their Next.js apps below TypeScript 7, which
+typescript-eslint cannot load yet (curtaincall#375, allotmint#389). The hold covers every directory in the entry, so write it to
 spare the ones it does not concern — `next-lint-peers` holds `typescript` by
 major rather than by ceiling because the uptime worker in the same entry
 already runs 7. And hold only what is still unloadable: the fragment also held
