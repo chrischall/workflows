@@ -445,7 +445,21 @@ jobs:
               sys.exit(0)
           diff = subprocess.run(["git", "diff", "--cached", "--text", "--no-renames", "-U0", "--", f],
                                 capture_output=True, text=True, check=True).stdout
-          known = set(re.findall(r'<artifact name="([^"]*)">', head.stdout))
+          staged = subprocess.run(["git", "show", f":{f}"], capture_output=True, text=True, check=True).stdout
+
+          # Artifact names are scoped to a component VERSION (Gradle names some
+          # AARs without one, e.g. `lifecycle-runtime-ktx.aar`, so a name
+          # recurs across versions). Key each artifact by group/name/version/
+          # file and compare structurally: an artifact present at HEAD must be
+          # byte-for-byte unchanged (no second checksum, no also-trust), and no
+          # key may appear twice.
+          def blocks(text):
+              out = {}
+              for c in re.finditer(r'<component group="([^"]*)" name="([^"]*)" version="([^"]*)">(.*?)</component>', text, re.S):
+                  for a in re.finditer(r'<artifact name="([^"]*)">(.*?)</artifact>', c.group(4), re.S):
+                      out.setdefault(c.groups()[:3] + (a.group(1),), []).append(" ".join(a.group(2).split()))
+              return out
+          old_b, new_b = blocks(head.stdout), blocks(staged)
           ART = re.compile(r'<artifact name="([^"<>/]+)">')
           SHA = re.compile(r'<sha256 value="[0-9a-f]{64}"(?: origin="[^"<>]*")?/>')
           PLAIN = [re.compile(r'<component group="[^"<>]+" name="[^"<>]+" version="[^"<>]+">'),
@@ -463,8 +477,7 @@ jobs:
               text = line[1:].strip()
               m = ART.fullmatch(text)
               if m:
-                  ok = m.group(1) not in known
-                  known.add(m.group(1))
+                  ok = True
               elif SHA.fullmatch(text):
                   ok = prev is not None and ART.fullmatch(prev) is not None
               else:
@@ -472,6 +485,11 @@ jobs:
               if not ok:
                   bad.append(line)
               prev = text
+          for key, bodies in sorted(new_b.items()):
+              if len(bodies) > 1:
+                  bad.append(f"+ artifact listed {len(bodies)} times: {':'.join(key)}")
+              elif key in old_b and bodies != old_b[key]:
+                  bad.append(f"+ artifact changed since HEAD: {':'.join(key)}")
           print("\n".join(bad[:50]))
           sys.exit(1 if bad else 0)
           PY
