@@ -498,9 +498,11 @@ written for one ecosystem. The npm fragment carries the root template's
 `fix`/`chore` prefixes, groups and exact-name vitest pin.
 
 A repo-specific GROUP is `dependabot_groups`: it splices
-`templates/fragments/dependabot-groups-<name>.yml` in as the FIRST group of the
-root entry, because dependabot puts a dependency in the first group it matches
-(a group rendered after `gradle-dependencies` would collect nothing). Only a
+`templates/fragments/dependabot-groups-<name>.yml` in as the first group of the
+root entry. Placement is cosmetic: dependabot hands a dependency to the MOST
+SPECIFIC matching group (see `templates/dependabot-npm.yml`), so a fragment
+must name its dependencies EXACTLY — a wildcard scores ~100 and loses to the
+unpatterned `gradle-dependencies` (500); encore#251 lost SKIE that way. Only a
 template carrying the `# __DEPENDABOT_GROUPS__` marker accepts one (gradle
 today); anything else, or an unknown name, is a hard error. `encore`
 (`skie`) keeps SKIE in a PR of its own: SKIE disables itself off a Mac, so the

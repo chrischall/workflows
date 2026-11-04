@@ -1,11 +1,21 @@
-      # SKIE (co.touchlab.skie) gets a PR of its own, and this group must stay
-      # FIRST: dependabot puts a dependency in the first group it matches. SKIE
-      # disables itself off a Mac (`isSkieEnabled = isEnabled && hostIsMac`,
-      # no override), so the ubuntu dependabot lockfix records only SKIE's
-      # gradle-plugin — never its runtime/compiler artifacts, and a lockfile
-      # keeps the OLD SKIE lines (mcp-host-app#424; replayed for encore). Kept
-      # apart, a SKIE bump is the one PR that needs the metadata (and locks)
-      # regenerated on the Apple-silicon Mac; every other bump stays automatic.
+      # SKIE (co.touchlab.skie) gets a PR of its own. SKIE disables itself off a
+      # Mac (`isSkieEnabled = isEnabled && hostIsMac`, no override), so the
+      # ubuntu dependabot lockfix records only SKIE's gradle-plugin — never its
+      # runtime/compiler artifacts, and a lockfile keeps the OLD SKIE lines
+      # (mcp-host-app#424; replayed for encore). Kept apart, a SKIE bump is the
+      # one PR that needs the metadata (and locks) regenerated on the
+      # Apple-silicon Mac; every other bump stays automatic.
+      #
+      # The EXACT name, not a wildcard: dependabot hands a dependency to the
+      # MOST SPECIFIC matching group, not the first. `co.touchlab.skie*`
+      # scores 102 and lost SKIE to gradle-dependencies (no patterns, 500) —
+      # encore#251: "Skipping co.touchlab.skie for group 'skie' - belongs to
+      # more specific group 'gradle-dependencies'". An exact name scores 1000.
+      # All three update-types, as the npm template's vitest group lists them.
       skie:
         patterns:
-          - "co.touchlab.skie*"
+          - "co.touchlab.skie"
+        update-types:
+          - major
+          - minor
+          - patch
