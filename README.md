@@ -62,7 +62,9 @@ auto-merge on, squash-only, delete branch on merge); flip both together.
 `scripts/update-ruleset.sh --audit --all` lists every fleet repo's gaps from
 that standard without changing anything — each gap is a silent failure mode,
 so run it after bootstrapping a repo and whenever a merge happens that the
-pipeline should have held.
+pipeline should have held. It also checks delete-branch-on-merge on the
+owners' repos that `fleet.json` omits (mcp-host-app, this repo), where merged
+branches otherwise pile up unnoticed.
 Status mode also suppresses the duplicate CI run a non-arming label would
 trigger on an already-armed PR (#12) — unsafe to suppress in fail mode, where
 a green skip would overwrite a legitimately red check on the same SHA.

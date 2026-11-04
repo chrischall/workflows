@@ -22,7 +22,9 @@
 #   scripts/update-ruleset.sh <owner/repo> [<context>] --audit
 #   scripts/update-ruleset.sh --audit --all [<context>]
 #       Report each gap, one line per gap; exit 1 when any repo has one.
-#       --all walks every repo in fleet.json and is audit-only.
+#       --all walks every repo in fleet.json and is audit-only. It then
+#       checks delete-branch-on-merge on every other non-archived, non-fork
+#       repo those owners have.
 #
 # Flip ruleset and stub together — requiring `ci-gated` while the stub still
 # runs fail-mode blocks every merge (nothing ever posts the status), and a
@@ -183,6 +185,33 @@ if [ -n "$AUDIT" ]; then
       rc=1; echo "$repo"; printf '%s\n' "$found" | sed 's/^/  - /'
     fi
   done
+  # --all also sweeps every non-archived, non-fork repo of the owners that
+  # fleet.json names, for the ones it omits. mcp-host-app, workflows itself
+  # and four private tools were never listed, so nothing noticed they kept
+  # merged branches (~500 dead head branches) while every fleet.json repo read
+  # ok. They need not run the auto-review pipeline (no CI stub, no ruleset,
+  # merge commits allowed), so the one standard held against them is the one
+  # that holds for any repo: delete the branch on merge. Report-only, like
+  # the rest of --audit.
+  if [ -n "$ALL" ]; then
+    for owner in $(jq -r '[.repos[].repo | split("/")[0]] | unique[]' "$FLEET"); do
+      if ! listed=$(gh repo list "$owner" --no-archived --source --limit 1000 --json nameWithOwner --jq '.[].nameWithOwner'); then
+        echo "$owner: ERROR listing repos (repos missing from fleet.json not audited)"; rc=1; continue
+      fi
+      for repo in $listed; do
+        printf '%s\n' "$REPOS" | grep -qxF "$repo" && continue
+        if ! settings=$(gh api "repos/$repo"); then
+          echo "$repo: ERROR reading settings"; rc=1; continue
+        fi
+        found=$(jq -r 'if .delete_branch_on_merge == true then empty else "merged branches are not deleted" end' <<<"$settings")
+        if [ -z "$found" ]; then
+          echo "$repo: ok (not in fleet.json: branch cleanup only)"
+        else
+          rc=1; echo "$repo (not in fleet.json: branch cleanup only)"; printf '%s\n' "$found" | sed 's/^/  - /'
+        fi
+      done
+    done
+  fi
   exit $rc
 fi
 
