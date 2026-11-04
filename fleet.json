@@ -12,6 +12,7 @@
     "skill_path": "",
     "lockfix": "",
     "java_version": "21",
+    "lockfix_gradle_tasks": "",
     "fly_dir": "",
     "dependabot": "npm",
     "release_config": "mcp",
