@@ -43,6 +43,20 @@ name: Reusable dependabot lockfix
 #     verification exists to catch, so the push job refuses any patch that
 #     removes or rewrites a line there (or deletes the file) and leaves it
 #     for a human. Empty (the default) skips the check;
+#   - `host-tool-checksums` (optional, default false) fills the one gap an
+#     ubuntu `--write-verification-metadata` leaves: host tools published
+#     per OS (aapt2, kotlin-native-prebuilt, the Kotlin/JS node
+#     distribution) are recorded only in their Linux variant, but the
+#     self-hosted Mac lane and local builds need the macOS one. For
+#     components of gradle/verification-metadata.xml that are new or changed
+#     since HEAD only, it downloads the missing variant from a FIXED table of
+#     URLs (dl.google.com, repo1.maven.org, nodejs.org; https only, the
+#     version regex-checked first), cross-checks it against the published
+#     .sha1 / SHASUMS256.txt, and inserts the sha256 — it never runs
+#     anything it downloads, and on any mismatch or failure it warns and
+#     writes nothing (the PR stays red for a human). It runs in the lockfix
+#     job, after PR code, so its output is just more untrusted patch data
+#     for the push job (pair it with `append-only-paths` on that file);
 #   - after our push the next `synchronize` actor is the PAT owner, not
 #     dependabot[bot], so the guard breaks the retrigger loop.
 #
@@ -87,6 +101,14 @@ on:
         type: string
         required: false
         default: ""
+      host-tool-checksums:
+        description: After the regen, add the other-OS variants (Linux and
+          macOS) of OS-specific host tools (aapt2, kotlin-native-prebuilt,
+          the Kotlin/JS node distribution) to new or changed components of
+          gradle/verification-metadata.xml, by download + checksum only.
+        type: boolean
+        required: false
+        default: false
 
     secrets:
       release_pat:
@@ -135,6 +157,158 @@ jobs:
 
       - name: Regenerate lockfiles
         run: ${{ inputs.lockfix-command }}
+
+      - name: Add host-tool checksums
+        if: inputs.host-tool-checksums
+        run: |
+          set -euo pipefail
+          f=gradle/verification-metadata.xml
+          if [ ! -f "$f" ]; then
+            echo "no $f — nothing to do"
+            exit 0
+          fi
+          python3 - "$f" <<'PY'
+          import hashlib, os, re, subprocess, sys, tempfile
+
+          path = sys.argv[1]
+          VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+-]*$")
+          GM = "https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2"
+          MC = "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-native-prebuilt"
+          ND = "https://nodejs.org/dist"
+          # The ONLY coordinates ever fetched. Each entry: classifiers,
+          # artifact name, artifact URL, and how the published hash is found
+          # ("sha1": <url>.sha1; "shasums": that line of SHASUMS256.txt).
+          TABLE = {
+              ("com.android.tools.build", "aapt2"): (
+                  ("linux", "osx"),
+                  lambda v, c: f"aapt2-{v}-{c}.jar",
+                  lambda v, c: f"{GM}/{v}/aapt2-{v}-{c}.jar",
+                  "sha1"),
+              ("org.jetbrains.kotlin", "kotlin-native-prebuilt"): (
+                  ("linux-x86_64", "macos-aarch64"),
+                  lambda v, c: f"kotlin-native-prebuilt-{v}-{c}.tar.gz",
+                  lambda v, c: f"{MC}/{v}/kotlin-native-prebuilt-{v}-{c}.tar.gz",
+                  "sha1"),
+              ("org.nodejs", "node"): (
+                  ("linux-x64", "darwin-arm64"),
+                  lambda v, c: f"node-{v}-{c}.tar.gz",
+                  lambda v, c: f"{ND}/v{v}/node-v{v}-{c}.tar.gz",
+                  "shasums"),
+          }
+          COMPONENT = re.compile(
+              r'^([ \t]*)<component group="([^"]*)" name="([^"]*)" version="([^"]*)">\n'
+              r'(.*?)^[ \t]*</component>[ \t]*\n', re.M | re.S)
+          tmp = tempfile.mkdtemp()
+
+          def warn(msg):
+              print(f"::warning::host-tool checksums: {msg}", flush=True)
+
+          def fetch(url):
+              # Download only; nothing fetched here is ever executed. Each
+              # download gets its own file, so fetching the published hash
+              # can never overwrite the artifact it is checked against.
+              fd, dest = tempfile.mkstemp(dir=tmp)
+              os.close(fd)
+              os.remove(dest)
+              r = subprocess.run(["curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "-o", dest, url])
+              return dest if r.returncode == 0 and os.path.isfile(dest) else None
+
+          def digest(algo, file):
+              h = hashlib.new(algo)
+              with open(file, "rb") as fh:
+                  for chunk in iter(lambda: fh.read(1 << 20), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          def published(kind, v, c, url):
+              """The published hash to cross-check against, or None."""
+              if kind == "sha1":
+                  got = fetch(url + ".sha1")
+                  if not got:
+                      return None
+                  words = open(got, encoding="utf-8", errors="replace").read().split()
+                  h = words[0].lower() if words else ""
+                  return ("sha1", h) if re.fullmatch(r"[0-9a-f]{40}", h) else None
+              got = fetch(f"{ND}/v{v}/SHASUMS256.txt")
+              if not got:
+                  return None
+              want = f"node-v{v}-{c}.tar.gz"
+              for line in open(got, encoding="utf-8", errors="replace"):
+                  words = line.split()
+                  if len(words) == 2 and words[1].lstrip("*") == want and re.fullmatch(r"[0-9a-f]{64}", words[0]):
+                      return ("sha256", words[0])
+              return None
+
+          def checksum(kind, v, c, url):
+              """sha256 of the artifact, only if it matches the published hash."""
+              art = fetch(url)
+              if not art:
+                  warn(f"download failed: {url} — skipped")
+                  return None
+              sha256 = digest("sha256", art)
+              pub = published(kind, v, c, url)
+              if pub is None:
+                  warn(f"no published hash found for {url} — skipped")
+                  return None
+              algo, want = pub
+              if (sha256 if algo == "sha256" else digest("sha1", art)) != want:
+                  warn(f"{url} does not match its published {algo} — skipped")
+                  return None
+              return sha256
+
+          def components(text):
+              return {(m[2], m[3], m[4]): m[0] for m in COMPONENT.finditer(text)}
+
+          head = subprocess.run(["git", "show", f"HEAD:{path}"], capture_output=True, text=True)
+          before = components(head.stdout) if head.returncode == 0 else {}
+          added = []
+
+          def extend(m):
+              block, indent, group, name, version = m[0], m[1], m[2], m[3], m[4]
+              tool = TABLE.get((group, name))
+              if tool is None or before.get((group, name, version)) == block:
+                  return block           # not a host tool, or unchanged since HEAD
+              classifiers, art_name, art_url, kind = tool
+              lines = block.splitlines(keepends=True)
+              have = re.findall(r'<artifact name="([^"]*)"', block)
+              missing = [c for c in classifiers if art_name(version, c) not in have]
+              if not missing:
+                  return block
+              if not VERSION.fullmatch(version):
+                  warn(f"refusing {group}:{name} version {version!r} (not a plain version)")
+                  return block
+              for c in missing:
+                  an, url = art_name(version, c), art_url(version, c)
+                  sha256 = checksum(kind, version, c, url)
+                  if sha256 is None:
+                      continue
+                  host = url.split("/")[2]
+                  what = ".sha1" if kind == "sha1" else "SHASUMS256.txt"
+                  starts = [(i, re.search(r'<artifact name="([^"]*)"', l)[1])
+                            for i, l in enumerate(lines) if '<artifact name="' in l]
+                  ai = re.match(r"[ \t]*", lines[starts[0][0]])[0] if starts else indent + "   "
+                  shas = [l for l in lines if "<sha256 " in l]
+                  si = re.match(r"[ \t]*", shas[0])[0] if shas else ai + "   "
+                  entry = [f'{ai}<artifact name="{an}">\n',
+                           f'{si}<sha256 value="{sha256}" origin="Computed by dependabot lockfix from {host}; matches the published {what}"/>\n',
+                           f'{ai}</artifact>\n']
+                  later = [i for i, n in starts if n > an]
+                  if later:
+                      at = later[0]
+                  else:
+                      ends = [i for i, l in enumerate(lines) if "</artifact>" in l]
+                      at = ends[-1] + 1 if ends else 1
+                  lines[at:at] = entry
+                  added.append(an)
+              return "".join(lines)
+
+          text = open(path, encoding="utf-8").read()
+          out = COMPONENT.sub(extend, text)
+          if out != text:
+              with open(path, "w", encoding="utf-8") as fh:
+                  fh.write(out)
+          print(f"host-tool checksums added: {', '.join(added) if added else 'none'}")
+          PY
 
       - name: Package lockfile drift
         id: drift
