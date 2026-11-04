@@ -109,6 +109,11 @@ TEST_COMMAND=$(cfg test_command)
 HINT=$(cfg conventions_hint)
 LOCKFIX=$(cfg lockfix)
 JAVA_VERSION=$(cfg java_version)
+# The Gradle tasks `lockfix: gradle-verify` regenerates verification metadata
+# over: every task CI runs on Linux, plus any property that widens resolution
+# (allotmint's -Pallotmint.iosKlibs). Read by that stub only; see the hard
+# errors below.
+LOCKFIX_GRADLE_TASKS=$(cfg lockfix_gradle_tasks)
 # Deploy automation: `fly_dir` = directory holding fly.toml for repos that run
 # a Fly backend (implies a Fly deploy job on release).
 FLY_DIR=$(cfg fly_dir)
@@ -190,6 +195,7 @@ render() { # render <template> <repo-relative dest>
       -e "s|__SANITIZE_RELEASE_MESSAGE__|$(sed_escape "$SANITIZE_RELEASE_MESSAGE")|g" \
       -e "s|__PACKAGE_NAME__|$(sed_escape "$PACKAGE_NAME")|g" \
       -e "s|__RELEASE_TYPE__|$(sed_escape "$RELEASE_TYPE")|g" \
+      -e "s|__LOCKFIX_GRADLE_TASKS__|$(sed_escape "$LOCKFIX_GRADLE_TASKS")|g" \
       "$HERE/templates/$1" > "$dest"
   # An unset skill_path renders `skill-path:` with no value. That is harmless
   # (the action treats unset and empty identically) but it is a meaningless
@@ -301,6 +307,15 @@ if [ "$RELEASE_MODE" = "mcp" ]; then
     render fragments/deploy-fly-job.yml ".frag/fly.yml"
     cat "$STAGE/.frag/fly.yml" >> "$STAGE/$WF/release-please.yml"
   fi
+fi
+# Both mismatches are hard errors because both quiet versions ship: an empty
+# list renders a regen over no tasks (metadata that never covers CI's graph),
+# and a list on any other lockfix is a setting nothing reads.
+if [ "$LOCKFIX" = "gradle-verify" ] && [ -z "$LOCKFIX_GRADLE_TASKS" ]; then
+  echo "::error::$REPO: lockfix is gradle-verify but lockfix_gradle_tasks is empty in fleet.json"; exit 1
+fi
+if [ "$LOCKFIX" != "gradle-verify" ] && [ -n "$LOCKFIX_GRADLE_TASKS" ]; then
+  echo "::error::$REPO: lockfix_gradle_tasks is set but lockfix is '${LOCKFIX:-}', not gradle-verify — nothing reads it"; exit 1
 fi
 [ -n "$LOCKFIX" ] && render "dependabot-lockfix-$LOCKFIX.yml" "$WF/dependabot-lockfix.yml"
 

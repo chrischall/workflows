@@ -52,8 +52,37 @@ ruby -ryaml -e '
   File.write(ARGV[1], pkg["run"]) if pkg
   File.write(ARGV[2], push["run"]) if push
   fails << "no `Package lockfile drift` step" unless pkg
+  ao = (((wf["on"] || wf[true] || {})["workflow_call"] || {})["inputs"] || {})["append-only-paths"]
+  if ao.nil?
+    fails << "no `append-only-paths` workflow_call input"
+  else
+    fails << "`append-only-paths` must be an optional string" unless ao["type"] == "string" && ao["required"] == false
+    fails << "`append-only-paths` must default to empty (no check)" unless ao["default"] == ""
+  end
+  fails << "the push step must receive append-only-paths as APPEND_ONLY" unless push && (push["env"] || {})["APPEND_ONLY"] == "${{ inputs.append-only-paths }}"
+  ht = (((wf["on"] || wf[true] || {})["workflow_call"] || {})["inputs"] || {})["host-tool-checksums"]
+  if ht.nil?
+    fails << "no `host-tool-checksums` workflow_call input"
+  else
+    fails << "`host-tool-checksums` must be an optional boolean defaulting to false" unless ht["type"] == "boolean" && ht["required"] == false && ht["default"] == false
+  end
+  if runner.size == 1
+    steps = runner.first[1]["steps"]
+    names = steps.map { |s| s["name"] }
+    i = names.index("Add host-tool checksums")
+    if i.nil?
+      fails << "no `Add host-tool checksums` step in the lockfix job"
+    else
+      hs = steps[i]
+      File.write(ARGV[3], hs["run"].to_s)
+      fails << "`Add host-tool checksums` must run only when host-tool-checksums is true" unless hs["if"] == "inputs.host-tool-checksums"
+      fails << "`Add host-tool checksums` must come after `Regenerate lockfiles`" unless names.index("Regenerate lockfiles") && i > names.index("Regenerate lockfiles")
+      fails << "`Add host-tool checksums` must come before `Package lockfile drift`" unless names.index("Package lockfile drift") && i < names.index("Package lockfile drift")
+      fails << "`Add host-tool checksums` must not interpolate expressions into its script" if hs["run"].to_s.include?("${{")
+    end
+  end
   puts fails
-' "$WF" "$TMP/package.sh" "$TMP/push.sh" > "$TMP/struct" 2>&1
+' "$WF" "$TMP/package.sh" "$TMP/push.sh" "$TMP/hosttools.sh" > "$TMP/struct" 2>&1
 if [ -s "$TMP/struct" ]; then bad "structure: lockfix and PAT live in separate jobs" "$(cat "$TMP/struct")"
 else ok "structure: lockfix and PAT live in separate jobs"; fi
 if [ ! -s "$TMP/package.sh" ] || [ ! -s "$TMP/push.sh" ]; then
@@ -79,6 +108,8 @@ new_origin() {  # fresh bare remote with a dependabot branch holding yarn.lock
   mkdir -p "$TMP/seed/kotlin-js-store" "$TMP/seed/.github/workflows"
   echo "lock v1" > "$TMP/seed/kotlin-js-store/yarn.lock"
   echo "name: ci" > "$TMP/seed/.github/workflows/ci.yml"
+  mkdir -p "$TMP/seed/gradle"
+  printf '<components>\n<c a="1"/>\n<c b="2"/>\n</components>\n' > "$TMP/seed/gradle/verification-metadata.xml"
   git -C "$TMP/seed" add -A
   git -C "$TMP/seed" -c user.name=t -c user.email=t@t commit -qm init
   git -C "$TMP/seed" push -q "$TMP/origin.git" main:dependabot/x
@@ -92,7 +123,8 @@ run_package() {
   ( cd "$1" && PATHS="kotlin-js-store/yarn.lock package-lock.json" PATCH="$TMP/lockfix.patch" \
       GITHUB_OUTPUT="$TMP/out" bash -e "$TMP/package.sh" ) > "$TMP/log" 2>&1
 }
-# run_push <workdir> <patch>: the PAT job's step, with a trap hook planted
+# run_push <workdir> <patch>: the PAT job's step, with a trap hook planted.
+# APPEND_ONLY (env, default empty) is passed through as the step's input.
 run_push() {
   mkdir -p "$1/.git/hooks"
   for h in pre-commit commit-msg post-commit pre-push; do
@@ -101,8 +133,8 @@ run_push() {
   done
   rm -f "$TMP/hooked"
   ( cd "$1" && PATH="$TMP/bin:$PATH" FAKE_REMOTE="$TMP/origin.git" PAT=secret \
-      PATHS="kotlin-js-store/yarn.lock package-lock.json" PATCH="$2" \
-      MESSAGE="fix(deps): regen" BRANCH=dependabot/x REPO=o/r \
+      PATHS="kotlin-js-store/yarn.lock package-lock.json gradle/verification-metadata.xml" PATCH="$2" \
+      APPEND_ONLY="${APPEND_ONLY:-}" MESSAGE="fix(deps): regen" BRANCH=dependabot/x REPO=o/r \
       bash -e "$TMP/push.sh" ) > "$TMP/log" 2>&1
 }
 
@@ -158,6 +190,317 @@ head -c 60000000 /dev/zero | tr '\0' 'a' > "$TMP/big.patch"
 run_push "$TMP/j2" "$TMP/big.patch"; rc=$?
 if [ $rc -ne 0 ] && [ "$(origin_head)" = "$before" ] && grep -qi 'too large' "$TMP/log"; then ok "E: an oversized patch is refused"
 else bad "E: an oversized patch is refused" "rc=$rc $(tail -3 "$TMP/log")"; fi
+
+# --- F: append-only-paths refuses a patch that removes or changes a line ------
+VM=gradle/verification-metadata.xml
+# mkpatch <name> <cmd...>: run cmd in a fresh clone, write its worktree diff to
+# $TMP/<name>.patch (a cmd that creates a file must `git add -N` it itself)
+mkpatch() {
+  local n=$1; shift
+  new_origin; clone "$TMP/j1"
+  ( cd "$TMP/j1" && "$@" )
+  git -C "$TMP/j1" diff --binary > "$TMP/$n.patch"
+}
+add_line()    { sed -i.bak 's#</components>#<c d="4"/>\n</components>#' "$VM" && rm "$VM.bak"; }
+change_line() { sed -i.bak 's#<c a="1"/>#<c a="9"/>#' "$VM" && rm "$VM.bak"; }
+delete_line() { sed -i.bak '/<c b="2"\/>/d' "$VM" && rm "$VM.bak"; }
+
+mkpatch add add_line
+before=$(origin_head); clone "$TMP/j2"
+APPEND_ONLY="$VM" run_push "$TMP/j2" "$TMP/add.patch"; rc=$?
+if [ $rc -eq 0 ] && [ "$(origin_head)" != "$before" ] \
+   && git -C "$TMP/origin.git" show "dependabot/x:$VM" | grep -q 'd="4"'; then
+  ok "F1: pure additions to an append-only path are committed and pushed"
+else bad "F1: pure additions to an append-only path are committed and pushed" "rc=$rc $(cat "$TMP/log")"; fi
+
+mkpatch change change_line
+before=$(origin_head); clone "$TMP/j2"
+APPEND_ONLY="$VM" run_push "$TMP/j2" "$TMP/change.patch"; rc=$?
+if [ $rc -ne 0 ] && [ "$(origin_head)" = "$before" ] \
+   && grep -q "::error::.*$VM" "$TMP/log" && grep -q 'a="1"' "$TMP/log"; then
+  ok "F2: changing an existing line of an append-only path is refused, naming the path and line"
+else bad "F2: changing an existing line of an append-only path is refused, naming the path and line" "rc=$rc $(cat "$TMP/log")"; fi
+
+mkpatch delete delete_line
+before=$(origin_head); clone "$TMP/j2"
+APPEND_ONLY="$VM" run_push "$TMP/j2" "$TMP/delete.patch"; rc=$?
+if [ $rc -ne 0 ] && [ "$(origin_head)" = "$before" ] && grep -q "::error::.*$VM" "$TMP/log"; then
+  ok "F3: deleting a line of an append-only path is refused"
+else bad "F3: deleting a line of an append-only path is refused" "rc=$rc $(cat "$TMP/log")"; fi
+
+mkpatch rmfile rm "$VM"
+before=$(origin_head); clone "$TMP/j2"
+APPEND_ONLY="$VM" run_push "$TMP/j2" "$TMP/rmfile.patch"; rc=$?
+if [ $rc -ne 0 ] && [ "$(origin_head)" = "$before" ] && grep -q "::error::.*$VM" "$TMP/log"; then
+  ok "F4: deleting an append-only file outright is refused"
+else bad "F4: deleting an append-only file outright is refused" "rc=$rc $(cat "$TMP/log")"; fi
+
+before=$(origin_head); clone "$TMP/j2"
+APPEND_ONLY="" run_push "$TMP/j2" "$TMP/change.patch"; rc=$?
+if [ $rc -eq 0 ] && [ "$(origin_head)" != "$before" ]; then
+  ok "F5: with append-only-paths empty, a changing patch still pushes"
+else bad "F5: with append-only-paths empty, a changing patch still pushes" "rc=$rc $(cat "$TMP/log")"; fi
+
+both() { add_line && echo "lock v2" > kotlin-js-store/yarn.lock; }
+mkpatch both both
+before=$(origin_head); clone "$TMP/j2"
+APPEND_ONLY="$VM" run_push "$TMP/j2" "$TMP/both.patch"; rc=$?
+files=$(git -C "$TMP/origin.git" diff --name-only "$before" dependabot/x | sort | tr '\n' ' ')
+if [ $rc -eq 0 ] && [ "$files" = "$VM kotlin-js-store/yarn.lock " ]; then
+  ok "F6: a non-append-only path in the same patch may still change lines"
+else bad "F6: a non-append-only path in the same patch may still change lines" "rc=$rc files=[$files] $(cat "$TMP/log")"; fi
+
+newfile() { mkdir -p sub && printf '<a/>\n<b/>\n' > sub/verification-metadata.xml && git add -N sub; }
+mkpatch newfile newfile
+before=$(origin_head); clone "$TMP/j2"
+( export APPEND_ONLY="sub/verification-metadata.xml"
+  cd "$TMP/j2" && PATH="$TMP/bin:$PATH" FAKE_REMOTE="$TMP/origin.git" PAT=secret \
+    PATHS="sub/verification-metadata.xml" PATCH="$TMP/newfile.patch" \
+    MESSAGE="fix(deps): regen" BRANCH=dependabot/x REPO=o/r bash -e "$TMP/push.sh" ) > "$TMP/log" 2>&1; rc=$?
+if [ $rc -eq 0 ] && [ "$(origin_head)" != "$before" ]; then
+  ok "F7: a newly created file at an append-only path is accepted"
+else bad "F7: a newly created file at an append-only path is accepted" "rc=$rc $(cat "$TMP/log")"; fi
+
+# --- H: a real verification-metadata file may only gain new entries ----------
+# Append-only is not enough on its own: a pure ADDITION can still switch
+# verification off — a `<trust regex>` rule, an `<also-trust>` value, or a
+# second checksum for an artifact already listed. When the file at HEAD is real
+# Gradle verification metadata, every added line must be one of the shapes a
+# regen writes: a new <component>, a new <artifact> (name not already listed),
+# a <sha256> directly under an added <artifact>, and their closing tags.
+SHA_A=$(printf 'a%.0s' $(seq 64)); SHA_B=$(printf 'b%.0s' $(seq 64)); SHA_C=$(printf 'c%.0s' $(seq 64))
+real_vm() {
+  cat <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<verification-metadata xmlns="https://schema.gradle.org/dependency-verification">
+   <configuration>
+      <verify-metadata>false</verify-metadata>
+      <verify-signatures>false</verify-signatures>
+      <trusted-artifacts>
+         <trust file=".*-sources[.]jar" regex="true"/>
+      </trusted-artifacts>
+   </configuration>
+   <components>
+      <component group="com.example" name="lib" version="1.0">
+         <artifact name="lib-1.0.jar">
+            <sha256 value="$SHA_A" origin="Generated by Gradle"/>
+         </artifact>
+      </component>
+   </components>
+</verification-metadata>
+XML
+}
+# mkpatch_real <name> <cmd...>: like mkpatch, over an origin whose HEAD holds real_vm
+mkpatch_real() {
+  local n=$1; shift
+  new_origin
+  real_vm > "$TMP/seed/$VM"
+  git -C "$TMP/seed" -c user.name=t -c user.email=t@t commit -qam "real vm"
+  git -C "$TMP/seed" push -q -f "$TMP/origin.git" main:dependabot/x
+  clone "$TMP/j1"
+  ( cd "$TMP/j1" && "$@" )
+  git -C "$TMP/j1" diff --binary > "$TMP/$n.patch"
+}
+# ins <after-regex> <text>: insert text (may hold \n) after the first matching line
+ins() { python3 -I -c 'import re,sys; p,pat,t=sys.argv[1:4]; s=open(p).read().split("\n"); i=next(k for k,l in enumerate(s) if re.search(pat,l)); s[i+1:i+1]=t.split("\n"); open(p,"w").write("\n".join(s))' "$VM" "$1" "$2"; }
+h_push() { # h_push <case> <patch> <expect: ok|refuse>
+  local before rc; before=$(origin_head); clone "$TMP/j2"
+  APPEND_ONLY="$VM" run_push "$TMP/j2" "$2"; rc=$?
+  if [ "$3" = ok ]; then
+    if [ $rc -eq 0 ] && [ "$(origin_head)" != "$before" ]; then ok "$1"; else bad "$1" "rc=$rc $(cat "$TMP/log")"; fi
+  else
+    if [ $rc -ne 0 ] && [ "$(origin_head)" = "$before" ] && grep -q "::error::.*$VM" "$TMP/log"; then ok "$1"; else bad "$1" "rc=$rc $(cat "$TMP/log")"; fi
+  fi
+}
+
+new_comp() { ins '^      </component>' "      <component group=\"com.example\" name=\"new\" version=\"2.0\">
+         <artifact name=\"new-2.0.jar\">
+            <sha256 value=\"$SHA_B\" origin=\"Generated by Gradle\"/>
+         </artifact>
+      </component>"; }
+mkpatch_real h1 new_comp;  h_push "H1: a new component with its artifact and sha256 is pushed" "$TMP/h1.patch" ok
+
+new_art() { ins '^         </artifact>' "         <artifact name=\"lib-1.0-linux.jar\">
+            <sha256 value=\"$SHA_B\" origin=\"Computed by dependabot lockfix\"/>
+         </artifact>"; }
+mkpatch_real h2 new_art;   h_push "H2: a new artifact inside an existing component is pushed" "$TMP/h2.patch" ok
+
+trust_all() { ins '<trusted-artifacts>' '         <trust group=".*" regex="true"/>'; }
+mkpatch_real h3 trust_all; h_push "H3: an added <trust> rule is refused" "$TMP/h3.patch" refuse
+
+also() { ins "<sha256 value=\"$SHA_A\"" "               <also-trust value=\"$SHA_C\"/>"; }
+mkpatch_real h4 also;      h_push "H4: an added <also-trust> value is refused" "$TMP/h4.patch" refuse
+
+second_sha() { ins "<sha256 value=\"$SHA_A\"" "            <sha256 value=\"$SHA_C\" origin=\"x\"/>"; }
+mkpatch_real h5 second_sha; h_push "H5: a second sha256 under an artifact already listed is refused" "$TMP/h5.patch" refuse
+
+dup_art() { ins '^         </artifact>' "         <artifact name=\"lib-1.0.jar\">
+            <sha256 value=\"$SHA_C\" origin=\"x\"/>
+         </artifact>"; }
+mkpatch_real h6 dup_art;   h_push "H6: re-adding an artifact name already listed is refused" "$TMP/h6.patch" refuse
+
+short_sha() { ins '^      </component>' "      <component group=\"com.example\" name=\"new\" version=\"2.0\">
+         <artifact name=\"new-2.0.jar\">
+            <sha256 value=\"abc\" origin=\"x\"/>
+         </artifact>
+      </component>"; }
+mkpatch_real h7 short_sha; h_push "H7: a sha256 that is not 64 hex characters is refused" "$TMP/h7.patch" refuse
+
+# --- G: host-tool-checksums adds the other-OS host-tool variants -------------
+# The step runs in the lockfix job after the regen. curl is stubbed on PATH: it
+# serves fixture bytes for URLs under $CURL_FIXTURES/<host>/<path> and fails
+# for anything else, logging every call, so the suite is fully offline.
+if [ ! -s "$TMP/hosttools.sh" ]; then
+  bad "G: host-tool-checksums step" "cannot extract the \`Add host-tool checksums\` step"
+else
+mkdir -p "$TMP/curlbin"
+cat > "$TMP/curlbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CURL_LOG"
+out=""; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out=$2; shift 2 ;; https://*) url=$1; shift ;; *) shift ;; esac
+done
+[ -n "$url" ] && [ -n "$out" ] || exit 2
+f="$CURL_FIXTURES/${url#https://}"
+[ -f "$f" ] || exit 22
+cp "$f" "$out"
+STUB
+chmod +x "$TMP/curlbin/curl"
+
+FX="$TMP/fx"; rm -rf "$FX"
+fixture() {  # fixture <url> <bytes>: serve <bytes> at <url>
+  local f="$FX/${1#https://}"; mkdir -p "$(dirname "$f")"; printf '%s' "$2" > "$f"
+}
+sha256_of() { printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1; }
+sha1_of()   { printf '%s' "$1" | shasum -a 1 | cut -d' ' -f1; }
+GM=https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2
+MC=https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-native-prebuilt
+ND=https://nodejs.org/dist
+# aapt2 9.6.0-2: osx variant served with a matching .sha1
+fixture "$GM/9.6.0-2/aapt2-9.6.0-2-osx.jar" "aapt2 osx bytes"
+fixture "$GM/9.6.0-2/aapt2-9.6.0-2-osx.jar.sha1" "$(sha1_of "aapt2 osx bytes")"
+# aapt2 9.4.0-1 (already in HEAD, missing osx): served, but must not be fetched
+fixture "$GM/9.4.0-1/aapt2-9.4.0-1-osx.jar" "old osx bytes"
+fixture "$GM/9.4.0-1/aapt2-9.4.0-1-osx.jar.sha1" "$(sha1_of "old osx bytes")"
+# node 24.11.0: darwin-arm64 from SHASUMS256.txt (which sorts BEFORE linux-x64)
+fixture "$ND/v24.11.0/node-v24.11.0-darwin-arm64.tar.gz" "node darwin bytes"
+fixture "$ND/v24.11.0/SHASUMS256.txt" "$(printf '%s  node-v24.11.0-darwin-x64.tar.gz\n%s  node-v24.11.0-darwin-arm64.tar.gz\n' \
+  "$(sha256_of other)" "$(sha256_of "node darwin bytes")")"
+# kotlin-native-prebuilt 2.5.0: macos-aarch64 served with a WRONG .sha1
+fixture "$MC/2.5.0/kotlin-native-prebuilt-2.5.0-macos-aarch64.tar.gz" "konan bytes"
+fixture "$MC/2.5.0/kotlin-native-prebuilt-2.5.0-macos-aarch64.tar.gz.sha1" "$(sha1_of "tampered bytes")"
+# aapt2 9.7.0-3: osx not served at all (download failure)
+
+H=$(printf '1%.0s' {1..64})   # placeholder sha256 values for pre-existing entries
+meta_head() { cat <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<verification-metadata>
+   <configuration>
+      <verify-metadata>false</verify-metadata>
+   </configuration>
+   <components>
+      <component group="com.android.tools.build" name="aapt2" version="9.4.0-1">
+         <artifact name="aapt2-9.4.0-1-linux.jar">
+            <sha256 value="$H" origin="Generated by Gradle"/>
+         </artifact>
+      </component>
+      <component group="com.example" name="lib" version="1.0">
+         <artifact name="lib-1.0.jar">
+            <sha256 value="$H" origin="Generated by Gradle"/>
+         </artifact>
+      </component>
+XML
+}
+comp() {  # comp <group> <name> <version> <artifact>: a one-artifact component
+  cat <<XML
+      <component group="$1" name="$2" version="$3">
+         <artifact name="$4">
+            <sha256 value="$H" origin="Generated by Gradle"/>
+         </artifact>
+      </component>
+XML
+}
+meta_tail() { printf '   </components>\n</verification-metadata>\n'; }
+art() {  # art <name> <sha256> <host>: the entry the step is expected to write
+  printf '         <artifact name="%s">\n            <sha256 value="%s" origin="Computed by dependabot lockfix from %s; matches the published %s"/>\n         </artifact>\n' \
+    "$1" "$2" "$3" "$4"
+}
+
+# HEAD holds the old components; the regen (working tree) adds new ones that
+# carry only their Linux variant, as an ubuntu --write-verification-metadata does.
+rm -rf "$TMP/h"; git init -q "$TMP/h"; mkdir -p "$TMP/h/gradle"
+{ meta_head; meta_tail; } > "$TMP/h/$VM"
+git -C "$TMP/h" add -A; git -C "$TMP/h" -c user.name=t -c user.email=t@t commit -qm init
+{ meta_head
+  comp com.android.tools.build aapt2 9.6.0-2 aapt2-9.6.0-2-linux.jar
+  comp com.android.tools.build aapt2 9.7.0-3 aapt2-9.7.0-3-linux.jar
+  comp com.android.tools.build aapt2 '9.9/../../evil' 'aapt2-x-linux.jar'
+  comp org.jetbrains.kotlin kotlin-native-prebuilt 2.5.0 kotlin-native-prebuilt-2.5.0-linux-x86_64.tar.gz
+  comp org.nodejs node 24.11.0 node-24.11.0-linux-x64.tar.gz
+  meta_tail; } > "$TMP/h/$VM"
+
+run_hosttools() {
+  : > "$TMP/curl.log"
+  ( cd "$TMP/h" && PATH="$TMP/curlbin:$PATH" CURL_LOG="$TMP/curl.log" CURL_FIXTURES="$FX" \
+      bash -e "$TMP/hosttools.sh" ) > "$TMP/log" 2>&1
+}
+run_hosttools; rc=$?
+got="$TMP/h/$VM"
+# The expected file: exactly the regen plus two inserted, sorted artifacts.
+{ meta_head
+  comp com.android.tools.build aapt2 9.6.0-2 aapt2-9.6.0-2-linux.jar | sed '$d'
+  art aapt2-9.6.0-2-osx.jar "$(sha256_of "aapt2 osx bytes")" dl.google.com .sha1
+  echo "      </component>"
+  comp com.android.tools.build aapt2 9.7.0-3 aapt2-9.7.0-3-linux.jar
+  comp com.android.tools.build aapt2 '9.9/../../evil' 'aapt2-x-linux.jar'
+  comp org.jetbrains.kotlin kotlin-native-prebuilt 2.5.0 kotlin-native-prebuilt-2.5.0-linux-x86_64.tar.gz
+  echo '      <component group="org.nodejs" name="node" version="24.11.0">'
+  art node-24.11.0-darwin-arm64.tar.gz "$(sha256_of "node darwin bytes")" nodejs.org SHASUMS256.txt
+  comp org.nodejs node 24.11.0 node-24.11.0-linux-x64.tar.gz | sed '1d'
+  meta_tail; } > "$TMP/expected.xml"
+
+if [ $rc -eq 0 ] && diff -u "$TMP/expected.xml" "$got" > "$TMP/d"; then
+  ok "G1: new aapt2 + node components gain their other-OS variant, sorted, nothing else changes"
+else bad "G1: new aapt2 + node components gain their other-OS variant, sorted, nothing else changes" "rc=$rc $(cat "$TMP/d" "$TMP/log")"; fi
+
+removed=$(git -C "$TMP/h" diff --text -U0 -- "$VM" | awk '/^diff --git /{h=0} /^@@/{h=1; next} h && /^-/')
+if [ -z "$removed" ]; then ok "G2: the result is pure additions vs HEAD (passes the append-only guard)"
+else bad "G2: the result is pure additions vs HEAD (passes the append-only guard)" "$removed"; fi
+
+if grep -q '::warning::.*kotlin-native-prebuilt-2.5.0-macos-aarch64.*does not match' "$TMP/log" \
+   && ! grep -q 'kotlin-native-prebuilt-2.5.0-macos-aarch64' "$got"; then
+  ok "G3: a published-hash mismatch writes nothing for that artifact and warns"
+else bad "G3: a published-hash mismatch writes nothing for that artifact and warns" "$(cat "$TMP/log")"; fi
+
+if grep -q '::warning::.*aapt2-9.7.0-3-osx' "$TMP/log" && ! grep -q 'aapt2-9.7.0-3-osx' "$got"; then
+  ok "G4: a download failure writes nothing for that artifact and warns"
+else bad "G4: a download failure writes nothing for that artifact and warns" "$(cat "$TMP/log")"; fi
+
+if ! grep -q '9.4.0-1' "$TMP/curl.log" && ! grep -q 'aapt2-9.4.0-1-osx' "$got"; then
+  ok "G5: a component unchanged since HEAD is not touched (no backfill)"
+else bad "G5: a component unchanged since HEAD is not touched (no backfill)" "$(cat "$TMP/curl.log")"; fi
+
+if ! grep -q 'evil' "$TMP/curl.log" && grep -q '::warning::.*9.9/../../evil' "$TMP/log"; then
+  ok "G6: a version failing the regex is refused without any curl call"
+else bad "G6: a version failing the regex is refused without any curl call" "$(cat "$TMP/curl.log" "$TMP/log")"; fi
+
+if [ -s "$TMP/curl.log" ] && ! grep -v -- '-fsSL --proto =https ' "$TMP/curl.log" | grep -q . \
+   && ! grep -vE ' https://(dl\.google\.com|repo1\.maven\.org|nodejs\.org)/' "$TMP/curl.log" | grep -q .; then
+  ok "G7: every download is curl -fsSL --proto =https to a table host"
+else bad "G7: every download is curl -fsSL --proto =https to a table host" "$(cat "$TMP/curl.log")"; fi
+
+cp "$got" "$TMP/first.xml"; run_hosttools; rc=$?
+if [ $rc -eq 0 ] && cmp -s "$TMP/first.xml" "$got" && ! grep -q 'aapt2-9.6.0-2-osx\|node-v24.11.0-darwin-arm64' "$TMP/curl.log"; then
+  ok "G8: a second run is a no-op (present variants are not re-fetched)"
+else bad "G8: a second run is a no-op (present variants are not re-fetched)" "rc=$rc $(cat "$TMP/log" "$TMP/curl.log")"; fi
+
+rm -rf "$TMP/h2"; git init -q "$TMP/h2"
+( cd "$TMP/h2" && PATH="$TMP/curlbin:$PATH" CURL_LOG="$TMP/curl.log" CURL_FIXTURES="$FX" \
+    bash -e "$TMP/hosttools.sh" ) > "$TMP/log" 2>&1; rc=$?
+if [ $rc -eq 0 ] && [ ! -e "$TMP/h2/$VM" ]; then ok "G9: a repo without verification metadata is a no-op"
+else bad "G9: a repo without verification metadata is a no-op" "rc=$rc $(cat "$TMP/log")"; fi
+fi
 
 echo
 echo "$PASS passed, $FAIL failed"

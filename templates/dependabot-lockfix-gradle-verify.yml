@@ -1,0 +1,51 @@
+name: Dependabot lockfix
+
+# Thin stub — the logic lives in chrischall/workflows.
+# Gradle dependency verification is on (gradle/verification-metadata.xml), and
+# dependabot cannot run gradle, so every Gradle bump arrives with stale
+# checksums and CI fails `Dependency verification failed`. This regenerates the
+# metadata (and kotlin-js-store/yarn.lock) on dependabot PRs over every task CI
+# runs, adds the other-OS host-tool checksums an ubuntu run cannot record, and
+# pushes the result back with the PAT so CI retriggers. The push job refuses a
+# patch that removes or changes any existing line of the metadata.
+#
+# The task list is `lockfix_gradle_tasks` in chrischall/workflows' fleet.json —
+# change it there, not here. A build task failing after resolution only warns:
+# the checksums still ship, so CI shows the bump's real error.
+#
+# pull_request_target so the PAT secret is available on dependabot-triggered
+# runs; the reusable double-guards to PRs authored AND triggered by
+# dependabot[bot], and checks out the head without credentials.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+# The reusable's job requests `contents: read` (checkout); a called workflow
+# can only downgrade the caller's grant, so `{}` here startup-fails every run.
+permissions:
+  contents: read
+
+concurrency:
+  group: dependabot-lockfix-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lockfix:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
+    uses: chrischall/workflows/.github/workflows/reusable-dependabot-lockfix.yml@main
+    with:
+      java-version: "__JAVA_VERSION__"
+      lockfix-command: |
+        ./gradlew --dependency-verification lenient kotlinUpgradeYarnLock
+        rc=0
+        ./gradlew --write-verification-metadata sha256 --continue __LOCKFIX_GRADLE_TASKS__ -x test -x check || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          echo "::warning::gradle exited $rc while regenerating verification metadata; packaging the checksums it recorded so CI shows the real failure"
+        fi
+      commit-paths: gradle/verification-metadata.xml kotlin-js-store/yarn.lock
+      append-only-paths: gradle/verification-metadata.xml
+      host-tool-checksums: true
+      commit-message: "fix(deps): regenerate Gradle verification metadata after dependabot bump"
+    secrets:
+      release_pat: ${{ secrets.__PAT_SECRET__ }}

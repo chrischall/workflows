@@ -36,6 +36,31 @@ name: Reusable dependabot lockfix
 #     without persisted credentials, the patch treated as untrusted data
 #     (size-capped, regular files only, confined to `commit-paths`), and
 #     commit/push with hooks disabled;
+#   - `append-only-paths` (optional) names files that a regen may only ever
+#     ADD lines to, e.g. gradle/verification-metadata.xml. Regenerating that
+#     file only appends checksums; a removed or changed checksum for a
+#     coordinate already listed is exactly the tampering signal dependency
+#     verification exists to catch, so the push job refuses any patch that
+#     removes or rewrites a line there (or deletes the file) and leaves it
+#     for a human. Additions alone can still loosen verification (a
+#     `<trust regex>` rule, `<also-trust>`, a second checksum), so when the
+#     file at HEAD is Gradle verification metadata every ADDED line must also
+#     be a shape a regen writes: a new component, a new artifact, its 64-hex
+#     sha256, and closing tags. Empty (the default) skips the check;
+#   - `host-tool-checksums` (optional, default false) fills the one gap an
+#     ubuntu `--write-verification-metadata` leaves: host tools published
+#     per OS (aapt2, kotlin-native-prebuilt, the Kotlin/JS node
+#     distribution) are recorded only in their Linux variant, but the
+#     self-hosted Mac lane and local builds need the macOS one. For
+#     components of gradle/verification-metadata.xml that are new or changed
+#     since HEAD only, it downloads the missing variant from a FIXED table of
+#     URLs (dl.google.com, repo1.maven.org, nodejs.org; https only, the
+#     version regex-checked first), cross-checks it against the published
+#     .sha1 / SHASUMS256.txt, and inserts the sha256 — it never runs
+#     anything it downloads, and on any mismatch or failure it warns and
+#     writes nothing (the PR stays red for a human). It runs in the lockfix
+#     job, after PR code, so its output is just more untrusted patch data
+#     for the push job (pair it with `append-only-paths` on that file);
 #   - after our push the next `synchronize` actor is the PAT owner, not
 #     dependabot[bot], so the guard breaks the retrigger loop.
 #
@@ -73,6 +98,21 @@ on:
         type: string
         required: false
         default: ""
+      append-only-paths:
+        description: Space-separated pathspecs (a subset of commit-paths)
+          the patch may only add lines to; a removed or changed line, or a
+          deleted file, there refuses the push. Empty skips the check.
+        type: string
+        required: false
+        default: ""
+      host-tool-checksums:
+        description: After the regen, add the other-OS variants (Linux and
+          macOS) of OS-specific host tools (aapt2, kotlin-native-prebuilt,
+          the Kotlin/JS node distribution) to new or changed components of
+          gradle/verification-metadata.xml, by download + checksum only.
+        type: boolean
+        required: false
+        default: false
 
     secrets:
       release_pat:
@@ -84,6 +124,10 @@ jobs:
     # who caused this event — our own lockfix push must not re-enter.
     if: github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest
+    # A Gradle verification regen builds every Linux graph and pulls the
+    # ~850 MB Kotlin/Native toolchain; a hang should not hold a runner for
+    # the 6-hour default.
+    timeout-minutes: 90
     # pull_request_target grants a read/write github.token by default; this
     # job runs PR-controlled code, so keep the token to the read access
     # checkout needs and nothing more. It holds NO secret: everything it
@@ -121,6 +165,159 @@ jobs:
 
       - name: Regenerate lockfiles
         run: ${{ inputs.lockfix-command }}
+
+      - name: Add host-tool checksums
+        if: inputs.host-tool-checksums
+        run: |
+          set -euo pipefail
+          f=gradle/verification-metadata.xml
+          if [ ! -f "$f" ]; then
+            echo "no $f — nothing to do"
+            exit 0
+          fi
+          # -I: the checked-out (PR-controlled) tree must not shadow the stdlib.
+          python3 -I - "$f" <<'PY'
+          import hashlib, os, re, subprocess, sys, tempfile
+
+          path = sys.argv[1]
+          VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+-]*$")
+          GM = "https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2"
+          MC = "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-native-prebuilt"
+          ND = "https://nodejs.org/dist"
+          # The ONLY coordinates ever fetched. Each entry: classifiers,
+          # artifact name, artifact URL, and how the published hash is found
+          # ("sha1": <url>.sha1; "shasums": that line of SHASUMS256.txt).
+          TABLE = {
+              ("com.android.tools.build", "aapt2"): (
+                  ("linux", "osx"),
+                  lambda v, c: f"aapt2-{v}-{c}.jar",
+                  lambda v, c: f"{GM}/{v}/aapt2-{v}-{c}.jar",
+                  "sha1"),
+              ("org.jetbrains.kotlin", "kotlin-native-prebuilt"): (
+                  ("linux-x86_64", "macos-aarch64"),
+                  lambda v, c: f"kotlin-native-prebuilt-{v}-{c}.tar.gz",
+                  lambda v, c: f"{MC}/{v}/kotlin-native-prebuilt-{v}-{c}.tar.gz",
+                  "sha1"),
+              ("org.nodejs", "node"): (
+                  ("linux-x64", "darwin-arm64"),
+                  lambda v, c: f"node-{v}-{c}.tar.gz",
+                  lambda v, c: f"{ND}/v{v}/node-v{v}-{c}.tar.gz",
+                  "shasums"),
+          }
+          COMPONENT = re.compile(
+              r'^([ \t]*)<component group="([^"]*)" name="([^"]*)" version="([^"]*)">\n'
+              r'(.*?)^[ \t]*</component>[ \t]*\n', re.M | re.S)
+          tmp = tempfile.mkdtemp()
+
+          def warn(msg):
+              print(f"::warning::host-tool checksums: {msg}", flush=True)
+
+          def fetch(url):
+              # Download only; nothing fetched here is ever executed. Each
+              # download gets its own file, so fetching the published hash
+              # can never overwrite the artifact it is checked against.
+              fd, dest = tempfile.mkstemp(dir=tmp)
+              os.close(fd)
+              os.remove(dest)
+              r = subprocess.run(["curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "-o", dest, url])
+              return dest if r.returncode == 0 and os.path.isfile(dest) else None
+
+          def digest(algo, file):
+              h = hashlib.new(algo)
+              with open(file, "rb") as fh:
+                  for chunk in iter(lambda: fh.read(1 << 20), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          def published(kind, v, c, url):
+              """The published hash to cross-check against, or None."""
+              if kind == "sha1":
+                  got = fetch(url + ".sha1")
+                  if not got:
+                      return None
+                  words = open(got, encoding="utf-8", errors="replace").read().split()
+                  h = words[0].lower() if words else ""
+                  return ("sha1", h) if re.fullmatch(r"[0-9a-f]{40}", h) else None
+              got = fetch(f"{ND}/v{v}/SHASUMS256.txt")
+              if not got:
+                  return None
+              want = f"node-v{v}-{c}.tar.gz"
+              for line in open(got, encoding="utf-8", errors="replace"):
+                  words = line.split()
+                  if len(words) == 2 and words[1].lstrip("*") == want and re.fullmatch(r"[0-9a-f]{64}", words[0]):
+                      return ("sha256", words[0])
+              return None
+
+          def checksum(kind, v, c, url):
+              """sha256 of the artifact, only if it matches the published hash."""
+              art = fetch(url)
+              if not art:
+                  warn(f"download failed: {url} — skipped")
+                  return None
+              sha256 = digest("sha256", art)
+              pub = published(kind, v, c, url)
+              if pub is None:
+                  warn(f"no published hash found for {url} — skipped")
+                  return None
+              algo, want = pub
+              if (sha256 if algo == "sha256" else digest("sha1", art)) != want:
+                  warn(f"{url} does not match its published {algo} — skipped")
+                  return None
+              return sha256
+
+          def components(text):
+              return {(m[2], m[3], m[4]): m[0] for m in COMPONENT.finditer(text)}
+
+          head = subprocess.run(["git", "show", f"HEAD:{path}"], capture_output=True, text=True)
+          before = components(head.stdout) if head.returncode == 0 else {}
+          added = []
+
+          def extend(m):
+              block, indent, group, name, version = m[0], m[1], m[2], m[3], m[4]
+              tool = TABLE.get((group, name))
+              if tool is None or before.get((group, name, version)) == block:
+                  return block           # not a host tool, or unchanged since HEAD
+              classifiers, art_name, art_url, kind = tool
+              lines = block.splitlines(keepends=True)
+              have = re.findall(r'<artifact name="([^"]*)"', block)
+              missing = [c for c in classifiers if art_name(version, c) not in have]
+              if not missing:
+                  return block
+              if not VERSION.fullmatch(version):
+                  warn(f"refusing {group}:{name} version {version!r} (not a plain version)")
+                  return block
+              for c in missing:
+                  an, url = art_name(version, c), art_url(version, c)
+                  sha256 = checksum(kind, version, c, url)
+                  if sha256 is None:
+                      continue
+                  host = url.split("/")[2]
+                  what = ".sha1" if kind == "sha1" else "SHASUMS256.txt"
+                  starts = [(i, re.search(r'<artifact name="([^"]*)"', l)[1])
+                            for i, l in enumerate(lines) if '<artifact name="' in l]
+                  ai = re.match(r"[ \t]*", lines[starts[0][0]])[0] if starts else indent + "   "
+                  shas = [l for l in lines if "<sha256 " in l]
+                  si = re.match(r"[ \t]*", shas[0])[0] if shas else ai + "   "
+                  entry = [f'{ai}<artifact name="{an}">\n',
+                           f'{si}<sha256 value="{sha256}" origin="Computed by dependabot lockfix from {host}; matches the published {what}"/>\n',
+                           f'{ai}</artifact>\n']
+                  later = [i for i, n in starts if n > an]
+                  if later:
+                      at = later[0]
+                  else:
+                      ends = [i for i, l in enumerate(lines) if "</artifact>" in l]
+                      at = ends[-1] + 1 if ends else 1
+                  lines[at:at] = entry
+                  added.append(an)
+              return "".join(lines)
+
+          text = open(path, encoding="utf-8").read()
+          out = COMPONENT.sub(extend, text)
+          if out != text:
+              with open(path, "w", encoding="utf-8") as fh:
+                  fh.write(out)
+          print(f"host-tool checksums added: {', '.join(added) if added else 'none'}")
+          PY
 
       - name: Package lockfile drift
         id: drift
@@ -180,6 +377,7 @@ jobs:
           PAT: ${{ secrets.release_pat }}
           PATHS: ${{ inputs.commit-paths }}
           PATCH: ${{ runner.temp }}/lockfix/lockfix.patch
+          APPEND_ONLY: ${{ inputs.append-only-paths }}
           MESSAGE: ${{ inputs.commit-message }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           REPO: ${{ github.repository }}
@@ -211,6 +409,79 @@ jobs:
             echo "::error::lockfix patch creates a non-regular file — refusing"
             printf '%s\n' "$bad_mode"
             exit 1
+          fi
+          # Append-only files (verification checksums) may only gain lines:
+          # a removed or rewritten line is the tampering signal they exist
+          # to catch. --text so a binary-looking change can't hide behind
+          # "Binary files differ"; a removal is a `-` line INSIDE a hunk
+          # (the `--- a/…` header precedes the first @@, so it never counts).
+          read -ra aospecs <<< "$APPEND_ONLY"
+          if [ "${#aospecs[@]}" -gt 0 ]; then
+            refused=0
+            while IFS= read -r -d '' f; do
+              removed=$(git diff --cached --text --no-renames -U0 -- "$f" \
+                | awk '/^diff --git /{h=0} /^@@/{h=1; next} h && /^-/')
+              if git diff --cached --quiet --diff-filter=D -- "$f"; then deleted=0; else deleted=1; fi
+              if [ -n "$removed" ] || [ "$deleted" -eq 1 ]; then
+                echo "::error::lockfix patch removes or changes lines of append-only path $f — refusing"
+                printf '%s\n' "$removed" | sed -n '1,50p'
+                refused=1
+                continue
+              fi
+              # Additions alone can still switch verification OFF: a
+              # `<trust … regex>` rule, an `<also-trust>`, or a second checksum
+              # for an artifact already listed. So when the file at HEAD is
+              # real Gradle verification metadata, every added line must be a
+              # shape a regen writes: a new <component>, a new <artifact> (name
+              # not listed before), a 64-hex <sha256> directly under an added
+              # <artifact>, and their closing tags. A file absent at HEAD is
+              # skipped: creating one can only turn verification ON.
+              # `python3 -I` so nothing in the checked-out tree is importable.
+              if ! bad_add=$(python3 -I - "$f" <<'PY'
+          import re, subprocess, sys
+          f = sys.argv[1]
+          head = subprocess.run(["git", "show", f"HEAD:{f}"], capture_output=True, text=True)
+          if head.returncode != 0 or "<verification-metadata" not in head.stdout:
+              sys.exit(0)
+          diff = subprocess.run(["git", "diff", "--cached", "--text", "--no-renames", "-U0", "--", f],
+                                capture_output=True, text=True, check=True).stdout
+          known = set(re.findall(r'<artifact name="([^"]*)">', head.stdout))
+          ART = re.compile(r'<artifact name="([^"<>/]+)">')
+          SHA = re.compile(r'<sha256 value="[0-9a-f]{64}"(?: origin="[^"<>]*")?/>')
+          PLAIN = [re.compile(r'<component group="[^"<>]+" name="[^"<>]+" version="[^"<>]+">'),
+                   re.compile(r'</component>'), re.compile(r'</artifact>')]
+          bad, prev, hunk = [], None, False
+          for line in diff.splitlines():
+              if line.startswith("diff --git "):
+                  hunk = False
+                  continue
+              if line.startswith("@@"):
+                  hunk, prev = True, None
+                  continue
+              if not hunk or not line.startswith("+"):
+                  continue
+              text = line[1:].strip()
+              m = ART.fullmatch(text)
+              if m:
+                  ok = m.group(1) not in known
+                  known.add(m.group(1))
+              elif SHA.fullmatch(text):
+                  ok = prev is not None and ART.fullmatch(prev) is not None
+              else:
+                  ok = any(p.fullmatch(text) for p in PLAIN)
+              if not ok:
+                  bad.append(line)
+              prev = text
+          print("\n".join(bad[:50]))
+          sys.exit(1 if bad else 0)
+          PY
+              ); then
+                echo "::error::lockfix patch adds lines to $f that a verification-metadata regen never writes (trust rules, also-trust, a second checksum, a re-listed artifact) — refusing"
+                printf '%s\n' "$bad_add"
+                refused=1
+              fi
+            done < <(git diff --cached --name-only -z --no-renames -- "${aospecs[@]}")
+            if [ "$refused" -ne 0 ]; then exit 1; fi
           fi
           # Hooks off for commit AND push: this job runs no PR code, but a
           # hook is the classic way to run code next to a secret.

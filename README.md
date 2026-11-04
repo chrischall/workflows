@@ -15,7 +15,7 @@ Reusable GitHub Actions workflows and composite actions for the fleet
 | `.github/workflows/reusable-release-please.yml` | reusable workflow | MCP repos by default (via `templates/release-please-reusable.yml`; `reusable_release: ""` opts out) |
 | `.github/actions/arm-gate` | composite action | bespoke-CI repos (gradle, swift), and `reusable-mcp-ci.yml`'s gate job |
 | `templates/ci-gradle.yml` | starter template | Gradle/KMP repos |
-| `templates/dependabot-lockfix-{npm,gradle}.yml` | stub templates | repos with `lockfix` set in `fleet.json` |
+| `templates/dependabot-lockfix-{npm,gradle,gradle-verify}.yml` | stub templates | repos with `lockfix` set in `fleet.json` |
 | `templates/dependabot-{npm,gradle,swift,uv,actions}.yml` | repo-config template | renders `.github/dependabot.yml`; ecosystem picked by `dependabot` in `fleet.json` |
 | `templates/release-please-config.json` | repo-config template | renders `release-please-config.json`; repos with `release_config: mcp` |
 | `templates/release-notes.yml` | repo-config template | renders `.github/release.yml`; all repos unless `release_notes: none` |
@@ -299,12 +299,37 @@ double-guarded to PRs both authored and triggered by dependabot[bot], and the
 PR head is checked out without credentials so the lockfix command never sees
 the PAT. The stub must grant `contents: read` — a `permissions: {}` caller
 startup-fails, since the called job requests `contents: read` for checkout.
-Onboard a repo by setting `lockfix: npm|gradle` in `fleet.json` and running
-`scripts/rollout.sh`; off-board by clearing `lockfix` there and deleting the
-rendered stub, in that order — the file alone comes back on the next rollout.
-Live consumer: curtaincall (gradle). untappd-mcp was the npm one until its
-`file:`-linked package moved to its own repo and the derived lockfile stopped
-existing (untappd-mcp#105, #83).
+Onboard a repo by setting `lockfix: npm|gradle|gradle-verify` in `fleet.json`
+and running `scripts/rollout.sh`; off-board by clearing `lockfix` there and
+deleting the rendered stub, in that order — the file alone comes back on the
+next rollout. Live consumer: curtaincall (gradle). untappd-mcp was the npm one
+until its `file:`-linked package moved to its own repo and the derived lockfile
+stopped existing (untappd-mcp#105, #83).
+
+`lockfix: gradle-verify` is for Gradle repos with dependency verification on
+(`gradle/verification-metadata.xml`), where every Gradle dependabot bump
+otherwise fails CI `Dependency verification failed` until someone regenerates
+the file by hand. Its stub upgrades `kotlin-js-store/yarn.lock`, then runs
+`./gradlew --write-verification-metadata sha256 --continue
+<lockfix_gradle_tasks> -x test -x check` on ubuntu, adds the other-OS
+host-tool checksums an ubuntu run cannot record (`host-tool-checksums`: aapt2,
+kotlin-native-prebuilt, the Kotlin/JS node distribution), and pushes the
+result back; `append-only-paths` makes the push job refuse any patch that
+removes or changes an existing line of the metadata, and — because an
+addition alone can loosen verification — any added line that is not a new
+component, a new artifact, its 64-hex sha256, or a closing tag (so no
+`<trust>` rule, `<also-trust>`, or second checksum for a listed artifact). A
+refused patch leaves the PR red for a human, which is also what happens when a
+Gradle wrapper bump rewrites the file's header. The stub assumes a Kotlin/JS
+repo (it runs `kotlinUpgradeYarnLock`). A build task that fails
+after resolution only warns, so a bump that breaks compilation still gets its
+checksums and CI shows the real error. `lockfix_gradle_tasks` (fleet.json,
+default empty) is the task list: **every Gradle task CI runs on Linux, plus any
+property that widens resolution** — allotmint's `-Pallotmint.iosKlibs`, which
+declares the iOS targets on Linux so their klibs are resolved and checksummed.
+A task CI runs that the list omits leaves its graph unrecorded, and CI keeps
+failing verification. It is a hard error for `gradle-verify` to have an empty
+list, or for any other `lockfix` value to have one set.
 
 Rollout tooling: `fleet.json` (per-repo parameters), `scripts/rollout.sh`
 (stub-conversion PRs; `--check` reports drift without opening one, `--only
@@ -419,7 +444,9 @@ left `apple-swift-mcp` and the three `swift-*-automation` packages on
 (fleet-audit#360, #640). A wrong value here is invisible: the config is valid
 and dependabot simply watches nothing.
 
-`fleet.json` keys: `dependabot` (`npm`|`gradle`|`swift`|`uv`|`actions`|`none`),
+`fleet.json` keys: `lockfix` (`npm`|`gradle`|`gradle-verify`, or empty; see
+the lockfix section above), `lockfix_gradle_tasks` (`gradle-verify` only),
+`dependabot` (`npm`|`gradle`|`swift`|`uv`|`actions`|`none`),
 `dependabot_ignore` (a fragment name, see below), `dependabot_extra`
 (comma-separated `<ecosystem>:<directory>`, see below),
 `dependabot_extra_ignore` (comma-separated `<ecosystem>:<fragment>`, see

@@ -63,6 +63,11 @@ ln -s "$HERE/templates" "$ROOT/templates"
 # FAKE/swi is FAKE/sw with a dependabot_ignore hold.
 # FAKE/n opts out of both repo-config templates, which is the only way to prove
 # an opt-out renders NOTHING rather than an empty file.
+# FAKE/gl is a plain `lockfix: gradle` repo (curtaincall-shaped), the control
+# that proves a repo without `lockfix_gradle_tasks` renders exactly as before.
+# FAKE/gv opts into `lockfix: gradle-verify`; FAKE/gvempty, gvstray and gvnone
+# exist only to prove the two misconfigurations fail loudly: gradle-verify
+# with no task list, and a task list on a repo whose lockfix never reads it.
 # FAKE/p is a pre-1.0 repo: it sets the two optional release-please keys the
 # template does not carry, and leaves both include-*-in-tag UNSET, so "empty
 # means absent" is exercised in both directions against FAKE/x's defaults.
@@ -139,7 +144,19 @@ jq '{defaults: .defaults,
              {repo: "FAKE/r", reusable_release: "true", fly_dir: "server",
               package_name: "fake-r"},
              {repo: "FAKE/rs", reusable_release: "true", ci: "none",
-              package_name: "fake-rs", skill_path: "skills/one/SKILL.md"}]}' \
+              package_name: "fake-rs", skill_path: "skills/one/SKILL.md"},
+             {repo: "FAKE/gl", lockfix: "gradle", java_version: "25",
+              ci: "none", release: "none", package_name: "fake-gl"},
+             {repo: "FAKE/gv", lockfix: "gradle-verify", java_version: "25",
+              lockfix_gradle_tasks: "-Pfake.widen :a:build :b:bundleRelease",
+              ci: "none", release: "none", package_name: "fake-gv"},
+             {repo: "FAKE/gvempty", lockfix: "gradle-verify",
+              ci: "none", release: "none", package_name: "fake-gvempty"},
+             {repo: "FAKE/gvstray", lockfix: "gradle",
+              lockfix_gradle_tasks: ":a:build",
+              ci: "none", release: "none", package_name: "fake-gvstray"},
+             {repo: "FAKE/gvnone", lockfix_gradle_tasks: ":a:build",
+              ci: "none", release: "none", package_name: "fake-gvnone"}]}' \
   "$HERE/fleet.json" > "$ROOT/fleet.json"
 ROLLOUT="$ROOT/scripts/rollout.sh"
 
@@ -1495,6 +1512,149 @@ assert_has  KK "DRIFT    FAKE/x/release-please-config.json"
 assert_has  KK "python"
 assert_code KK 1
 assert_clean_stderr KK
+
+# --- LL: `lockfix: gradle-verify` and its `lockfix_gradle_tasks` ------------
+# Gradle dependency verification makes every Gradle dependabot bump arrive
+# with stale checksums, so the gradle-verify stub regenerates
+# gradle/verification-metadata.xml on ubuntu. The task list is per repo (it is
+# every task CI runs, plus any property that widens resolution), so it lives
+# in fleet.json and is substituted into the stub — and both ways of getting
+# that wrong are hard errors, because both quiet versions are a stub that
+# looks fine and regenerates the wrong thing (or nothing).
+LL_GV="$TMP/ll-gv"
+if bash "$ROLLOUT" FAKE/gv --render "$LL_GV" --only dependabot-lockfix >/dev/null 2>"$TMP/ll-gv.err"; then
+  ok "LL: gradle-verify renders"
+else bad "LL: gradle-verify render" "$(cat "$TMP/ll-gv.err")"; fi
+LL_STUB="$LL_GV/.github/workflows/dependabot-lockfix.yml"
+
+cat > "$TMP/ll-check.rb" <<'RUBY'
+require 'yaml'
+src  = File.read(ARGV[0])
+job  = (YAML.safe_load(src)['jobs'] || {})['lockfix'] || {}
+w    = job['with'] || {}
+errs = []
+errs << "unsubstituted placeholder #{src[/__[A-Z_]+__/]}" if src =~ /__[A-Z_]+__/
+errs << "uses #{job['uses'].inspect}" unless job['uses'] == 'chrischall/workflows/.github/workflows/reusable-dependabot-lockfix.yml@main'
+{ 'java-version' => '25',
+  'commit-paths' => 'gradle/verification-metadata.xml kotlin-js-store/yarn.lock',
+  'append-only-paths' => 'gradle/verification-metadata.xml',
+  'host-tool-checksums' => true,
+  'commit-message' => 'fix(deps): regenerate Gradle verification metadata after dependabot bump',
+}.each { |k, v| errs << "#{k} is #{w[k].inspect}, want #{v.inspect}" unless w[k] == v }
+errs << "release_pat is #{job.dig('secrets', 'release_pat').inspect}" unless job.dig('secrets', 'release_pat') == '${{ secrets.RELEASE_PAT }}'
+cmd = w['lockfix-command'].to_s
+errs << 'lockfix-command lacks the task list' unless cmd.include?('--write-verification-metadata sha256 --continue -Pfake.widen :a:build :b:bundleRelease -x test -x check')
+abort errs.join("\n") unless errs.empty?
+File.write(ARGV[1], cmd)
+RUBY
+if ruby "$TMP/ll-check.rb" "$LL_STUB" "$TMP/ll-cmd.sh" 2>"$TMP/ll-check.err"; then
+  ok "LL: the stub calls the reusable with the gradle-verify inputs and the tasks substituted"
+else bad "LL: stub shape" "$(cat "$TMP/ll-check.err")"; fi
+
+# The command itself, run as the reusable's `run:` step runs it (bash -e,
+# pipefail) against a fake ./gradlew. A build task that fails AFTER
+# resolution must not stop the metadata reaching the packaging step: a bump
+# that breaks compilation should still get its checksums, so CI shows the
+# real error rather than `Dependency verification failed`.
+ll_run() { # ll_run <case> <yarn rc> <regen rc> -> sets LL_DIR, LL_CODE, LL_OUT
+  LL_DIR="$TMP/ll-run-$1"; rm -rf "$LL_DIR"; mkdir -p "$LL_DIR/gradle"
+  cat > "$LL_DIR/gradlew" <<'GRADLEW'
+#!/usr/bin/env bash
+echo "$*" >> calls.log
+case " $* " in
+  *" kotlinUpgradeYarnLock "*) exit "$LL_YARN_RC" ;;
+  *" --write-verification-metadata "*)
+    echo '<verification-metadata/>' > gradle/verification-metadata.xml
+    exit "$LL_REGEN_RC" ;;
+esac
+exit 99
+GRADLEW
+  chmod +x "$LL_DIR/gradlew"
+  LL_OUT=$(cd "$LL_DIR" && LL_YARN_RC=$2 LL_REGEN_RC=$3 \
+             bash --noprofile --norc -eo pipefail "$TMP/ll-cmd.sh" 2>&1)
+  LL_CODE=$?
+}
+
+ll_run ok 0 0
+if [ "$LL_CODE" = 0 ] && ! grep -q '::warning::' <<<"$LL_OUT"; then
+  ok "LL: a clean regen exits 0 without a warning"
+else bad "LL: clean regen" "exit $LL_CODE: $LL_OUT"; fi
+if [ "$(sed -n 2p "$LL_DIR/calls.log")" = "--write-verification-metadata sha256 --continue -Pfake.widen :a:build :b:bundleRelease -x test -x check" ] \
+   && grep -qx -- '.*kotlinUpgradeYarnLock' <(sed -n 1p "$LL_DIR/calls.log"); then
+  ok "LL: the yarn lock is upgraded first, then the metadata regenerated over the fleet task list"
+else bad "LL: call order" "$(cat "$LL_DIR/calls.log")"; fi
+# The yarn step runs before the metadata is regenerated, so a bump to a
+# plugin it resolves would fail verification there and never reach the regen.
+if grep -q -- '--dependency-verification lenient' <(sed -n 1p "$LL_DIR/calls.log"); then
+  ok "LL: the yarn step does not fail on the stale checksums it is about to replace"
+else bad "LL: yarn step verification" "$(sed -n 1p "$LL_DIR/calls.log")"; fi
+
+ll_run broken 0 1
+if [ "$LL_CODE" = 0 ] && grep -q '::warning::' <<<"$LL_OUT" && [ -s "$LL_DIR/gradle/verification-metadata.xml" ]; then
+  ok "LL: a build task failing after resolution warns and still hands over the metadata"
+else bad "LL: failing build" "exit $LL_CODE: $LL_OUT"; fi
+
+ll_run yarn 1 0
+if [ "$LL_CODE" != 0 ] && [ "$(wc -l < "$LL_DIR/calls.log" | tr -d ' ')" = 1 ]; then
+  ok "LL: a failing yarn-lock upgrade fails the step before any regen"
+else bad "LL: failing yarn step" "exit $LL_CODE, calls: $(cat "$LL_DIR/calls.log")"; fi
+
+ll_err() { # ll_err <repo> <needle> <label>
+  if bash "$ROLLOUT" "$1" --render "$TMP/ll-err-$1" --only dependabot-lockfix >"$TMP/ll-err.txt" 2>&1; then
+    bad "LL: $3" "$1 rendered successfully instead of failing"
+  elif grep -qF -- "$2" "$TMP/ll-err.txt"; then ok "LL: $3 is a named hard error"
+  else bad "LL: $3" "failed, but without '$2': $(head -1 "$TMP/ll-err.txt")"; fi
+}
+ll_err FAKE/gvempty "lockfix_gradle_tasks is empty" "gradle-verify with no task list"
+ll_err FAKE/gvstray "lockfix_gradle_tasks is set" "a task list on lockfix: gradle"
+ll_err FAKE/gvnone  "lockfix_gradle_tasks is set" "a task list with no lockfix"
+
+# A repo without the key renders exactly as before: the plain gradle stub,
+# nothing of gradle-verify in it.
+LL_GL="$TMP/ll-gl"
+bash "$ROLLOUT" FAKE/gl --render "$LL_GL" --only dependabot-lockfix >/dev/null 2>&1
+sed -e 's|__JAVA_VERSION__|25|g' -e 's|__PAT_SECRET__|RELEASE_PAT|g' \
+  "$HERE/templates/dependabot-lockfix-gradle.yml" > "$TMP/ll-gl.want"
+if cmp -s "$TMP/ll-gl.want" "$LL_GL/.github/workflows/dependabot-lockfix.yml"; then
+  ok "LL: a lockfix: gradle repo without the key renders the unchanged gradle stub"
+else bad "LL: gradle control" "$(diff "$TMP/ll-gl.want" "$LL_GL/.github/workflows/dependabot-lockfix.yml" 2>&1 | head -20)"; fi
+
+# --- MM: allotmint opts in to gradle-verify -----------------------------------
+# allotmint is the repo gradle-verify exists for: every Gradle dependabot PR in
+# its history needed the verification metadata regenerated by hand. Its entry
+# is pinned against the REAL fleet.json, and rendered from it, so a later edit
+# that drops a task (or the iOS-klib property) is a red test, not a quiet
+# regen that misses checksums CI then fails on. The list is allotmint's
+# CLAUDE.md regen command minus the Mac-only XCFramework task, which cannot run
+# on ubuntu; -Pallotmint.iosKlibs declares the iOS targets on Linux instead.
+MM_TASKS='-Pallotmint.iosKlibs :shared:build :backend:build :androidApp:build :androidApp:bundleRelease :shared:jsBrowserProductionLibraryDistribution :backend:collectReachabilityMetadata :backend:nativeCompileClasspathJar'
+for spec in lockfix=gradle-verify java_version=25 "lockfix_gradle_tasks=$MM_TASKS"; do
+  k="${spec%%=*}"; want="${spec#*=}"
+  got=$(jq -r --arg k "$k" '.repos[] | select(.repo == "nullnet-app/allotmint") | .[$k] // empty' "$HERE/fleet.json")
+  if [ "$got" = "$want" ]; then ok "MM: allotmint sets $k"
+  else bad "MM: allotmint $k" "fleet.json has '${got:-<missing>}', want '$want'"; fi
+done
+MM_OUT="$TMP/mm-render"
+if bash "$HERE/scripts/rollout.sh" nullnet-app/allotmint --render "$MM_OUT" --only dependabot-lockfix >/dev/null 2>"$TMP/mm.err"; then
+  ok "MM: allotmint renders from the real fleet.json"
+else bad "MM: allotmint render" "$(cat "$TMP/mm.err")"; fi
+cat > "$TMP/mm-check.rb" <<'RUBY'
+require 'yaml'
+src  = File.read(ARGV[0])
+job  = (YAML.safe_load(src)['jobs'] || {})['lockfix'] || {}
+w    = job['with'] || {}
+errs = []
+errs << "unsubstituted placeholder #{src[/__[A-Z_]+__/]}" if src =~ /__[A-Z_]+__/
+errs << "java-version is #{w['java-version'].inspect}" unless w['java-version'] == '25'
+errs << "release_pat is #{job.dig('secrets', 'release_pat').inspect}" unless job.dig('secrets', 'release_pat') == '${{ secrets.NULLNET_RELEASE_PAT }}'
+cmd = w['lockfix-command'].to_s
+errs << 'lockfix-command lacks the allotmint task list' unless cmd.include?("--write-verification-metadata sha256 --continue #{ARGV[1]} -x test -x check")
+errs << 'lockfix-command runs the Mac-only XCFramework task' if cmd.include?('XCFramework')
+abort errs.join("\n") unless errs.empty?
+RUBY
+if ruby "$TMP/mm-check.rb" "$MM_OUT/.github/workflows/dependabot-lockfix.yml" "$MM_TASKS" 2>"$TMP/mm-check.err"; then
+  ok "MM: allotmint's stub regenerates over its Linux task list on temurin 25"
+else bad "MM: allotmint stub" "$(cat "$TMP/mm-check.err")"; fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
