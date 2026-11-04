@@ -1628,16 +1628,22 @@ else bad "LL: gradle control" "$(diff "$TMP/ll-gl.want" "$LL_GL/.github/workflow
 # --- NN: `dependabot_groups` splices a repo-specific group FIRST -----------
 # SKIE disables itself off a Mac, so the ubuntu lockfix can never pin a SKIE
 # bump (mcp-host-app#424). A SKIE group of its own keeps that the one PR that
-# needs a Mac regen. Dependabot puts a dependency in the FIRST group it
-# matches, so the spliced group must precede gradle-dependencies — rendered
-# anywhere later, it silently collects nothing.
+# needs a Mac regen. Dependabot hands a dependency to the MOST SPECIFIC
+# matching group, so the fragment must name SKIE exactly: the first version's
+# wildcard lost SKIE to gradle-dependencies (encore#251).
 DIR="$TMP/grp"
 bash "$ROLLOUT" FAKE/grp --render "$DIR" --only dependabot >/dev/null 2>&1
 if ruby -ryaml -e '
     d = YAML.safe_load(File.read(ARGV[0]))
     g = d["updates"][0]["groups"]
     abort "groups=#{g.keys.inspect}" unless g.keys.first == "skie" && g.key?("gradle-dependencies")
-    abort "patterns=#{g["skie"].inspect}" unless g["skie"]["patterns"] == ["co.touchlab.skie*"]
+    # Dependabot assigns a dependency to the MOST SPECIFIC group, not the first:
+    # a wildcard pattern lost to gradle-dependencies (encore#251: "Skipping
+    # co.touchlab.skie for group skie - belongs to more specific group"). An
+    # exact name scores 1000 against an unpatterned group of 500, as the npm
+    # template vitest group relies on.
+    abort "patterns=#{g["skie"].inspect}" unless g["skie"]["patterns"] == ["co.touchlab.skie"]
+    abort "update-types=#{g["skie"].inspect}" unless g["skie"]["update-types"] == %w[major minor patch]
   ' "$DIR/.github/dependabot.yml" 2>"$TMP/nn.err"; then
   ok "NN1: dependabot_groups splices the group first under the root entry"
 else bad "NN1: dependabot_groups splices the group first under the root entry" "$(cat "$TMP/nn.err")"; fi

@@ -128,8 +128,10 @@ DEPENDABOT=$(cfg dependabot)
 # Name of a templates/fragments/dependabot-ignore-<name>.yml block to splice in.
 DEPENDABOT_IGNORE=$(cfg dependabot_ignore)
 # Name of a templates/fragments/dependabot-groups-<name>.yml block spliced in as
-# the FIRST group of the root entry (dependabot assigns a dependency to the
-# first group it matches). Only templates carrying the marker accept one.
+# the first group of the root entry. Dependabot assigns a dependency to the
+# MOST SPECIFIC matching group, so the fragment must use exact names (1000)
+# to beat the template's unpatterned groups (500). Only templates carrying
+# the marker accept one.
 DEPENDABOT_GROUPS=$(cfg dependabot_groups)
 # Further manifests below the root, as comma-separated `<ecosystem>:<dir>`
 # pairs (e.g. `npm:/web,npm:/ops/uptime-worker`). Each renders
@@ -357,8 +359,7 @@ if [ "$DEPENDABOT" != "none" ]; then
   else
     sed -e '/^    # __DEPENDABOT_IGNORE__$/d' "$DB" > "$DB.tmp" && mv "$DB.tmp" "$DB"
   fi
-  # A repo-specific group, spliced FIRST under the root entry's `groups:` —
-  # a group rendered after gradle-dependencies would silently collect nothing.
+  # A repo-specific group, spliced first under the root entry's `groups:`.
   if [ -n "$DEPENDABOT_GROUPS" ]; then
     FRAG="$HERE/templates/fragments/dependabot-groups-$DEPENDABOT_GROUPS.yml"
     [ -f "$FRAG" ] || { echo "::error::$REPO: dependabot_groups '$DEPENDABOT_GROUPS' has no fragment at $FRAG"; exit 1; }
