@@ -315,7 +315,13 @@ the file by hand. Its stub upgrades `kotlin-js-store/yarn.lock`, then runs
 host-tool checksums an ubuntu run cannot record (`host-tool-checksums`: aapt2,
 kotlin-native-prebuilt, the Kotlin/JS node distribution), and pushes the
 result back; `append-only-paths` makes the push job refuse any patch that
-removes or changes an existing line of the metadata. A build task that fails
+removes or changes an existing line of the metadata, and — because an
+addition alone can loosen verification — any added line that is not a new
+component, a new artifact, its 64-hex sha256, or a closing tag (so no
+`<trust>` rule, `<also-trust>`, or second checksum for a listed artifact). A
+refused patch leaves the PR red for a human, which is also what happens when a
+Gradle wrapper bump rewrites the file's header. The stub assumes a Kotlin/JS
+repo (it runs `kotlinUpgradeYarnLock`). A build task that fails
 after resolution only warns, so a bump that breaks compilation still gets its
 checksums and CI shows the real error. `lockfix_gradle_tasks` (fleet.json,
 default empty) is the task list: **every Gradle task CI runs on Linux, plus any

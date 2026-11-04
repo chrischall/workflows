@@ -42,7 +42,11 @@ name: Reusable dependabot lockfix
 #     coordinate already listed is exactly the tampering signal dependency
 #     verification exists to catch, so the push job refuses any patch that
 #     removes or rewrites a line there (or deletes the file) and leaves it
-#     for a human. Empty (the default) skips the check;
+#     for a human. Additions alone can still loosen verification (a
+#     `<trust regex>` rule, `<also-trust>`, a second checksum), so when the
+#     file at HEAD is Gradle verification metadata every ADDED line must also
+#     be a shape a regen writes: a new component, a new artifact, its 64-hex
+#     sha256, and closing tags. Empty (the default) skips the check;
 #   - `host-tool-checksums` (optional, default false) fills the one gap an
 #     ubuntu `--write-verification-metadata` leaves: host tools published
 #     per OS (aapt2, kotlin-native-prebuilt, the Kotlin/JS node
@@ -120,6 +124,10 @@ jobs:
     # who caused this event — our own lockfix push must not re-enter.
     if: github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest
+    # A Gradle verification regen builds every Linux graph and pulls the
+    # ~850 MB Kotlin/Native toolchain; a hang should not hold a runner for
+    # the 6-hour default.
+    timeout-minutes: 90
     # pull_request_target grants a read/write github.token by default; this
     # job runs PR-controlled code, so keep the token to the read access
     # checkout needs and nothing more. It holds NO secret: everything it
@@ -167,7 +175,8 @@ jobs:
             echo "no $f — nothing to do"
             exit 0
           fi
-          python3 - "$f" <<'PY'
+          # -I: the checked-out (PR-controlled) tree must not shadow the stdlib.
+          python3 -I - "$f" <<'PY'
           import hashlib, os, re, subprocess, sys, tempfile
 
           path = sys.argv[1]
@@ -416,6 +425,59 @@ jobs:
               if [ -n "$removed" ] || [ "$deleted" -eq 1 ]; then
                 echo "::error::lockfix patch removes or changes lines of append-only path $f — refusing"
                 printf '%s\n' "$removed" | sed -n '1,50p'
+                refused=1
+                continue
+              fi
+              # Additions alone can still switch verification OFF: a
+              # `<trust … regex>` rule, an `<also-trust>`, or a second checksum
+              # for an artifact already listed. So when the file at HEAD is
+              # real Gradle verification metadata, every added line must be a
+              # shape a regen writes: a new <component>, a new <artifact> (name
+              # not listed before), a 64-hex <sha256> directly under an added
+              # <artifact>, and their closing tags. A file absent at HEAD is
+              # skipped: creating one can only turn verification ON.
+              # `python3 -I` so nothing in the checked-out tree is importable.
+              if ! bad_add=$(python3 -I - "$f" <<'PY'
+          import re, subprocess, sys
+          f = sys.argv[1]
+          head = subprocess.run(["git", "show", f"HEAD:{f}"], capture_output=True, text=True)
+          if head.returncode != 0 or "<verification-metadata" not in head.stdout:
+              sys.exit(0)
+          diff = subprocess.run(["git", "diff", "--cached", "--text", "--no-renames", "-U0", "--", f],
+                                capture_output=True, text=True, check=True).stdout
+          known = set(re.findall(r'<artifact name="([^"]*)">', head.stdout))
+          ART = re.compile(r'<artifact name="([^"<>/]+)">')
+          SHA = re.compile(r'<sha256 value="[0-9a-f]{64}"(?: origin="[^"<>]*")?/>')
+          PLAIN = [re.compile(r'<component group="[^"<>]+" name="[^"<>]+" version="[^"<>]+">'),
+                   re.compile(r'</component>'), re.compile(r'</artifact>')]
+          bad, prev, hunk = [], None, False
+          for line in diff.splitlines():
+              if line.startswith("diff --git "):
+                  hunk = False
+                  continue
+              if line.startswith("@@"):
+                  hunk, prev = True, None
+                  continue
+              if not hunk or not line.startswith("+"):
+                  continue
+              text = line[1:].strip()
+              m = ART.fullmatch(text)
+              if m:
+                  ok = m.group(1) not in known
+                  known.add(m.group(1))
+              elif SHA.fullmatch(text):
+                  ok = prev is not None and ART.fullmatch(prev) is not None
+              else:
+                  ok = any(p.fullmatch(text) for p in PLAIN)
+              if not ok:
+                  bad.append(line)
+              prev = text
+          print("\n".join(bad[:50]))
+          sys.exit(1 if bad else 0)
+          PY
+              ); then
+                echo "::error::lockfix patch adds lines to $f that a verification-metadata regen never writes (trust rules, also-trust, a second checksum, a re-listed artifact) — refusing"
+                printf '%s\n' "$bad_add"
                 refused=1
               fi
             done < <(git diff --cached --name-only -z --no-renames -- "${aospecs[@]}")
