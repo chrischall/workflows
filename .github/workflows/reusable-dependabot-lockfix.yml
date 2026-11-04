@@ -36,6 +36,13 @@ name: Reusable dependabot lockfix
 #     without persisted credentials, the patch treated as untrusted data
 #     (size-capped, regular files only, confined to `commit-paths`), and
 #     commit/push with hooks disabled;
+#   - `append-only-paths` (optional) names files that a regen may only ever
+#     ADD lines to, e.g. gradle/verification-metadata.xml. Regenerating that
+#     file only appends checksums; a removed or changed checksum for a
+#     coordinate already listed is exactly the tampering signal dependency
+#     verification exists to catch, so the push job refuses any patch that
+#     removes or rewrites a line there (or deletes the file) and leaves it
+#     for a human. Empty (the default) skips the check;
 #   - after our push the next `synchronize` actor is the PAT owner, not
 #     dependabot[bot], so the guard breaks the retrigger loop.
 #
@@ -70,6 +77,13 @@ on:
         default: ""
       java-version:
         description: Set to install a temurin JDK + gradle; empty skips.
+        type: string
+        required: false
+        default: ""
+      append-only-paths:
+        description: Space-separated pathspecs (a subset of commit-paths)
+          the patch may only add lines to; a removed or changed line, or a
+          deleted file, there refuses the push. Empty skips the check.
         type: string
         required: false
         default: ""
@@ -180,6 +194,7 @@ jobs:
           PAT: ${{ secrets.release_pat }}
           PATHS: ${{ inputs.commit-paths }}
           PATCH: ${{ runner.temp }}/lockfix/lockfix.patch
+          APPEND_ONLY: ${{ inputs.append-only-paths }}
           MESSAGE: ${{ inputs.commit-message }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           REPO: ${{ github.repository }}
@@ -211,6 +226,26 @@ jobs:
             echo "::error::lockfix patch creates a non-regular file — refusing"
             printf '%s\n' "$bad_mode"
             exit 1
+          fi
+          # Append-only files (verification checksums) may only gain lines:
+          # a removed or rewritten line is the tampering signal they exist
+          # to catch. --text so a binary-looking change can't hide behind
+          # "Binary files differ"; a removal is a `-` line INSIDE a hunk
+          # (the `--- a/…` header precedes the first @@, so it never counts).
+          read -ra aospecs <<< "$APPEND_ONLY"
+          if [ "${#aospecs[@]}" -gt 0 ]; then
+            refused=0
+            while IFS= read -r -d '' f; do
+              removed=$(git diff --cached --text --no-renames -U0 -- "$f" \
+                | awk '/^diff --git /{h=0} /^@@/{h=1; next} h && /^-/')
+              if git diff --cached --quiet --diff-filter=D -- "$f"; then deleted=0; else deleted=1; fi
+              if [ -n "$removed" ] || [ "$deleted" -eq 1 ]; then
+                echo "::error::lockfix patch removes or changes lines of append-only path $f — refusing"
+                printf '%s\n' "$removed" | sed -n '1,50p'
+                refused=1
+              fi
+            done < <(git diff --cached --name-only -z --no-renames -- "${aospecs[@]}")
+            if [ "$refused" -ne 0 ]; then exit 1; fi
           fi
           # Hooks off for commit AND push: this job runs no PR code, but a
           # hook is the classic way to run code next to a secret.

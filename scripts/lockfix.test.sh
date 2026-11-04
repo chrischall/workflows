@@ -52,6 +52,14 @@ ruby -ryaml -e '
   File.write(ARGV[1], pkg["run"]) if pkg
   File.write(ARGV[2], push["run"]) if push
   fails << "no `Package lockfile drift` step" unless pkg
+  ao = (((wf["on"] || wf[true] || {})["workflow_call"] || {})["inputs"] || {})["append-only-paths"]
+  if ao.nil?
+    fails << "no `append-only-paths` workflow_call input"
+  else
+    fails << "`append-only-paths` must be an optional string" unless ao["type"] == "string" && ao["required"] == false
+    fails << "`append-only-paths` must default to empty (no check)" unless ao["default"] == ""
+  end
+  fails << "the push step must receive append-only-paths as APPEND_ONLY" unless push && (push["env"] || {})["APPEND_ONLY"] == "${{ inputs.append-only-paths }}"
   puts fails
 ' "$WF" "$TMP/package.sh" "$TMP/push.sh" > "$TMP/struct" 2>&1
 if [ -s "$TMP/struct" ]; then bad "structure: lockfix and PAT live in separate jobs" "$(cat "$TMP/struct")"
@@ -79,6 +87,8 @@ new_origin() {  # fresh bare remote with a dependabot branch holding yarn.lock
   mkdir -p "$TMP/seed/kotlin-js-store" "$TMP/seed/.github/workflows"
   echo "lock v1" > "$TMP/seed/kotlin-js-store/yarn.lock"
   echo "name: ci" > "$TMP/seed/.github/workflows/ci.yml"
+  mkdir -p "$TMP/seed/gradle"
+  printf '<components>\n<c a="1"/>\n<c b="2"/>\n</components>\n' > "$TMP/seed/gradle/verification-metadata.xml"
   git -C "$TMP/seed" add -A
   git -C "$TMP/seed" -c user.name=t -c user.email=t@t commit -qm init
   git -C "$TMP/seed" push -q "$TMP/origin.git" main:dependabot/x
@@ -92,7 +102,8 @@ run_package() {
   ( cd "$1" && PATHS="kotlin-js-store/yarn.lock package-lock.json" PATCH="$TMP/lockfix.patch" \
       GITHUB_OUTPUT="$TMP/out" bash -e "$TMP/package.sh" ) > "$TMP/log" 2>&1
 }
-# run_push <workdir> <patch>: the PAT job's step, with a trap hook planted
+# run_push <workdir> <patch>: the PAT job's step, with a trap hook planted.
+# APPEND_ONLY (env, default empty) is passed through as the step's input.
 run_push() {
   mkdir -p "$1/.git/hooks"
   for h in pre-commit commit-msg post-commit pre-push; do
@@ -101,8 +112,8 @@ run_push() {
   done
   rm -f "$TMP/hooked"
   ( cd "$1" && PATH="$TMP/bin:$PATH" FAKE_REMOTE="$TMP/origin.git" PAT=secret \
-      PATHS="kotlin-js-store/yarn.lock package-lock.json" PATCH="$2" \
-      MESSAGE="fix(deps): regen" BRANCH=dependabot/x REPO=o/r \
+      PATHS="kotlin-js-store/yarn.lock package-lock.json gradle/verification-metadata.xml" PATCH="$2" \
+      APPEND_ONLY="${APPEND_ONLY:-}" MESSAGE="fix(deps): regen" BRANCH=dependabot/x REPO=o/r \
       bash -e "$TMP/push.sh" ) > "$TMP/log" 2>&1
 }
 
@@ -158,6 +169,76 @@ head -c 60000000 /dev/zero | tr '\0' 'a' > "$TMP/big.patch"
 run_push "$TMP/j2" "$TMP/big.patch"; rc=$?
 if [ $rc -ne 0 ] && [ "$(origin_head)" = "$before" ] && grep -qi 'too large' "$TMP/log"; then ok "E: an oversized patch is refused"
 else bad "E: an oversized patch is refused" "rc=$rc $(tail -3 "$TMP/log")"; fi
+
+# --- F: append-only-paths refuses a patch that removes or changes a line ------
+VM=gradle/verification-metadata.xml
+# mkpatch <name> <cmd...>: run cmd in a fresh clone, write its worktree diff to
+# $TMP/<name>.patch (a cmd that creates a file must `git add -N` it itself)
+mkpatch() {
+  local n=$1; shift
+  new_origin; clone "$TMP/j1"
+  ( cd "$TMP/j1" && "$@" )
+  git -C "$TMP/j1" diff --binary > "$TMP/$n.patch"
+}
+add_line()    { sed -i.bak 's#</components>#<c d="4"/>\n</components>#' "$VM" && rm "$VM.bak"; }
+change_line() { sed -i.bak 's#<c a="1"/>#<c a="9"/>#' "$VM" && rm "$VM.bak"; }
+delete_line() { sed -i.bak '/<c b="2"\/>/d' "$VM" && rm "$VM.bak"; }
+
+mkpatch add add_line
+before=$(origin_head); clone "$TMP/j2"
+APPEND_ONLY="$VM" run_push "$TMP/j2" "$TMP/add.patch"; rc=$?
+if [ $rc -eq 0 ] && [ "$(origin_head)" != "$before" ] \
+   && git -C "$TMP/origin.git" show "dependabot/x:$VM" | grep -q 'd="4"'; then
+  ok "F1: pure additions to an append-only path are committed and pushed"
+else bad "F1: pure additions to an append-only path are committed and pushed" "rc=$rc $(cat "$TMP/log")"; fi
+
+mkpatch change change_line
+before=$(origin_head); clone "$TMP/j2"
+APPEND_ONLY="$VM" run_push "$TMP/j2" "$TMP/change.patch"; rc=$?
+if [ $rc -ne 0 ] && [ "$(origin_head)" = "$before" ] \
+   && grep -q "::error::.*$VM" "$TMP/log" && grep -q 'a="1"' "$TMP/log"; then
+  ok "F2: changing an existing line of an append-only path is refused, naming the path and line"
+else bad "F2: changing an existing line of an append-only path is refused, naming the path and line" "rc=$rc $(cat "$TMP/log")"; fi
+
+mkpatch delete delete_line
+before=$(origin_head); clone "$TMP/j2"
+APPEND_ONLY="$VM" run_push "$TMP/j2" "$TMP/delete.patch"; rc=$?
+if [ $rc -ne 0 ] && [ "$(origin_head)" = "$before" ] && grep -q "::error::.*$VM" "$TMP/log"; then
+  ok "F3: deleting a line of an append-only path is refused"
+else bad "F3: deleting a line of an append-only path is refused" "rc=$rc $(cat "$TMP/log")"; fi
+
+mkpatch rmfile rm "$VM"
+before=$(origin_head); clone "$TMP/j2"
+APPEND_ONLY="$VM" run_push "$TMP/j2" "$TMP/rmfile.patch"; rc=$?
+if [ $rc -ne 0 ] && [ "$(origin_head)" = "$before" ] && grep -q "::error::.*$VM" "$TMP/log"; then
+  ok "F4: deleting an append-only file outright is refused"
+else bad "F4: deleting an append-only file outright is refused" "rc=$rc $(cat "$TMP/log")"; fi
+
+before=$(origin_head); clone "$TMP/j2"
+APPEND_ONLY="" run_push "$TMP/j2" "$TMP/change.patch"; rc=$?
+if [ $rc -eq 0 ] && [ "$(origin_head)" != "$before" ]; then
+  ok "F5: with append-only-paths empty, a changing patch still pushes"
+else bad "F5: with append-only-paths empty, a changing patch still pushes" "rc=$rc $(cat "$TMP/log")"; fi
+
+both() { add_line && echo "lock v2" > kotlin-js-store/yarn.lock; }
+mkpatch both both
+before=$(origin_head); clone "$TMP/j2"
+APPEND_ONLY="$VM" run_push "$TMP/j2" "$TMP/both.patch"; rc=$?
+files=$(git -C "$TMP/origin.git" diff --name-only "$before" dependabot/x | sort | tr '\n' ' ')
+if [ $rc -eq 0 ] && [ "$files" = "$VM kotlin-js-store/yarn.lock " ]; then
+  ok "F6: a non-append-only path in the same patch may still change lines"
+else bad "F6: a non-append-only path in the same patch may still change lines" "rc=$rc files=[$files] $(cat "$TMP/log")"; fi
+
+newfile() { mkdir -p sub && printf '<a/>\n<b/>\n' > sub/verification-metadata.xml && git add -N sub; }
+mkpatch newfile newfile
+before=$(origin_head); clone "$TMP/j2"
+( export APPEND_ONLY="sub/verification-metadata.xml"
+  cd "$TMP/j2" && PATH="$TMP/bin:$PATH" FAKE_REMOTE="$TMP/origin.git" PAT=secret \
+    PATHS="sub/verification-metadata.xml" PATCH="$TMP/newfile.patch" \
+    MESSAGE="fix(deps): regen" BRANCH=dependabot/x REPO=o/r bash -e "$TMP/push.sh" ) > "$TMP/log" 2>&1; rc=$?
+if [ $rc -eq 0 ] && [ "$(origin_head)" != "$before" ]; then
+  ok "F7: a newly created file at an append-only path is accepted"
+else bad "F7: a newly created file at an append-only path is accepted" "rc=$rc $(cat "$TMP/log")"; fi
 
 echo
 echo "$PASS passed, $FAIL failed"
