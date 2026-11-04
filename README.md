@@ -447,7 +447,8 @@ and dependabot simply watches nothing.
 `fleet.json` keys: `lockfix` (`npm`|`gradle`|`gradle-verify`, or empty; see
 the lockfix section above), `lockfix_gradle_tasks` (`gradle-verify` only),
 `dependabot` (`npm`|`gradle`|`swift`|`uv`|`actions`|`none`),
-`dependabot_ignore` (a fragment name, see below), `dependabot_extra`
+`dependabot_ignore` (a fragment name, see below), `dependabot_groups` (a
+fragment name, see below), `dependabot_extra`
 (comma-separated `<ecosystem>:<directory>`, see below),
 `dependabot_extra_ignore` (comma-separated `<ecosystem>:<fragment>`, see
 below), `release_config`
@@ -495,6 +496,16 @@ its `directory: /` becoming `directories: [/, ...]` — and so it inherits that
 entry's `dependabot_ignore` hold. A separate extra entry does not: a hold is
 written for one ecosystem. The npm fragment carries the root template's
 `fix`/`chore` prefixes, groups and exact-name vitest pin.
+
+A repo-specific GROUP is `dependabot_groups`: it splices
+`templates/fragments/dependabot-groups-<name>.yml` in as the FIRST group of the
+root entry, because dependabot puts a dependency in the first group it matches
+(a group rendered after `gradle-dependencies` would collect nothing). Only a
+template carrying the `# __DEPENDABOT_GROUPS__` marker accepts one (gradle
+today); anything else, or an unknown name, is a hard error. `encore`
+(`skie`) keeps SKIE in a PR of its own: SKIE disables itself off a Mac, so the
+ubuntu lockfix can never pin a SKIE bump, and that PR is the one that needs a
+Mac regeneration (mcp-host-app#424).
 
 A hold on a separate extra entry is `dependabot_extra_ignore`: `<ecosystem>:<name>`
 splices the same `templates/fragments/dependabot-ignore-<name>.yml` shape into

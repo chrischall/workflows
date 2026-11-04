@@ -36,6 +36,7 @@ updates:
       include: "scope"
     # __DEPENDABOT_IGNORE__
     groups:
+      # __DEPENDABOT_GROUPS__
       gradle-dependencies:
         update-types:
           - minor

@@ -1,0 +1,11 @@
+      # SKIE (co.touchlab.skie) gets a PR of its own, and this group must stay
+      # FIRST: dependabot puts a dependency in the first group it matches. SKIE
+      # disables itself off a Mac (`isSkieEnabled = isEnabled && hostIsMac`,
+      # no override), so the ubuntu dependabot lockfix records only SKIE's
+      # gradle-plugin — never its runtime/compiler artifacts, and a lockfile
+      # keeps the OLD SKIE lines (mcp-host-app#424; replayed for encore). Kept
+      # apart, a SKIE bump is the one PR that needs the metadata (and locks)
+      # regenerated on the Apple-silicon Mac; every other bump stays automatic.
+      skie:
+        patterns:
+          - "co.touchlab.skie*"

@@ -95,6 +95,12 @@ jq '{defaults: .defaults,
              {repo: "FAKE/m", dependabot: "gradle", dependabot_ignore: "jaxb",
               dependabot_extra: "npm:/web,npm:/ops/uptime-worker",
               ci: "none", release: "none", package_name: "fake-m"},
+             {repo: "FAKE/grp", dependabot: "gradle", dependabot_groups: "skie",
+              ci: "none", release: "none", package_name: "fake-grp"},
+             {repo: "FAKE/grpbad", dependabot: "gradle", dependabot_groups: "no-such-group",
+              ci: "none", release: "none", package_name: "fake-grpbad"},
+             {repo: "FAKE/grpnpm", dependabot_groups: "skie",
+              ci: "none", release: "none", package_name: "fake-grpnpm"},
              {repo: "FAKE/ma", dependabot: "actions", dependabot_extra: "npm:/web",
               ci: "none", release: "none", package_name: "fake-ma"},
              {repo: "FAKE/mbad", dependabot: "gradle", dependabot_extra: "cargo:/rs",
@@ -1618,6 +1624,44 @@ sed -e 's|__JAVA_VERSION__|25|g' -e 's|__PAT_SECRET__|RELEASE_PAT|g' \
 if cmp -s "$TMP/ll-gl.want" "$LL_GL/.github/workflows/dependabot-lockfix.yml"; then
   ok "LL: a lockfix: gradle repo without the key renders the unchanged gradle stub"
 else bad "LL: gradle control" "$(diff "$TMP/ll-gl.want" "$LL_GL/.github/workflows/dependabot-lockfix.yml" 2>&1 | head -20)"; fi
+
+# --- NN: `dependabot_groups` splices a repo-specific group FIRST -----------
+# SKIE disables itself off a Mac, so the ubuntu lockfix can never pin a SKIE
+# bump (mcp-host-app#424). A SKIE group of its own keeps that the one PR that
+# needs a Mac regen. Dependabot puts a dependency in the FIRST group it
+# matches, so the spliced group must precede gradle-dependencies — rendered
+# anywhere later, it silently collects nothing.
+DIR="$TMP/grp"
+bash "$ROLLOUT" FAKE/grp --render "$DIR" --only dependabot >/dev/null 2>&1
+if ruby -ryaml -e '
+    d = YAML.safe_load(File.read(ARGV[0]))
+    g = d["updates"][0]["groups"]
+    abort "groups=#{g.keys.inspect}" unless g.keys.first == "skie" && g.key?("gradle-dependencies")
+    abort "patterns=#{g["skie"].inspect}" unless g["skie"]["patterns"] == ["co.touchlab.skie*"]
+  ' "$DIR/.github/dependabot.yml" 2>"$TMP/nn.err"; then
+  ok "NN1: dependabot_groups splices the group first under the root entry"
+else bad "NN1: dependabot_groups splices the group first under the root entry" "$(cat "$TMP/nn.err")"; fi
+
+bash "$ROLLOUT" FAKE/m --render "$TMP/grp-off" --only dependabot >/dev/null 2>&1
+if ! grep -q '__DEPENDABOT_GROUPS__' "$DIR/.github/dependabot.yml" "$TMP/grp-off/.github/dependabot.yml" \
+   && ruby -ryaml -e 'g = YAML.safe_load(File.read(ARGV[0]))["updates"][0]["groups"]; abort g.keys.inspect unless g.keys.first == "gradle-dependencies"' \
+        "$TMP/grp-off/.github/dependabot.yml" 2>"$TMP/nn.err"; then
+  ok "NN2: the marker never survives, and a repo without the key keeps the template's groups"
+else bad "NN2: the marker never survives, and a repo without the key keeps the template's groups" "$(cat "$TMP/nn.err")"; fi
+
+OUT="$TMP/grpbad.txt"
+if bash "$ROLLOUT" FAKE/grpbad --render "$TMP/grpbad" --only dependabot >"$OUT" 2>&1; then
+  bad "NN3: an unknown dependabot_groups name is a hard error" "rendered successfully"
+elif grep -q "dependabot_groups 'no-such-group' has no fragment" "$OUT"; then
+  ok "NN3: an unknown dependabot_groups name is a hard error"
+else bad "NN3: an unknown dependabot_groups name is a hard error" "$(head -2 "$OUT")"; fi
+
+OUT="$TMP/grpnpm.txt"
+if bash "$ROLLOUT" FAKE/grpnpm --render "$TMP/grpnpm" --only dependabot >"$OUT" 2>&1; then
+  bad "NN4: dependabot_groups on a template with no groups marker is a hard error" "rendered successfully"
+elif grep -q "dependabot_groups" "$OUT"; then
+  ok "NN4: dependabot_groups on a template with no groups marker is a hard error"
+else bad "NN4: dependabot_groups on a template with no groups marker is a hard error" "$(head -2 "$OUT")"; fi
 
 # --- MM: allotmint opts in to gradle-verify -----------------------------------
 # allotmint is the repo gradle-verify exists for: every Gradle dependabot PR in

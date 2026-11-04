@@ -127,6 +127,10 @@ FLY_DIR=$(cfg fly_dir)
 DEPENDABOT=$(cfg dependabot)
 # Name of a templates/fragments/dependabot-ignore-<name>.yml block to splice in.
 DEPENDABOT_IGNORE=$(cfg dependabot_ignore)
+# Name of a templates/fragments/dependabot-groups-<name>.yml block spliced in as
+# the FIRST group of the root entry (dependabot assigns a dependency to the
+# first group it matches). Only templates carrying the marker accept one.
+DEPENDABOT_GROUPS=$(cfg dependabot_groups)
 # Further manifests below the root, as comma-separated `<ecosystem>:<dir>`
 # pairs (e.g. `npm:/web,npm:/ops/uptime-worker`). Each renders
 # templates/fragments/dependabot-extra-<ecosystem>.yml, so one repo can watch a
@@ -352,6 +356,17 @@ if [ "$DEPENDABOT" != "none" ]; then
         -e '/^    # __DEPENDABOT_IGNORE__$/d' "$DB" > "$DB.tmp" && mv "$DB.tmp" "$DB"
   else
     sed -e '/^    # __DEPENDABOT_IGNORE__$/d' "$DB" > "$DB.tmp" && mv "$DB.tmp" "$DB"
+  fi
+  # A repo-specific group, spliced FIRST under the root entry's `groups:` —
+  # a group rendered after gradle-dependencies would silently collect nothing.
+  if [ -n "$DEPENDABOT_GROUPS" ]; then
+    FRAG="$HERE/templates/fragments/dependabot-groups-$DEPENDABOT_GROUPS.yml"
+    [ -f "$FRAG" ] || { echo "::error::$REPO: dependabot_groups '$DEPENDABOT_GROUPS' has no fragment at $FRAG"; exit 1; }
+    grep -q '^      # __DEPENDABOT_GROUPS__$' "$DB" || { echo "::error::$REPO: dependabot_groups is set, but the dependabot-${DEPENDABOT:-npm} template has no __DEPENDABOT_GROUPS__ marker to splice it into"; exit 1; }
+    sed -e "/^      # __DEPENDABOT_GROUPS__$/r $FRAG" \
+        -e '/^      # __DEPENDABOT_GROUPS__$/d' "$DB" > "$DB.tmp" && mv "$DB.tmp" "$DB"
+  else
+    sed -e '/^      # __DEPENDABOT_GROUPS__$/d' "$DB" > "$DB.tmp" && mv "$DB.tmp" "$DB"
   fi
   # One template covered one ecosystem, so a gradle repo's Next.js app under
   # /web got no Dependabot updates at all — allotmint's `next` sat two critical
