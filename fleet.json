@@ -653,6 +653,12 @@
       "version_files": "src/version.ts",
       "initial_version": "0.1.0",
       "bump_minor_pre_major": "true"
+    },
+    {
+      "repo": "chrischall/harristeeter-mcp",
+      "package_name": "@chrischall/harristeeter-mcp",
+      "version_files": "src/version.ts",
+      "initial_version": "0.1.0"
     }
   ]
 }
