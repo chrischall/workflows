@@ -55,11 +55,17 @@ EOF
 printf '#!/usr/bin/env bash\n"$@"\n' > "$TMP/bin/sudo"
 printf '#!/usr/bin/env bash\necho "sleep $*" >> "$LOG"\n' > "$TMP/bin/sleep"
 for b in sysctl bwrap socat; do printf '#!/usr/bin/env bash\necho %s\n' "$b" > "$TMP/bin/$b"; done
-chmod +x "$TMP/bin"/*
+# The step falls back to Homebrew once apt gives up (sandbox-homebrew.test.sh
+# covers that path). Here it must fail, or "an install that never works" would
+# depend on the machine: GitHub's ubuntu image has a real /home/linuxbrew.
+mkdir -p "$TMP/linuxbrew/bin"
+printf '#!/usr/bin/env bash\necho "brew $*" >> "$LOG"\nexit 1\n' > "$TMP/linuxbrew/bin/brew"
+chmod +x "$TMP/bin"/* "$TMP/linuxbrew/bin/brew"
 
 run_step() {  # $1 = workflow; env INSTALL_FAILS / UPDATE_FAILS
   : > "$TMP/log"
-  LOG="$TMP/log" PATH="$TMP/bin:$PATH" bash -e "$TMP/$1.sh" > "$TMP/out" 2>&1
+  LOG="$TMP/log" PATH="$TMP/bin:$PATH" LINUXBREW="$TMP/linuxbrew" GITHUB_PATH="$TMP/github_path" \
+    bash -e "$TMP/$1.sh" > "$TMP/out" 2>&1
 }
 installs() { grep -c ' install ' "$TMP/log"; }
 
