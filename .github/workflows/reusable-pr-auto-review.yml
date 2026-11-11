@@ -1000,9 +1000,21 @@ jobs:
             sudo apt-get update -qq || true
             if sudo apt-get install -y -qq bubblewrap socat; then installed=1; break; fi
           done
+          # A longer outage (about three hours on 2026-11-11, no DNS for any
+          # Ubuntu mirror, actions/runner-images#15296) outlasts the retries:
+          # fall back to the image's Homebrew, whose bottles come from ghcr.io.
+          # Neither working still fails the step, so no review runs unsandboxed.
           if [ -z "$installed" ]; then
-            echo "::error::could not install bubblewrap and socat after 3 attempts: the Ubuntu mirrors are unreachable from this runner. Re-run the job once they are back."
-            exit 1
+            echo "::warning::apt could not install bubblewrap and socat after 3 attempts; installing them from Homebrew"
+            LINUXBREW="${LINUXBREW:-/home/linuxbrew/.linuxbrew}"
+            if HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_ENV_HINTS=1 \
+                "$LINUXBREW/bin/brew" install bubblewrap socat; then
+              export PATH="$LINUXBREW/bin:$PATH"
+              echo "$LINUXBREW/bin" >> "$GITHUB_PATH"
+            else
+              echo "::error::could not install bubblewrap and socat after 3 attempts: the Ubuntu mirrors are unreachable from this runner, and Homebrew failed too. Re-run the job once they are back."
+              exit 1
+            fi
           fi
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true  # key absent = no restriction
           bwrap --ro-bind / / --unshare-user true && echo "bwrap: user namespace OK"
