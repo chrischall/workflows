@@ -173,6 +173,13 @@ jobs:
         # that the two workflows keep the same step.
         run: bash scripts/sandbox-install.test.sh
 
+      - name: sandbox install Homebrew fallback unit tests
+        # When the apt retries run out, the same step installs bubblewrap and
+        # socat from the runner's Homebrew (ghcr.io, not an Ubuntu mirror) and
+        # puts them on PATH; with neither source it still fails, so no review
+        # runs unsandboxed.
+        run: bash scripts/sandbox-homebrew.test.sh
+
       - name: arm / de-arm policy unit tests
         # #209 shipped scripts/arm.test.sh and never wired it in, so the guard
         # it added ran in CI exactly zero times — the same failure its
