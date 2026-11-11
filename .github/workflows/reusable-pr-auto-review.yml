@@ -990,8 +990,20 @@ jobs:
         # network through socat; without it every command the model may run
         # (gh pr comment, git, rg) fails "socat not installed" (#309).
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap socat
+          # Ubuntu's mirrors are sometimes unreachable from the runner for a
+          # few minutes; one failed install used to end the job with no
+          # verdict on every PR at once (2026-11-11, "Temporary failure
+          # resolving"). Retry before giving up, and say why when it does.
+          installed=
+          for delay in 0 30 90; do
+            if [ "$delay" -gt 0 ]; then echo "apt-get install failed; retrying in ${delay}s"; sleep "$delay"; fi
+            sudo apt-get update -qq || true
+            if sudo apt-get install -y -qq bubblewrap socat; then installed=1; break; fi
+          done
+          if [ -z "$installed" ]; then
+            echo "::error::could not install bubblewrap and socat after 3 attempts: the Ubuntu mirrors are unreachable from this runner. Re-run the job once they are back."
+            exit 1
+          fi
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true  # key absent = no restriction
           bwrap --ro-bind / / --unshare-user true && echo "bwrap: user namespace OK"
           socat -V | head -1
