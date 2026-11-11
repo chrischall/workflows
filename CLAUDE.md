@@ -41,43 +41,60 @@ Consequences worth internalizing:
 When a change is genuinely risky, land it behind a new opt-in input first, flip
 one repo, confirm, then flip the rest via `scripts/rollout.sh`.
 
-## A PR that edits the CALLER stub cannot be reviewed
+## A PR that edits the review's own workflow files gets no verdict on `pull_request`
 
-Only `.github/workflows/pr-auto-review.yml` — the thin stub. Not
-`reusable-pr-auto-review.yml`, which holds the entire review and reviews
-normally: #95, #97, #98, #99, #102, #105, #126, #142, #176, #179, #184, #186,
-#198, #209, #211 and #213 all edited it and all got a real verdict and armed.
-Every PR that touched the stub — #153, #180, #183 — got none.
+`claude-code-action` exchanges an OIDC token for an app token, and that
+exchange refuses when the workflow it runs in differs from the default branch.
+It checks two things here:
 
-The mechanism is not self-reference. `claude-code-action` exchanges an OIDC
-token for an app token, and that exchange refuses when the workflow file
-invoking it differs from the version on the default branch:
+- **The caller stub, `.github/workflows/pr-auto-review.yml`** — the file
+  `GITHUB_WORKFLOW_REF` names. #153, #180 and #183 edited it and got no
+  verdict:
 
-    Workflow validation failed. The workflow file must exist and have identical
-    content to the version on the repository's default branch.
+      Workflow validation failed. The workflow file must exist and have
+      identical content to the version on the repository's default branch.
 
-The action then skips, emitting no structured output, and `Post verdict to PR`
-reports **"no verdict — treat this PR as un-reviewed"** rather than inventing
-one. The validated file is the one `GITHUB_WORKFLOW_REF` names — the top-level
-CALLER — which is why editing the reusable workflow the stub calls, or `ci.yml`
-in the same PR, changes nothing.
+- **Any reusable workflow in this repository that the caller reaches by local
+  path.** The stub calls `./.github/workflows/reusable-pr-auto-review.yml`, so
+  a PR editing that file is refused too:
 
-The consequence is that such a PR is never armed: `ready-to-merge` is not
-added, auto-merge never engages, and it sits until a human merges it
-deliberately. Reopening does not help — #153 failed the same way twice on the
-same SHA before being merged by hand.
+      Workflow validation failed. A reusable workflow in this repository that
+      the workflow calls (uses: ./.github/workflows/… or
+      $/.github/workflows/…) must exist on the repository's default branch with
+      identical content.
 
-**This is fleet-wide, not local.** Every consumer's stub is the caller too, so
-a `rollout.sh --only pr-auto-review` PR is un-reviewable in the target repo for
-the same reason (chrischall/fetchproxy#250 got no verdict and waited 21 minutes
-for a human label). The same holds for any stub that calls `claude-code-action`
-directly — `claude.yml` — but only for the workflow being edited: a PR touching
+  This is newer than the stub check. #95 to #213 all edited the reusable file
+  and got real verdicts; by 2026-11-11 #385 and #387 got none for it.
+
+Editing `ci.yml`, or any workflow the review does not call, changes nothing.
+
+On a refusal the action skips, emits no structured output, and `Post verdict
+to PR` reports **"no verdict — treat this PR as un-reviewed"** rather than
+inventing one, so the PR is not armed. The skip comes after the job's setup
+steps, so those still run the PR's version: #387's own `pull_request` run
+exercised its new sandbox-install step on a real runner before the action
+skipped.
+
+**To review such a PR, comment `/auto-review`.** That fires `issue_comment`,
+which GitHub always runs from the default branch, so validation passes. The
+review then judges the PR head's diff and arms on pass or warn like any other
+review; #385, #386 and #387 were reviewed this way. The steps run main's
+version, though, so a change to the review job itself is first exercised for
+real after it merges. Reopening, or re-running the failed `pull_request` run,
+does not help: both repeat the same validation.
+
+**The stub half is fleet-wide.** Every consumer's stub is its own caller, so a
+`rollout.sh --only pr-auto-review` PR gets no verdict in the target repo too
+(chrischall/fetchproxy#250). The same holds for `claude.yml`, which calls
+`claude-code-action` directly, but only for that workflow: a PR touching
 `claude.yml` still gets a normal review, because the reviewing stub is
-unchanged.
+unchanged. The reusable-file half is local. Consumers call
+`chrischall/workflows/...@main`, a workflow in another repository, so edits
+here never trip the check for them.
 
-So: expect no verdict on caller-stub PRs, do not treat the skipped review as a
-finding to chase, and do not add the arming label to force it through. Get the
-change right before opening, and let a human merge it.
+So: expect no verdict on these PRs, do not treat the skip as a finding to chase,
+and never add the arming label to force one through. Comment `/auto-review`
+instead.
 
 ## fleet.json is the source of truth
 
