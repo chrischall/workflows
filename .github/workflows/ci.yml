@@ -166,6 +166,13 @@ jobs:
         # token, the env scrub, user-only settings and symlink removal.
         run: bash scripts/claude-sandbox.test.sh
 
+      - name: sandbox install retry unit tests
+        # The bubblewrap/socat install both Claude jobs run first. Pins that a
+        # briefly unreachable Ubuntu mirror is retried, that a lasting outage
+        # fails with a clear ::error:: rather than a bare apt exit 100, and
+        # that the two workflows keep the same step.
+        run: bash scripts/sandbox-install.test.sh
+
       - name: arm / de-arm policy unit tests
         # #209 shipped scripts/arm.test.sh and never wired it in, so the guard
         # it added ran in CI exactly zero times — the same failure its
