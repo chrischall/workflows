@@ -659,6 +659,12 @@
       "package_name": "@chrischall/harristeeter-mcp",
       "version_files": "src/version.ts",
       "initial_version": "0.1.0"
+    },
+    {
+      "repo": "chrischall/warapp-mcp",
+      "package_name": "@chrischall/warapp-mcp",
+      "version_files": "src/version.ts",
+      "initial_version": "0.1.0"
     }
   ]
 }
