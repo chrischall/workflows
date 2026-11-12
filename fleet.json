@@ -659,6 +659,13 @@
       "package_name": "@chrischall/harristeeter-mcp",
       "version_files": "src/version.ts",
       "initial_version": "0.1.0"
+    },
+    {
+      "repo": "chrischall/hellofresh-mcp",
+      "package_name": "@chrischall/hellofresh-mcp",
+      "version_files": "src/version.ts",
+      "initial_version": "0.1.0",
+      "bump_minor_pre_major": "true"
     }
   ]
 }
