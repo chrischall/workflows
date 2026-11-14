@@ -669,8 +669,10 @@
     },
     {
       "repo": "chrischall/warapp-mcp",
+      "test_command": "npm run test:coverage",
       "package_name": "@chrischall/warapp-mcp",
       "version_files": "src/version.ts",
+      "bump_minor_pre_major": "true",
       "initial_version": "0.1.0"
     }
   ]
