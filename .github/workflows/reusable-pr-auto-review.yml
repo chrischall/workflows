@@ -639,8 +639,8 @@ jobs:
           fi
 
           # Reconstruct what GitHub will actually commit. This is NOT one thing
-          # across the fleet — of the 96 repos in fleet.json, 47 are on
-          # COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, 48 on PR_TITLE/PR_BODY and one
+          # across the fleet — of the 97 repos in fleet.json, 47 are on
+          # COMMIT_OR_PR_TITLE/COMMIT_MESSAGES, 49 on PR_TITLE/PR_BODY and one
           # on the mixed PR_TITLE/COMMIT_MESSAGES — so checking "the PR
           # title and body" would read a message half the fleet never ships,
           # missing real breakage in one direction and failing clean PRs in the
@@ -1043,7 +1043,7 @@ jobs:
         # first failure 22:19:42Z, with no change on our side in between.
         # Stays an exact tag: the fleet pins every third-party action to one
         # (scripts/action-pins.test.sh rejects `@v1`), and dependabot bumps it.
-        uses: anthropics/claude-code-action@v1.0.267
+        uses: anthropics/claude-code-action@v1.0.271
         with:
           claude_code_oauth_token: ${{ secrets.claude_code_oauth_token }}
           # No `github_token:` — the installed Claude App authors comments
